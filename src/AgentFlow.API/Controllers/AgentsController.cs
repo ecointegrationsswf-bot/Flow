@@ -41,22 +41,23 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
             .Include(a => a.WhatsAppLine)
             .Where(a => a.TenantId == tenantCtx.TenantId)
             .OrderByDescending(a => a.CreatedAt)
-            .Select(a => new
-            {
-                a.Id, a.TenantId, a.Name, Type = a.Type.ToString(), a.IsActive,
-                a.SystemPrompt, a.Tone, a.Language, a.AvatarName,
-                EnabledChannels = a.EnabledChannels.Select(c => c.ToString()).ToList(),
-                SendFrom = a.SendFrom.HasValue ? a.SendFrom.Value.ToString("HH:mm") : null,
-                SendUntil = a.SendUntil.HasValue ? a.SendUntil.Value.ToString("HH:mm") : null,
-                a.MaxRetries, a.RetryIntervalHours, a.InactivityCloseHours, a.CloseConditionKeyword,
-                a.LlmModel, a.Temperature, a.MaxTokens, a.WhatsAppLineId,
-                WhatsAppLineName = a.WhatsAppLine != null ? a.WhatsAppLine.DisplayName : null,
-                WhatsAppLinePhone = a.WhatsAppLine != null ? a.WhatsAppLine.PhoneNumber : null,
-                a.CreatedAt, a.UpdatedAt,
-            })
             .ToListAsync(ct);
 
-        return Ok(agents);
+        var result = agents.Select(a => new
+        {
+            a.Id, a.TenantId, a.Name, Type = a.Type.ToString(), a.IsActive,
+            a.SystemPrompt, a.Tone, a.Language, a.AvatarName,
+            EnabledChannels = a.EnabledChannels.Select(c => c.ToString()).ToList(),
+            SendFrom = a.SendFrom?.ToString("HH:mm"),
+            SendUntil = a.SendUntil?.ToString("HH:mm"),
+            a.MaxRetries, a.RetryIntervalHours, a.InactivityCloseHours, a.CloseConditionKeyword,
+            a.LlmModel, a.Temperature, a.MaxTokens, a.WhatsAppLineId,
+            WhatsAppLineName = a.WhatsAppLine?.DisplayName,
+            WhatsAppLinePhone = a.WhatsAppLine?.PhoneNumber,
+            a.CreatedAt, a.UpdatedAt,
+        });
+
+        return Ok(result);
     }
 
     [HttpGet("{id:guid}")]
@@ -67,7 +68,20 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
             .FirstOrDefaultAsync(a => a.Id == id && a.TenantId == tenantCtx.TenantId, ct);
 
         if (agent is null) return NotFound();
-        return Ok(agent);
+
+        return Ok(new
+        {
+            agent.Id, agent.TenantId, agent.Name, Type = agent.Type.ToString(), agent.IsActive,
+            agent.SystemPrompt, agent.Tone, agent.Language, agent.AvatarName,
+            EnabledChannels = agent.EnabledChannels.Select(c => c.ToString()).ToList(),
+            SendFrom = agent.SendFrom?.ToString("HH:mm"),
+            SendUntil = agent.SendUntil?.ToString("HH:mm"),
+            agent.MaxRetries, agent.RetryIntervalHours, agent.InactivityCloseHours, agent.CloseConditionKeyword,
+            agent.LlmModel, agent.Temperature, agent.MaxTokens, agent.WhatsAppLineId,
+            WhatsAppLineName = agent.WhatsAppLine?.DisplayName,
+            WhatsAppLinePhone = agent.WhatsAppLine?.PhoneNumber,
+            agent.CreatedAt, agent.UpdatedAt,
+        });
     }
 
     [HttpPost]

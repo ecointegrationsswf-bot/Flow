@@ -18,7 +18,9 @@ public class AppUserConfiguration : IEntityTypeConfiguration<AppUser>
         b.Property(u => u.AllowedAgentIds)
             .HasConversion(
                 v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
-                v => JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
+                v => string.IsNullOrWhiteSpace(v)
+                    ? new List<Guid>()
+                    : JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
             ).HasMaxLength(2000);
         b.HasOne(u => u.Tenant).WithMany().HasForeignKey(u => u.TenantId).OnDelete(DeleteBehavior.Restrict);
     }
