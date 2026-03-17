@@ -1,0 +1,29 @@
+namespace AgentFlow.Domain.Entities;
+
+public enum UserRole { Admin, Supervisor, Cobros, ReadOnly }
+
+/// <summary>
+/// Usuario del portal (ejecutivos de cobros, supervisores, admins).
+/// </summary>
+public class AppUser
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Tenant Tenant { get; set; } = null!;
+
+    public string FullName { get; set; } = string.Empty;
+    public string Email { get; set; } = string.Empty;
+    public string PasswordHash { get; set; } = string.Empty;
+    public UserRole Role { get; set; }
+    public bool IsActive { get; set; } = true;
+    public bool CanEditPhone { get; set; }
+
+    /// <summary>
+    /// IDs de agentes que este usuario puede monitorear.
+    /// Lista vacia o null = puede ver todos los agentes.
+    /// </summary>
+    public List<Guid> AllowedAgentIds { get; set; } = [];
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public DateTime? LastLoginAt { get; set; }
+}

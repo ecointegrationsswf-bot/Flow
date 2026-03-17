@@ -1,0 +1,25 @@
+# Build
+bin/
+obj/
+dist/
+node_modules/
+
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+
+# Secrets - NEVER commit
+appsettings.Development.json
+appsettings.*.local.json
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+*.log
+
+# PowerShell scripts (temp)
+*.ps1

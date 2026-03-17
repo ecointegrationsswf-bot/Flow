@@ -1,0 +1,122 @@
+import { useState } from 'react'
+import { Link } from 'react-router-dom'
+import { Bot, Plus, Pencil, Trash2, Phone } from 'lucide-react'
+import { PageHeader } from '@/shared/components/PageHeader'
+import { Badge } from '@/shared/components/Badge'
+import { EmptyState } from '@/shared/components/EmptyState'
+import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
+import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import { useAgents, useDeleteAgent } from '@/shared/hooks/useAgents'
+
+export function AgentsListPage() {
+  const { data: agents, isLoading } = useAgents()
+  const deleteMutation = useDeleteAgent()
+  const [deleteId, setDeleteId] = useState<string | null>(null)
+
+  if (isLoading) return <LoadingSpinner />
+
+  return (
+    <div>
+      <PageHeader
+        title="Agentes IA"
+        subtitle="Configura los agentes que atienden conversaciones"
+        action={
+          <Link
+            to="/agents/new"
+            className="flex items-center gap-1.5 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+          >
+            <Plus className="h-4 w-4" /> Nuevo agente
+          </Link>
+        }
+      />
+
+      {!agents || agents.length === 0 ? (
+        <EmptyState
+          icon={Bot}
+          title="Sin agentes configurados"
+          description="Crea tu primer agente IA para empezar a gestionar conversaciones"
+          action={
+            <Link
+              to="/agents/new"
+              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            >
+              Crear agente
+            </Link>
+          }
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {agents.map((agent) => (
+            <div key={agent.id} className="rounded-lg bg-white p-5 shadow-sm">
+              <div className="flex items-start justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100">
+                    <Bot className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-semibold text-gray-900">{agent.name}</h3>
+                    {agent.avatarName && (
+                      <p className="text-xs text-gray-500">Persona: {agent.avatarName}</p>
+                    )}
+                  </div>
+                </div>
+                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${agent.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'}`}>
+                  {agent.isActive ? 'Activo' : 'Inactivo'}
+                </span>
+              </div>
+
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                <Badge variant={agent.type}>{agent.type}</Badge>
+                {agent.enabledChannels.map((ch) => (
+                  <Badge key={ch} variant="General">{ch}</Badge>
+                ))}
+              </div>
+
+              {/* Linea WhatsApp asociada */}
+              {agent.whatsAppLineName && (
+                <div className="mt-3 flex items-center gap-1.5 rounded-md bg-green-50 border border-green-200 px-2.5 py-1.5">
+                  <Phone className="h-3.5 w-3.5 text-green-600" />
+                  <span className="text-xs font-medium text-green-700">{agent.whatsAppLineName}</span>
+                  {agent.whatsAppLinePhone && (
+                    <span className="text-xs text-green-600">({agent.whatsAppLinePhone})</span>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-3 space-y-1 text-xs text-gray-500">
+                <p>Modelo: {agent.llmModel} | Temp: {agent.temperature}</p>
+                <p>Horario: {agent.sendFrom ?? '—'} a {agent.sendUntil ?? '—'}</p>
+                <p>Reintentos: {agent.maxRetries} | Cierre: {agent.inactivityCloseHours}h</p>
+              </div>
+
+              <div className="mt-4 flex gap-2 border-t border-gray-100 pt-3">
+                <Link
+                  to={`/agents/${agent.id}/edit`}
+                  className="flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                >
+                  <Pencil className="h-3 w-3" /> Editar
+                </Link>
+                <button
+                  onClick={() => setDeleteId(agent.id)}
+                  className="flex items-center gap-1 rounded-md border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 className="h-3 w-3" /> Eliminar
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={!!deleteId}
+        onClose={() => setDeleteId(null)}
+        onConfirm={() => { if (deleteId) deleteMutation.mutate(deleteId) }}
+        title="Eliminar agente"
+        description="Esta accion no se puede deshacer. El agente sera eliminado permanentemente."
+        confirmLabel="Eliminar"
+        variant="danger"
+      />
+    </div>
+  )
+}

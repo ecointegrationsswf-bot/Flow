@@ -1,0 +1,37 @@
+using AgentFlow.Domain.Enums;
+
+namespace AgentFlow.Domain.Entities;
+
+/// <summary>
+/// Campaña de comunicación. Puede iniciarse por archivo cargado
+/// o por evento automático (póliza vencida, morosidad detectada).
+/// </summary>
+public class Campaign
+{
+    public Guid Id { get; set; }
+    public Guid TenantId { get; set; }
+    public Tenant Tenant { get; set; } = null!;
+    public Guid AgentDefinitionId { get; set; }
+    public AgentDefinition AgentDefinition { get; set; } = null!;
+
+    public string Name { get; set; } = string.Empty;
+    public CampaignTrigger Trigger { get; set; }
+    public ChannelType Channel { get; set; }
+    public bool IsActive { get; set; } = true;
+
+    // Archivo (cuando Trigger = FileUpload)
+    public string? SourceFileName { get; set; }
+    public string? SourceFilePath { get; set; }
+    public int TotalContacts { get; set; }
+    public int ProcessedContacts { get; set; }
+
+    // Programación
+    public DateTime? ScheduledAt { get; set; }
+    public DateTime? StartedAt { get; set; }
+    public DateTime? CompletedAt { get; set; }
+
+    public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+    public string CreatedByUserId { get; set; } = string.Empty;
+
+    public ICollection<CampaignContact> Contacts { get; set; } = [];
+}
