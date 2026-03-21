@@ -14,6 +14,10 @@ public class Campaign
     public Guid AgentDefinitionId { get; set; }
     public AgentDefinition AgentDefinition { get; set; } = null!;
 
+    // Maestro de campaña (opcional para campañas legacy)
+    public Guid? CampaignTemplateId { get; set; }
+    public CampaignTemplate? CampaignTemplate { get; set; }
+
     public string Name { get; set; } = string.Empty;
     public CampaignTrigger Trigger { get; set; }
     public ChannelType Channel { get; set; }

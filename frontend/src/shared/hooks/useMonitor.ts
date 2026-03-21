@@ -34,3 +34,17 @@ export function useSendReply() {
     onSuccess: (_, { id }) => qc.invalidateQueries({ queryKey: ['conversations', id] }),
   })
 }
+
+export function useSendFile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, file }: { id: string; file: File }) => {
+      const formData = new FormData()
+      formData.append('file', file)
+      return api.post(`/monitor/conversations/${id}/file`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      })
+    },
+    onSuccess: (_, { id }) => qc.invalidateQueries({ queryKey: ['conversations', id] }),
+  })
+}

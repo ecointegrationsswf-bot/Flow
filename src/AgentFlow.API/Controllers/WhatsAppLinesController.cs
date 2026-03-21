@@ -169,9 +169,9 @@ public class WhatsAppLinesController(
                 displayName = line.DisplayName,
             });
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            return StatusCode(502, new { error = $"Error al conectar con UltraMsg: {ex.Message}" });
+            return StatusCode(502, new { error = "Error al conectar con UltraMsg." });
         }
     }
 
@@ -186,14 +186,13 @@ public class WhatsAppLinesController(
             var qrBytes = await ultraMsg.GetQrCodeAsync(line.InstanceId, line.ApiToken, ct);
             return File(qrBytes, "image/png");
         }
-        catch (InvalidOperationException ex)
+        catch (InvalidOperationException)
         {
-            // QR no disponible (instancia no esta en estado QR)
-            return BadRequest(new { error = ex.Message });
+            return BadRequest(new { error = "QR no disponible para esta instancia." });
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            return StatusCode(502, new { error = $"Error al obtener QR: {ex.Message}" });
+            return StatusCode(502, new { error = "Error al obtener QR." });
         }
     }
 
@@ -210,9 +209,9 @@ public class WhatsAppLinesController(
                 ? Ok(new { message = "Instancia reiniciada correctamente" })
                 : StatusCode(502, new { error = "No se pudo reiniciar la instancia" });
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            return StatusCode(502, new { error = $"Error al reiniciar: {ex.Message}" });
+            return StatusCode(502, new { error = "Error al reiniciar la instancia." });
         }
     }
 
@@ -229,9 +228,9 @@ public class WhatsAppLinesController(
                 ? Ok(new { message = "Sesion cerrada. Escanea el nuevo QR para reconectar." })
                 : StatusCode(502, new { error = "No se pudo cerrar la sesion" });
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            return StatusCode(502, new { error = $"Error al cerrar sesion: {ex.Message}" });
+            return StatusCode(502, new { error = "Error al cerrar sesion." });
         }
     }
 

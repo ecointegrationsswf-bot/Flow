@@ -1,0 +1,48 @@
+using System.Text.Json;
+using AgentFlow.Domain.Entities;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
+
+namespace AgentFlow.Infrastructure.Persistence.Configurations;
+
+public class CampaignTemplateConfiguration : IEntityTypeConfiguration<CampaignTemplate>
+{
+    public void Configure(EntityTypeBuilder<CampaignTemplate> b)
+    {
+        b.HasKey(t => t.Id);
+        b.Property(t => t.Name).HasMaxLength(200).IsRequired();
+        b.Property(t => t.EmailAddress).HasMaxLength(200);
+
+        b.Property(t => t.FollowUpHours)
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<int>>(v, (JsonSerializerOptions?)null) ?? new List<int>()
+            ).HasMaxLength(500);
+
+        b.Property(t => t.LabelIds)
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
+            ).HasMaxLength(2000);
+
+        // Acciones y Prompts vinculados
+        b.Property(t => t.ActionIds)
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
+            ).HasMaxLength(2000);
+
+        b.Property(t => t.PromptTemplateIds)
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
+            ).HasMaxLength(2000);
+
+        b.Property(t => t.ActionConfigs).HasMaxLength(8000);
+
+        b.HasOne(t => t.Tenant).WithMany().HasForeignKey(t => t.TenantId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne(t => t.AgentDefinition).WithMany().HasForeignKey(t => t.AgentDefinitionId).OnDelete(DeleteBehavior.NoAction);
+
+        b.HasIndex(t => t.TenantId);
+    }
+}

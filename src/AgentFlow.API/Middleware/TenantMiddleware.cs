@@ -10,6 +10,13 @@ public class TenantMiddleware(RequestDelegate next)
 {
     public async Task InvokeAsync(HttpContext ctx)
     {
+        // Super admin routes no necesitan tenant
+        if (ctx.Request.Path.StartsWithSegments("/api/admin"))
+        {
+            await next(ctx);
+            return;
+        }
+
         var tenantId = ctx.User.FindFirst("tenant_id")?.Value
                     ?? ctx.Request.Headers["X-Tenant-Id"].FirstOrDefault()
                     ?? ctx.Request.Query["tenantId"].FirstOrDefault();

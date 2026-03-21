@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 namespace AgentFlow.API.Controllers;
 
 [ApiController]
-// [Authorize] // TODO: habilitar cuando auth esté configurado
+[Authorize]
 [Route("api/whatsapp")]
 public class WhatsAppController(
     ITenantContext tenantCtx,
@@ -42,9 +42,9 @@ public class WhatsAppController(
                 provider = tenant.WhatsAppProvider.ToString()
             });
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            return StatusCode(502, new { error = $"Error al conectar con UltraMsg: {ex.Message}" });
+            return StatusCode(502, new { error = "Error al conectar con UltraMsg." });
         }
     }
 
@@ -69,9 +69,9 @@ public class WhatsAppController(
             var qrBytes = await ultraMsg.GetQrCodeAsync(tenant.WhatsAppInstanceId, tenant.WhatsAppApiToken, ct);
             return File(qrBytes, "image/png");
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            return StatusCode(502, new { error = $"Error al obtener QR: {ex.Message}" });
+            return StatusCode(502, new { error = "Error al obtener QR." });
         }
     }
 
@@ -98,9 +98,9 @@ public class WhatsAppController(
                 ? Ok(new { message = "Instancia reiniciada correctamente" })
                 : StatusCode(502, new { error = "No se pudo reiniciar la instancia" });
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            return StatusCode(502, new { error = $"Error al reiniciar: {ex.Message}" });
+            return StatusCode(502, new { error = "Error al reiniciar la instancia." });
         }
     }
 
@@ -127,9 +127,9 @@ public class WhatsAppController(
                 ? Ok(new { message = "Sesion cerrada. Escanea el nuevo QR para reconectar." })
                 : StatusCode(502, new { error = "No se pudo cerrar la sesion" });
         }
-        catch (HttpRequestException ex)
+        catch (HttpRequestException)
         {
-            return StatusCode(502, new { error = $"Error al cerrar sesion: {ex.Message}" });
+            return StatusCode(502, new { error = "Error al cerrar sesion." });
         }
     }
 }

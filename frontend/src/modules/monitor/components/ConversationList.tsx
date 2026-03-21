@@ -1,9 +1,7 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
-import { formatDistanceToNow, differenceInMinutes } from 'date-fns'
-import { es } from 'date-fns/locale'
-import { Badge } from '@/shared/components/Badge'
-import type { ConversationSummary, AgentType, ConversationStatus } from '@/shared/types'
+import { format, isToday, isYesterday, differenceInMinutes } from 'date-fns'
+import type { ConversationSummary, ConversationStatus } from '@/shared/types'
 
 interface ConversationListProps {
   conversations: ConversationSummary[]
@@ -11,10 +9,50 @@ interface ConversationListProps {
   onSelect: (id: string) => void
 }
 
+const avatarImages: Record<string, string> = {
+  'mock-1': 'https://i.pravatar.cc/150?img=1',
+  'mock-2': 'https://i.pravatar.cc/150?img=3',
+  'mock-3': 'https://i.pravatar.cc/150?img=5',
+  'mock-4': 'https://i.pravatar.cc/150?img=8',
+  'mock-5': 'https://i.pravatar.cc/150?img=9',
+  'mock-6': 'https://i.pravatar.cc/150?img=11',
+  'mock-7': 'https://i.pravatar.cc/150?img=16',
+}
+
+function getInitials(name: string) {
+  return name.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
+}
+
+function getAvatarBg(name: string) {
+  const colors = [
+    'bg-blue-500', 'bg-emerald-500', 'bg-purple-500', 'bg-orange-500',
+    'bg-pink-500', 'bg-teal-500', 'bg-indigo-500', 'bg-rose-500',
+  ]
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  return colors[Math.abs(hash) % colors.length]
+}
+
+function formatTime(dateStr: string) {
+  const d = new Date(dateStr)
+  if (isToday(d)) return format(d, 'h:mm a')
+  if (isYesterday(d)) return 'Ayer'
+  return format(d, 'dd/MM/yyyy')
+}
+
 export function ConversationList({ conversations, selectedId, onSelect }: ConversationListProps) {
   const [search, setSearch] = useState('')
-  const [filterAgent, setFilterAgent] = useState<AgentType | ''>('')
+  const [filterAgent, setFilterAgent] = useState('')
   const [filterStatus, setFilterStatus] = useState<ConversationStatus | ''>('')
+
+  const agentNames = useMemo(() => {
+    const names = new Set<string>()
+    conversations.forEach((c) => {
+      const name = c.agentName || c.agentType
+      if (name) names.add(name)
+    })
+    return Array.from(names).sort()
+  }, [conversations])
 
   const filtered = conversations.filter((c) => {
     if (search) {
@@ -23,90 +61,113 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
       const matchPhone = c.clientPhone.includes(q)
       if (!matchName && !matchPhone) return false
     }
-    if (filterAgent && c.agentType !== filterAgent) return false
+    if (filterAgent) {
+      const agentLabel = c.agentName || c.agentType
+      if (agentLabel !== filterAgent) return false
+    }
     if (filterStatus && c.status !== filterStatus) return false
     return true
   })
 
   return (
-    <aside className="flex w-80 flex-col border-r border-gray-200 bg-white">
-      {/* Header */}
-      <div className="border-b border-gray-200 px-4 py-3">
-        <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium text-gray-900">Conversaciones</h2>
-          <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700">
-            {filtered.length}
-          </span>
-        </div>
-
-        {/* Search */}
-        <div className="relative mt-2">
-          <Search className="absolute left-2.5 top-2 h-4 w-4 text-gray-400" />
+    <aside className="flex w-[380px] flex-col border-r border-gray-200 bg-white">
+      {/* Search */}
+      <div className="px-4 pt-4 pb-2">
+        <div className="relative">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Buscar cliente..."
-            className="w-full rounded-md border border-gray-300 py-1.5 pl-8 pr-3 text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            placeholder="Search"
+            className="w-full rounded-full border border-gray-200 bg-[#f6f6f6] py-2.5 pl-10 pr-4 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400/50 focus:border-blue-400"
           />
-        </div>
-
-        {/* Filters */}
-        <div className="mt-2 flex gap-2">
-          <select
-            value={filterAgent}
-            onChange={(e) => setFilterAgent(e.target.value as AgentType | '')}
-            className="flex-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600"
-          >
-            <option value="">Todos los agentes</option>
-            <option value="Cobros">Cobros</option>
-            <option value="Reclamos">Reclamos</option>
-            <option value="Renovaciones">Renovaciones</option>
-            <option value="General">General</option>
-          </select>
-          <select
-            value={filterStatus}
-            onChange={(e) => setFilterStatus(e.target.value as ConversationStatus | '')}
-            className="flex-1 rounded border border-gray-300 px-2 py-1 text-xs text-gray-600"
-          >
-            <option value="">Todo estado</option>
-            <option value="Active">Activa</option>
-            <option value="WaitingClient">Esperando</option>
-            <option value="EscalatedToHuman">Escalada</option>
-          </select>
         </div>
       </div>
 
-      {/* List */}
+      {/* Filters */}
+      <div className="flex gap-2 px-4 pb-3">
+        <select
+          value={filterAgent}
+          onChange={(e) => setFilterAgent(e.target.value)}
+          className="flex-1 rounded-lg border border-gray-200 bg-[#f6f6f6] px-3 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+        >
+          <option value="">Todos</option>
+          {agentNames.map((name) => (
+            <option key={name} value={name}>{name}</option>
+          ))}
+        </select>
+        <select
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value as ConversationStatus | '')}
+          className="flex-1 rounded-lg border border-gray-200 bg-[#f6f6f6] px-3 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+        >
+          <option value="">Todo estado</option>
+          <option value="Active">Activa</option>
+          <option value="WaitingClient">Esperando</option>
+          <option value="EscalatedToHuman">Escalada</option>
+        </select>
+      </div>
+
+      {/* Conversation list */}
       <div className="flex-1 overflow-y-auto">
+        {filtered.length === 0 && (
+          <div className="py-16 text-center text-sm text-gray-400">No hay conversaciones</div>
+        )}
         {filtered.map((c) => {
+          const displayName = c.clientName ?? c.clientPhone
+          const isSelected = selectedId === c.id
           const minutesSince = differenceInMinutes(new Date(), new Date(c.lastActivityAt))
           const isStale = minutesSince > 8 && c.status === 'WaitingClient'
+          const avatarUrl = avatarImages[c.id]
 
           return (
             <button
               key={c.id}
               onClick={() => onSelect(c.id)}
-              className={`w-full border-b border-gray-100 px-4 py-3 text-left transition-colors hover:bg-gray-50 ${
-                selectedId === c.id ? 'bg-blue-50' : ''
+              className={`w-full px-4 py-3 text-left transition-colors hover:bg-[#f5f6f8] border-b border-gray-100 ${
+                isSelected ? 'bg-[#e8ecf7] border-l-4 border-l-blue-500' : ''
               }`}
             >
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <p className="truncate text-sm font-medium text-gray-900">
-                      {c.clientName ?? c.clientPhone}
-                    </p>
-                    {isStale && <span className="h-2 w-2 shrink-0 rounded-full bg-red-500" />}
-                  </div>
-                  <p className="mt-0.5 truncate text-xs text-gray-500">
-                    {c.lastMessagePreview ?? '—'}
-                  </p>
+              <div className="flex items-center gap-3">
+                {/* Avatar - circular with image or initials */}
+                <div className="relative shrink-0">
+                  {avatarUrl ? (
+                    <img
+                      src={avatarUrl}
+                      alt={displayName}
+                      className="h-12 w-12 rounded-full object-cover"
+                    />
+                  ) : (
+                    <div className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold text-white ${getAvatarBg(displayName)}`}>
+                      {getInitials(displayName)}
+                    </div>
+                  )}
+                  {c.status === 'Active' && (
+                    <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-green-400" />
+                  )}
                 </div>
-                <Badge variant={c.agentType}>{c.agentType}</Badge>
-              </div>
-              <div className="mt-1 flex items-center gap-2 text-xs text-gray-400">
-                <span>{formatDistanceToNow(new Date(c.lastActivityAt), { addSuffix: true, locale: es })}</span>
-                {c.isHumanHandled && <span className="font-medium text-green-600">Humano</span>}
+
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className={`truncate text-sm ${isSelected ? 'font-semibold text-gray-900' : 'font-medium text-gray-800'}`}>
+                      {displayName}
+                    </p>
+                    <span className="shrink-0 text-[11px] text-gray-400">
+                      {formatTime(c.lastActivityAt)}
+                    </span>
+                  </div>
+                  <div className="mt-0.5 flex items-center justify-between gap-2">
+                    <p className="truncate text-xs text-gray-500">
+                      {c.lastMessagePreview ?? '—'}
+                    </p>
+                    <div className="flex shrink-0 items-center gap-1">
+                      {isStale && <span className="h-2.5 w-2.5 rounded-full bg-red-500" />}
+                      {c.isHumanHandled && (
+                        <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">H</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             </button>
           )

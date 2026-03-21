@@ -1,3 +1,4 @@
+using System.Threading.RateLimiting;
 using AgentFlow.API.Hubs;
 using AgentFlow.API.Middleware;
 using AgentFlow.Domain.Interfaces;
@@ -58,6 +59,9 @@ else
     builder.Services.AddScoped<IAgentRunner, NoOpAgentRunner>();
 }
 
+// ── Email (SendGrid) ────────────────────────────────────
+builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService, AgentFlow.Infrastructure.Email.SendGridEmailService>();
+
 // ── MediatR ────────────────────────────────────────────
 builder.Services.AddMediatR(c =>
     c.RegisterServicesFromAssemblies(
@@ -67,31 +71,55 @@ builder.Services.AddMediatR(c =>
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<ConversationNotifier>();
 
-// ── Hangfire — se inicializa pero no bloquea si la BD no tiene el schema ──
+// ── Hangfire — opcional, no bloquea el inicio si la BD no responde ──
+var hangfireEnabled = false;
 try
 {
+    // Solo registrar Hangfire si la BD está accesible
+    using var testConn = new Microsoft.Data.SqlClient.SqlConnection(cfg.GetConnectionString("DefaultConnection"));
+    testConn.Open();
+    testConn.Close();
+
     builder.Services.AddHangfire(h => h
         .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
         .UseSimpleAssemblyNameTypeSerializer()
         .UseSqlServerStorage(cfg.GetConnectionString("DefaultConnection"),
             new SqlServerStorageOptions { SchemaName = "HF" }));
     builder.Services.AddHangfireServer();
+    hangfireEnabled = true;
+    Console.WriteLine("Hangfire configurado correctamente.");
 }
 catch (Exception ex)
 {
-    Console.WriteLine($"Hangfire: {ex.Message}");
+    Console.WriteLine($"Hangfire no disponible: {ex.Message}");
 }
 
-// ── Auth — en dev permitimos requests sin JWT ───────────
-if (!isDev)
-{
-    builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)
-        .AddJwtBearer(o =>
+// ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
+var jwtSecret = cfg["Jwt:Secret"] ?? "AgentFlow_Dev_Secret_Key_Min32Chars!!";
+builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(o =>
+    {
+        o.TokenValidationParameters = new Microsoft.IdentityModel.Tokens.TokenValidationParameters
         {
-            o.Authority = cfg["Auth:Authority"];
-            o.Audience  = cfg["Auth:Audience"];
-        });
-}
+            ValidateIssuer = true,
+            ValidIssuer = "agentflow-api",
+            ValidateAudience = true,
+            ValidAudience = "agentflow-app",
+            ValidateIssuerSigningKey = true,
+            IssuerSigningKey = new Microsoft.IdentityModel.Tokens.SymmetricSecurityKey(
+                System.Text.Encoding.UTF8.GetBytes(jwtSecret)) { KeyId = "talkia-key" },
+            ValidateLifetime = true,
+            RoleClaimType = System.Security.Claims.ClaimTypes.Role,
+        };
+        o.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
+        {
+            OnAuthenticationFailed = ctx =>
+            {
+                if (isDev) Console.WriteLine($"JWT AUTH FAILED: {ctx.Exception.GetType().Name}");
+                return Task.CompletedTask;
+            },
+        };
+    });
 builder.Services.AddAuthorization();
 
 // ── UltraMsg (gestion de instancias WhatsApp) ───────────
@@ -100,6 +128,10 @@ builder.Services.AddHttpClient<IUltraMsgInstanceService, UltraMsgInstanceService
 // ── Azure Blob Storage (documentos de agentes) ──────────
 builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
 
+// ── Procesador de archivos Excel ──────────────────────
+builder.Services.AddScoped<AgentFlow.Application.Modules.Campaigns.IExcelFileProcessor,
+    AgentFlow.Infrastructure.FileProcessing.ExcelFileProcessor>();
+
 // ── Repositorios y servicios de dominio ──────────────────
 builder.Services.AddScoped<IConversationRepository, ConversationRepository>();
 builder.Services.AddScoped<IContextDispatcher, ContextDispatcher>();
@@ -107,6 +139,31 @@ builder.Services.AddScoped<IContextDispatcher, ContextDispatcher>();
 // ── Tenant context ─────────────────────────────────────
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ITenantContext, HttpTenantContext>();
+
+// ── Rate limiting ───────────────────────────────────────
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = 429;
+    options.AddPolicy("auth", httpCtx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpCtx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+            }));
+    options.AddPolicy("api", httpCtx =>
+        RateLimitPartition.GetFixedWindowLimiter(
+            httpCtx.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 100,
+                Window = TimeSpan.FromMinutes(1),
+            }));
+});
+
+// ── File upload limits (10 MB max) ──────────────────────
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 10 * 1024 * 1024);
 
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
@@ -117,10 +174,14 @@ builder.Services.AddControllers()
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// ── CORS (dev: React en localhost:5173) ────────────────
+// ── CORS ────────────────────────────────────────────────
+var allowedOrigins = cfg.GetSection("Cors:AllowedOrigins").Get<string[]>()
+    ?? (isDev ? new[] { "http://localhost:5173" } : Array.Empty<string>());
 builder.Services.AddCors(o => o.AddPolicy("dev", p =>
-    p.WithOrigins("http://localhost:5173")
-     .AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
+    p.WithOrigins(allowedOrigins)
+     .WithHeaders("Authorization", "Content-Type", "X-Tenant-Id")
+     .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
+     .AllowCredentials()));
 
 var app = builder.Build();
 
@@ -129,6 +190,15 @@ if (isDev)
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
+    db.Database.Migrate();
+
+    // Agregar columna ActionConfigs si no existe (evita depender de migraciones con Designer)
+    db.Database.ExecuteSqlRaw(@"
+        IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActionConfigs')
+        BEGIN
+            ALTER TABLE CampaignTemplates ADD ActionConfigs nvarchar(max) NULL;
+        END");
+
     var devTenantId = Guid.Parse("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
     if (!db.Tenants.Any(t => t.Id == devTenantId))
     {
@@ -157,28 +227,74 @@ if (isDev)
             PasswordHash = AgentFlow.API.Controllers.AuthController.HashPassword("admin123"),
             Role = AgentFlow.Domain.Entities.UserRole.Admin,
             IsActive = true,
+            MustChangePassword = false,
             CreatedAt = DateTime.UtcNow,
         });
         db.SaveChanges();
-        Console.WriteLine("Usuario admin de desarrollo creado: admin@agentflow.dev / admin123");
+        if (isDev) Console.WriteLine("Usuario admin de desarrollo creado.");
+    }
+
+    // ── Seed super admin (solo en dev) ──────
+    if (!db.SuperAdmins.Any())
+    {
+        db.SuperAdmins.Add(new AgentFlow.Domain.Entities.SuperAdmin
+        {
+            Id = Guid.Parse("00000000-0000-0000-0000-000000000099"),
+            FullName = "Super Admin",
+            Email = "superadmin@agentflow.dev",
+            PasswordHash = AgentFlow.API.Controllers.AuthController.HashPassword("superadmin123"),
+            IsActive = true,
+            MustChangePassword = false,
+        });
+        db.SaveChanges();
+        if (isDev) Console.WriteLine("Super Admin seed creado.");
+    }
+
+    // Seed categorias de agentes
+    if (!db.AgentCategories.Any())
+    {
+        db.AgentCategories.AddRange(
+            new AgentFlow.Domain.Entities.AgentCategory { Id = Guid.NewGuid(), Name = "Cobros" },
+            new AgentFlow.Domain.Entities.AgentCategory { Id = Guid.NewGuid(), Name = "Reclamos" },
+            new AgentFlow.Domain.Entities.AgentCategory { Id = Guid.NewGuid(), Name = "Renovaciones" },
+            new AgentFlow.Domain.Entities.AgentCategory { Id = Guid.NewGuid(), Name = "General" }
+        );
+        db.SaveChanges();
     }
 }
 
+// ── Security headers ─────────────────────────────────
+app.Use(async (context, next) =>
+{
+    context.Response.Headers["X-Content-Type-Options"] = "nosniff";
+    context.Response.Headers["X-Frame-Options"] = "DENY";
+    context.Response.Headers["X-XSS-Protection"] = "1; mode=block";
+    context.Response.Headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+    if (!isDev)
+    {
+        context.Response.Headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains";
+    }
+    await next();
+});
+
+app.UseRateLimiter();
 app.UseCors("dev");
 app.UseMiddleware<TenantMiddleware>();
 
-if (!isDev)
-{
-    app.UseAuthentication();
-}
+app.UseAuthentication();
 app.UseAuthorization();
 
-app.UseSwagger();
-app.UseSwaggerUI();
+if (isDev)
+{
+    app.UseDeveloperExceptionPage();
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
 
 app.MapControllers();
 app.MapHub<ConversationHub>("/hubs/conversations");
 
-try { app.MapHangfireDashboard("/hangfire"); } catch { /* Hangfire no disponible */ }
+if (hangfireEnabled) { try { app.MapHangfireDashboard("/hangfire"); } catch { } }
 
 app.Run();

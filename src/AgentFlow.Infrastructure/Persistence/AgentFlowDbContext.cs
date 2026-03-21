@@ -16,6 +16,12 @@ public class AgentFlowDbContext(DbContextOptions<AgentFlowDbContext> options) : 
     public DbSet<AgentDocument> AgentDocuments => Set<AgentDocument>();
     public DbSet<ConversationLabel> ConversationLabels => Set<ConversationLabel>();
     public DbSet<WhatsAppLine> WhatsAppLines => Set<WhatsAppLine>();
+    public DbSet<SuperAdmin> SuperAdmins => Set<SuperAdmin>();
+    public DbSet<AgentTemplate> AgentTemplates => Set<AgentTemplate>();
+    public DbSet<AgentCategory> AgentCategories => Set<AgentCategory>();
+    public DbSet<CampaignTemplate> CampaignTemplates => Set<CampaignTemplate>();
+    public DbSet<ActionDefinition> ActionDefinitions => Set<ActionDefinition>();
+    public DbSet<PromptTemplate> PromptTemplates => Set<PromptTemplate>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {

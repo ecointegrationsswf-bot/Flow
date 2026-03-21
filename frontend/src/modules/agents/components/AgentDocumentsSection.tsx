@@ -134,7 +134,7 @@ export function AgentDocumentsSection({ agentId }: { agentId: string }) {
                       fileSizeBytes: doc.fileSizeBytes,
                     })
                   }
-                  className="rounded p-1.5 text-gray-400 hover:bg-blue-50 hover:text-blue-600"
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
                   title="Ver documento"
                 >
                   <Eye className="h-4 w-4" />
@@ -143,7 +143,7 @@ export function AgentDocumentsSection({ agentId }: { agentId: string }) {
                   type="button"
                   onClick={() => setDeleteTarget({ id: doc.id, name: doc.fileName })}
                   disabled={deleteMutation.isPending}
-                  className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 disabled:opacity-50 transition-colors"
                   title="Eliminar"
                 >
                   <Trash2 className="h-4 w-4" />

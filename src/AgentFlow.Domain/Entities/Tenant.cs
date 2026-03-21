@@ -20,10 +20,18 @@ public class Tenant
     public string WhatsAppApiToken { get; set; } = string.Empty;  // cifrado en BD
     public string? WhatsAppInstanceId { get; set; }               // UltraMsg instanceId
 
+    // Facturación y país
+    public string Country { get; set; } = string.Empty;
+    public decimal MonthlyBillingAmount { get; set; }
+
     // Configuración horaria
     public TimeOnly BusinessHoursStart { get; set; } = new(8, 0);
     public TimeOnly BusinessHoursEnd { get; set; }   = new(17, 0);
     public string TimeZone { get; set; } = "America/Panama";
+
+    // Configuración SendGrid para envío de emails
+    public string? SendGridApiKey { get; set; }
+    public string? SenderEmail { get; set; }
 
     public ICollection<AgentDefinition> Agents { get; set; } = [];
     public ICollection<Campaign> Campaigns { get; set; } = [];

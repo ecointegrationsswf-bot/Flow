@@ -69,6 +69,7 @@ export interface ConversationSummary {
   clientName?: string
   policyNumber?: string
   agentType: string
+  agentName?: string
   status: ConversationStatus
   channel: string
   isHumanHandled: boolean
@@ -129,6 +130,7 @@ export interface AppUser {
   isActive: boolean
   canEditPhone: boolean
   allowedAgentIds: string[]
+  avatarUrl?: string | null
   createdAt: string
   lastLoginAt?: string
 }

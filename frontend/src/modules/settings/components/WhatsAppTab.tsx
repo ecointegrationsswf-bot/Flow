@@ -65,7 +65,7 @@ function LineCard({
   const currentStatus = statusData?.status ?? 'loading'
   const sem = getSemaphore(isError ? 'disconnected' : currentStatus)
   const isConnected = currentStatus === 'authenticated'
-  const needsQr = ['qr', 'disconnected', 'initialize', 'standby'].includes(currentStatus) || isError
+  const needsQr = !isConnected || isError
 
   const [showRestart, setShowRestart] = useState(false)
   const [showLogout, setShowLogout] = useState(false)
@@ -105,7 +105,7 @@ function LineCard({
         {needsQr && (
           <button
             onClick={() => onShowQr(line.id)}
-            className="flex items-center gap-1 rounded-md bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+            className="flex items-center gap-1 rounded-lg bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
             title="Vincular por QR"
           >
             <QrCode className="h-3.5 w-3.5" />
@@ -115,7 +115,7 @@ function LineCard({
         <button
           onClick={() => setShowRestart(true)}
           disabled={restartMutation.isPending}
-          className="rounded p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50"
+          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-50 transition-colors"
           title="Reiniciar"
         >
           <RefreshCw className={`h-4 w-4 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
@@ -124,7 +124,7 @@ function LineCard({
           <button
             onClick={() => setShowLogout(true)}
             disabled={logoutMutation.isPending}
-            className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 disabled:opacity-50 transition-colors"
             title="Cerrar sesion"
           >
             <LogOut className="h-4 w-4" />
@@ -132,14 +132,14 @@ function LineCard({
         )}
         <button
           onClick={() => onEdit(line)}
-          className="rounded p-1.5 text-gray-400 hover:bg-blue-50 hover:text-blue-600"
+          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
           title="Editar"
         >
           <Pencil className="h-4 w-4" />
         </button>
         <button
           onClick={() => onDelete(line)}
-          className="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
           title="Eliminar"
         >
           <Trash2 className="h-4 w-4" />
@@ -318,7 +318,7 @@ export function WhatsAppTab() {
         </div>
         <button
           onClick={() => { setShowForm(!showForm); setEditLine(null) }}
-          className="flex items-center gap-1.5 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+          className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
         >
           <Plus className="h-3.5 w-3.5" /> Agregar linea
         </button>
@@ -375,7 +375,7 @@ export function WhatsAppTab() {
             <button
               type="submit"
               disabled={createMutation.isPending}
-              className="flex items-center gap-1.5 rounded-md bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               {createMutation.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
               Guardar
@@ -383,7 +383,7 @@ export function WhatsAppTab() {
             <button
               type="button"
               onClick={() => setShowForm(false)}
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
               Cancelar
             </button>
@@ -444,7 +444,7 @@ export function WhatsAppTab() {
             <button
               type="submit"
               disabled={updateMutation.isPending}
-              className="flex items-center gap-1.5 rounded-md bg-amber-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
             >
               {updateMutation.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
               Actualizar
@@ -452,7 +452,7 @@ export function WhatsAppTab() {
             <button
               type="button"
               onClick={() => setEditLine(null)}
-              className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+              className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
               Cancelar
             </button>

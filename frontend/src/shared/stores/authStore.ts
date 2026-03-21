@@ -7,6 +7,7 @@ interface AuthUser {
   fullName: string
   email: string
   role: UserRole
+  avatarUrl?: string | null
 }
 
 interface AuthState {
@@ -29,7 +30,7 @@ export const useAuthStore = create<AuthState>((set) => ({
     const { data } = await api.post<{
       token: string
       tenantId: string
-      user: { id: string; fullName: string; email: string; role: UserRole }
+      user: { id: string; fullName: string; email: string; role: UserRole; avatarUrl?: string | null }
     }>('/auth/login', { email, password })
 
     localStorage.setItem('token', data.token)

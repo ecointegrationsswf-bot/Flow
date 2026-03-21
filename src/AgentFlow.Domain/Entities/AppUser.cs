@@ -24,6 +24,13 @@ public class AppUser
     /// </summary>
     public List<Guid> AllowedAgentIds { get; set; } = [];
 
+    public string? AvatarUrl { get; set; }
+
+    // Seguridad
+    public bool MustChangePassword { get; set; } = true;
+    public string? TwoFactorCode { get; set; }
+    public DateTime? TwoFactorExpiry { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastLoginAt { get; set; }
 }

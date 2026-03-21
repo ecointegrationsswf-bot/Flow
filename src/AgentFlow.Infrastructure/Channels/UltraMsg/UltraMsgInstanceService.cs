@@ -77,36 +77,26 @@ public class UltraMsgInstanceService(HttpClient http) : IUltraMsgInstanceService
     public async Task<byte[]> GetQrCodeAsync(string instanceId, string token, CancellationToken ct = default)
     {
         var normalizedId = NormalizeInstanceId(instanceId);
-        var url = $"{BaseUrl}/{normalizedId}/instance/qrCode?token={token}";
+
+        // Usar /instance/qr que devuelve imagen PNG directa
+        var url = $"{BaseUrl}/{normalizedId}/instance/qr?token={token}";
         var response = await http.GetAsync(url, ct);
 
-        var json = await response.Content.ReadAsStringAsync(ct);
-
-        // UltraMsg devuelve JSON:
-        // Exito: {"qrCode":"data:image/png;base64,..."} o imagen directa
-        // Error: {"error":"instance status is not equal \"qr\""}
-        if (!response.IsSuccessStatusCode || json.Contains("\"error\""))
-        {
-            // Si contiene base64, intentar parsear
-            try
-            {
-                var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("qrCode", out var qrProp))
-                {
-                    var qrData = qrProp.GetString();
-                    if (qrData != null && qrData.Contains("base64,"))
-                    {
-                        var base64 = qrData[(qrData.IndexOf("base64,") + 7)..];
-                        return Convert.FromBase64String(base64);
-                    }
-                }
-            }
-            catch { /* No es JSON valido, devolver error */ }
-
+        if (!response.IsSuccessStatusCode)
             throw new InvalidOperationException("QR no disponible: la instancia no esta en estado QR.");
-        }
 
-        // Intentar parsear como JSON con qrCode base64
+        var contentType = response.Content.Headers.ContentType?.MediaType ?? "";
+
+        // Si es imagen, devolver bytes directos
+        if (contentType.StartsWith("image/"))
+            return await response.Content.ReadAsByteArrayAsync(ct);
+
+        // Si devuelve JSON (error), parsear
+        var json = await response.Content.ReadAsStringAsync(ct);
+        if (json.Contains("\"error\""))
+            throw new InvalidOperationException("QR no disponible: la instancia no esta en estado QR.");
+
+        // Intentar como base64
         try
         {
             var doc = JsonDocument.Parse(json);
@@ -118,21 +108,11 @@ public class UltraMsgInstanceService(HttpClient http) : IUltraMsgInstanceService
                     var base64 = qrData[(qrData.IndexOf("base64,") + 7)..];
                     return Convert.FromBase64String(base64);
                 }
-                if (qrData != null)
-                {
-                    return Convert.FromBase64String(qrData);
-                }
             }
         }
-        catch (JsonException)
-        {
-            // No es JSON — probablemente es imagen binaria directa
-        }
+        catch { /* ignore */ }
 
-        // Si no es JSON, asumir que es imagen binaria directa
-        return System.Text.Encoding.UTF8.GetBytes(json).Length > 0
-            ? await response.Content.ReadAsByteArrayAsync(ct)
-            : throw new InvalidOperationException("No se pudo obtener el QR.");
+        throw new InvalidOperationException("No se pudo obtener el QR.");
     }
 
     public async Task<bool> RestartAsync(string instanceId, string token, CancellationToken ct = default)

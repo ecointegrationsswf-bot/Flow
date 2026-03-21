@@ -9,7 +9,7 @@ namespace AgentFlow.Domain.Entities;
 public class WhatsAppLine
 {
     public Guid Id { get; set; }
-    public Guid TenantId { get; set; }
+    public Guid? TenantId { get; set; }
 
     public string DisplayName { get; set; } = string.Empty;       // ej: "Cobros Principal"
     public string PhoneNumber { get; set; } = string.Empty;       // E.164 — se actualiza al vincular
@@ -20,5 +20,5 @@ public class WhatsAppLine
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
 
-    public Tenant Tenant { get; set; } = null!;
+    public Tenant? Tenant { get; set; }
 }

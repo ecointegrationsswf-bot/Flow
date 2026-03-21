@@ -18,6 +18,7 @@ public class WhatsAppLineConfiguration : IEntityTypeConfiguration<WhatsAppLine>
         b.HasOne(l => l.Tenant)
             .WithMany(t => t.WhatsAppLines)
             .HasForeignKey(l => l.TenantId)
+            .IsRequired(false)
             .OnDelete(DeleteBehavior.Cascade);
 
         b.HasIndex(l => l.TenantId);

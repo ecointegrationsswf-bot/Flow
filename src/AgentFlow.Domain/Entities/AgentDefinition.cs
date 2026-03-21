@@ -44,6 +44,9 @@ public class AgentDefinition
     public Guid? WhatsAppLineId { get; set; }
     public WhatsAppLine? WhatsAppLine { get; set; }
 
+    // Plantilla de origen (para actualizaciones desde admin)
+    public Guid? SourceTemplateId { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

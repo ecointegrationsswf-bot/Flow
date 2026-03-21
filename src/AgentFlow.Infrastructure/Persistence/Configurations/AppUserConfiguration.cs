@@ -21,7 +21,9 @@ public class AppUserConfiguration : IEntityTypeConfiguration<AppUser>
                 v => string.IsNullOrWhiteSpace(v)
                     ? new List<Guid>()
                     : JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
-            ).HasMaxLength(2000);
+            ).HasMaxLength(2000)
+            .HasDefaultValue(new List<Guid>());
+        b.Property(u => u.AvatarUrl).HasMaxLength(500);
         b.HasOne(u => u.Tenant).WithMany().HasForeignKey(u => u.TenantId).OnDelete(DeleteBehavior.Restrict);
     }
 }

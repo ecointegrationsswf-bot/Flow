@@ -7,7 +7,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace AgentFlow.API.Controllers;
 
 [ApiController]
-// [Authorize] // TODO: habilitar cuando auth esté configurado
+[Authorize]
 [Route("api/monitor")]
 public class MonitorController(IMediator mediator, ITenantContext tenantCtx) : ControllerBase
 {

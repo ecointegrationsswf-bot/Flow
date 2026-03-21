@@ -22,6 +22,80 @@ namespace AgentFlow.Infrastructure.Migrations
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.ActionDefinition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("RequiresWebhook")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("SendsEmail")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("SendsSms")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("WebhookMethod")
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<string>("WebhookUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("ActionDefinitions", (string)null);
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.AgentCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("AgentCategories");
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentDefinition", b =>
                 {
                     b.Property<Guid>("Id")
@@ -77,6 +151,9 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.Property<TimeOnly?>("SendUntil")
                         .HasColumnType("time");
+
+                    b.Property<Guid?>("SourceTemplateId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("SystemPrompt")
                         .IsRequired()
@@ -152,6 +229,80 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.ToTable("AgentDocuments");
                 });
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.AgentTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AvatarName")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("CloseConditionKeyword")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("InactivityCloseHours")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Language")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("LlmModel")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("MaxRetries")
+                        .HasColumnType("int");
+
+                    b.Property<int>("MaxTokens")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("RetryIntervalHours")
+                        .HasColumnType("int");
+
+                    b.Property<string>("SendFrom")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("SendUntil")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("SystemPrompt")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<double>("Temperature")
+                        .HasColumnType("float");
+
+                    b.Property<string>("Tone")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Category");
+
+                    b.ToTable("AgentTemplates");
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.AppUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -160,8 +311,14 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.Property<string>("AllowedAgentIds")
                         .IsRequired()
+                        .ValueGeneratedOnAdd()
                         .HasMaxLength(2000)
-                        .HasColumnType("nvarchar(2000)");
+                        .HasColumnType("nvarchar(2000)")
+                        .HasDefaultValue("[]");
+
+                    b.Property<string>("AvatarUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
 
                     b.Property<bool>("CanEditPhone")
                         .HasColumnType("bit");
@@ -185,6 +342,9 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Property<DateTime?>("LastLoginAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("bit");
+
                     b.Property<string>("PasswordHash")
                         .IsRequired()
                         .HasMaxLength(500)
@@ -200,6 +360,12 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.Property<Guid?>("TenantId1")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TwoFactorCode")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("TwoFactorExpiry")
+                        .HasColumnType("datetime2");
 
                     b.HasKey("Id");
 
@@ -218,6 +384,9 @@ namespace AgentFlow.Infrastructure.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<Guid>("AgentDefinitionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("CampaignTemplateId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Channel")
@@ -275,6 +444,8 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("AgentDefinitionId");
+
+                    b.HasIndex("CampaignTemplateId");
 
                     b.HasIndex("TenantId", "IsActive");
 
@@ -340,6 +511,75 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("CampaignId", "PhoneNumber");
 
                     b.ToTable("CampaignContacts");
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("AgentDefinitionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("AutoCloseHours")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("EmailAddress")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("FollowUpHours")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("LabelIds")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool>("SendEmail")
+                        .HasColumnType("bit");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ActionIds")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("PromptTemplateIds")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("ActionConfigs")
+                        .HasMaxLength(8000)
+                        .HasColumnType("nvarchar(8000)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AgentDefinitionId");
+
+                    b.HasIndex("TenantId");
+
+                    b.ToTable("CampaignTemplates");
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Conversation", b =>
@@ -532,6 +772,99 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.ToTable("Messages");
                 });
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.PromptTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("AnalysisPrompts")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid?>("CategoryId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("FieldMapping")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("ResultPrompt")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("SystemPrompt")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CategoryId");
+
+                    b.ToTable("PromptTemplates", (string)null);
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.SuperAdmin", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("FullName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LastLoginAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("MustChangePassword")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("PasswordHash")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("TwoFactorCode")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("TwoFactorExpiry")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Email")
+                        .IsUnique();
+
+                    b.ToTable("SuperAdmins");
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.Tenant", b =>
                 {
                     b.Property<Guid>("Id")
@@ -544,14 +877,30 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Property<TimeOnly>("BusinessHoursStart")
                         .HasColumnType("time");
 
+                    b.Property<string>("Country")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
+                    b.Property<decimal>("MonthlyBillingAmount")
+                        .HasColumnType("decimal(18,2)");
+
                     b.Property<string>("Name")
                         .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("SendGridApiKey")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("SenderEmail")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
@@ -627,7 +976,7 @@ namespace AgentFlow.Infrastructure.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
-                    b.Property<Guid>("TenantId")
+                    b.Property<Guid?>("TenantId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime?>("UpdatedAt")
@@ -638,7 +987,8 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("TenantId");
 
                     b.HasIndex("TenantId", "InstanceId")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("[TenantId] IS NOT NULL");
 
                     b.ToTable("WhatsAppLines");
                 });
@@ -695,6 +1045,10 @@ namespace AgentFlow.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("AgentFlow.Domain.Entities.CampaignTemplate", "CampaignTemplate")
+                        .WithMany()
+                        .HasForeignKey("CampaignTemplateId");
+
                     b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
                         .WithMany("Campaigns")
                         .HasForeignKey("TenantId")
@@ -702,6 +1056,8 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("AgentDefinition");
+
+                    b.Navigation("CampaignTemplate");
 
                     b.Navigation("Tenant");
                 });
@@ -715,6 +1071,25 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Campaign");
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignTemplate", b =>
+                {
+                    b.HasOne("AgentFlow.Domain.Entities.AgentDefinition", "AgentDefinition")
+                        .WithMany()
+                        .HasForeignKey("AgentDefinitionId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("AgentDefinition");
+
+                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Conversation", b =>
@@ -773,13 +1148,22 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Navigation("Conversation");
                 });
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.PromptTemplate", b =>
+                {
+                    b.HasOne("AgentFlow.Domain.Entities.AgentCategory", "Category")
+                        .WithMany()
+                        .HasForeignKey("CategoryId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Category");
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.WhatsAppLine", b =>
                 {
                     b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
                         .WithMany("WhatsAppLines")
                         .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Cascade);
 
                     b.Navigation("Tenant");
                 });

@@ -23,7 +23,7 @@ export function AgentsListPage() {
         action={
           <Link
             to="/agents/new"
-            className="flex items-center gap-1.5 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             <Plus className="h-4 w-4" /> Nuevo agente
           </Link>
@@ -38,7 +38,7 @@ export function AgentsListPage() {
           action={
             <Link
               to="/agents/new"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
             >
               Crear agente
             </Link>
@@ -89,18 +89,20 @@ export function AgentsListPage() {
                 <p>Reintentos: {agent.maxRetries} | Cierre: {agent.inactivityCloseHours}h</p>
               </div>
 
-              <div className="mt-4 flex gap-2 border-t border-gray-100 pt-3">
+              <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
                 <Link
                   to={`/agents/${agent.id}/edit`}
-                  className="flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                  title="Editar"
                 >
-                  <Pencil className="h-3 w-3" /> Editar
+                  <Pencil className="h-4 w-4" />
                 </Link>
                 <button
                   onClick={() => setDeleteId(agent.id)}
-                  className="flex items-center gap-1 rounded-md border border-red-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50"
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
+                  title="Eliminar"
                 >
-                  <Trash2 className="h-3 w-3" /> Eliminar
+                  <Trash2 className="h-4 w-4" />
                 </button>
               </div>
             </div>
