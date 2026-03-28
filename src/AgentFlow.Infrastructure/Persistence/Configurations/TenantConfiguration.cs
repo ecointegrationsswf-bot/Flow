@@ -18,6 +18,9 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         b.Property(t => t.Country).HasMaxLength(100);
         b.Property(t => t.MonthlyBillingAmount).HasColumnType("decimal(18,2)");
         b.Property(t => t.WhatsAppProvider).HasConversion<string>();
+        b.Property(t => t.LlmProvider).HasConversion<string>().HasMaxLength(50);
+        b.Property(t => t.LlmApiKey).HasMaxLength(500);
+        b.Property(t => t.LlmModel).HasMaxLength(100);
         b.Property(t => t.SendGridApiKey).HasMaxLength(500);
         b.Property(t => t.SenderEmail).HasMaxLength(200);
         b.HasMany(t => t.Agents).WithOne(a => a.Tenant).HasForeignKey(a => a.TenantId);

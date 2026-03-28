@@ -8,16 +8,23 @@ namespace AgentFlow.Infrastructure.AI;
 
 /// <summary>
 /// Ejecuta el agente llamando a Claude vía Anthropic SDK.
+/// Usa la API key del tenant si está disponible; si no, usa la key global (fallback).
 /// El system prompt incluye: definición del agente + contexto del cliente + historial.
 /// </summary>
 public class AnthropicAgentRunner(AnthropicClient anthropic) : IAgentRunner
 {
     public async Task<AgentResponse> RunAsync(AgentRunRequest req, CancellationToken ct = default)
     {
+        // Si el tenant tiene su propia API key, crear un cliente dedicado para esta petición.
+        // Si no, usar el cliente global inyectado (key de appsettings).
+        var client = !string.IsNullOrEmpty(req.TenantLlmApiKey)
+            ? new AnthropicClient(req.TenantLlmApiKey)
+            : anthropic;
+
         var systemPrompt = BuildSystemPrompt(req);
         var messages     = BuildMessages(req);
 
-        var response = await anthropic.Messages.GetClaudeMessageAsync(
+        var response = await client.Messages.GetClaudeMessageAsync(
             new MessageParameters
             {
                 Model         = req.Agent.LlmModel,

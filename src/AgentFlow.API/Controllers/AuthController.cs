@@ -15,6 +15,7 @@ namespace AgentFlow.API.Controllers;
 
 public record LoginRequest(string Email, string Password);
 public record UpdateSendGridRequest(string? SendGridApiKey, string? SenderEmail);
+public record UpdateLlmConfigRequest(string LlmProvider, string? LlmApiKey, string LlmModel);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
 public record Verify2FARequest(string TempToken, string Code);
@@ -208,6 +209,9 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 BusinessHoursStart = t.BusinessHoursStart.ToString("HH:mm"),
                 BusinessHoursEnd = t.BusinessHoursEnd.ToString("HH:mm"),
                 t.TimeZone, t.IsActive, t.MonthlyBillingAmount,
+                LlmProvider = t.LlmProvider.ToString(),
+                LlmApiKey = string.IsNullOrEmpty(t.LlmApiKey) ? null : "***" + t.LlmApiKey.Substring(Math.Max(0, t.LlmApiKey.Length - 4)),
+                t.LlmModel,
                 SendGridApiKey = string.IsNullOrEmpty(t.SendGridApiKey) ? null : "***" + t.SendGridApiKey.Substring(Math.Max(0, t.SendGridApiKey.Length - 4)),
                 t.SenderEmail
             })
@@ -233,6 +237,31 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
         await db.SaveChangesAsync(ct);
 
         return Ok(new { message = "Configuracion de SendGrid actualizada." });
+    }
+
+    [HttpPut("tenant/llm")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateTenantLlm([FromBody] UpdateLlmConfigRequest req, CancellationToken ct)
+    {
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        if (!Enum.TryParse<AgentFlow.Domain.Enums.LlmProviderType>(req.LlmProvider, true, out var provider))
+            return BadRequest(new { error = "Proveedor LLM invalido. Opciones: Anthropic, OpenAI, Gemini." });
+
+        tenant.LlmProvider = provider;
+        tenant.LlmModel = req.LlmModel;
+
+        // Solo actualizar API key si el usuario envió una nueva (no la máscara "***xxxx")
+        if (!string.IsNullOrEmpty(req.LlmApiKey) && !req.LlmApiKey.StartsWith("***"))
+            tenant.LlmApiKey = req.LlmApiKey;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Configuracion de LLM actualizada." });
     }
 
     [HttpPost("forgot-password")]

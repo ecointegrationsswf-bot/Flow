@@ -41,8 +41,8 @@ export interface CampaignTemplatePayload {
   followUpHours: number[]
   autoCloseHours: number
   labelIds: string[]
-  sendEmail: boolean
-  emailAddress: string | null
+  sendEmail?: boolean
+  emailAddress?: string | null
   actionIds: string[]
   actionConfigs?: string | null
   promptTemplateIds: string[]

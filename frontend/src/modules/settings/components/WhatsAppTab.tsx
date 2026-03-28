@@ -3,14 +3,14 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import {
-  Plus, Trash2, Pencil, RefreshCw, LogOut, QrCode, Phone, X, Loader2,
+  Plus, Trash2, Pencil, RefreshCw, LogOut, QrCode, Phone, X, Loader2, Send,
 } from 'lucide-react'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import {
   useWhatsAppLines, useCreateWhatsAppLine, useUpdateWhatsAppLine, useDeleteWhatsAppLine,
-  useLineStatus, useLineQr, useRestartLine, useLogoutLine,
+  useLineStatus, useLineQr, useRestartLine, useLogoutLine, useSendTestMessage,
 } from '@/shared/hooks/useWhatsAppLines'
 import type { WhatsAppLine } from '@/shared/types'
 
@@ -52,11 +52,13 @@ function LineCard({
   onEdit,
   onDelete,
   onShowQr,
+  onTestMessage,
 }: {
   line: WhatsAppLine
   onEdit: (line: WhatsAppLine) => void
   onDelete: (line: WhatsAppLine) => void
   onShowQr: (lineId: string) => void
+  onTestMessage: (lineId: string) => void
 }) {
   const { data: statusData, isError } = useLineStatus(line.id)
   const restartMutation = useRestartLine()
@@ -121,14 +123,24 @@ function LineCard({
           <RefreshCw className={`h-4 w-4 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
         </button>
         {isConnected && (
-          <button
-            onClick={() => setShowLogout(true)}
-            disabled={logoutMutation.isPending}
-            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 disabled:opacity-50 transition-colors"
-            title="Cerrar sesion"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+          <>
+            <button
+              onClick={() => onTestMessage(line.id)}
+              className="flex items-center gap-1 rounded-lg bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-green-700 transition-colors"
+              title="Enviar mensaje de prueba"
+            >
+              <Send className="h-3.5 w-3.5" />
+              Probar
+            </button>
+            <button
+              onClick={() => setShowLogout(true)}
+              disabled={logoutMutation.isPending}
+              className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 disabled:opacity-50 transition-colors"
+              title="Cerrar sesion"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
+          </>
         )}
         <button
           onClick={() => onEdit(line)}
@@ -233,6 +245,68 @@ function QrModal({ lineId, onClose }: { lineId: string; onClose: () => void }) {
   )
 }
 
+// ── Test Message Modal ────────────────────────────
+function TestMessageModal({ lineId, onClose }: { lineId: string; onClose: () => void }) {
+  const sendTest = useSendTestMessage()
+  const [to, setTo] = useState('')
+  const [message, setMessage] = useState('Hola, este es un mensaje de prueba desde AgentFlow.')
+
+  const handleSend = () => {
+    if (!to.trim()) return
+    sendTest.mutate({ lineId, to: to.trim(), message }, {
+      onSuccess: () => setTimeout(onClose, 2000),
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-full max-w-md rounded-lg bg-white p-6 shadow-xl" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-gray-900">Enviar mensaje de prueba</h3>
+          <button onClick={onClose} className="rounded p-1 text-gray-400 hover:text-gray-600">
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+        <div className="space-y-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Numero destino (con codigo de pais)</label>
+            <input
+              type="text"
+              value={to}
+              onChange={e => setTo(e.target.value)}
+              placeholder="+50760001234"
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Mensaje</label>
+            <textarea
+              value={message}
+              onChange={e => setMessage(e.target.value)}
+              rows={3}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+          <button
+            onClick={handleSend}
+            disabled={sendTest.isPending || !to.trim()}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            {sendTest.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            {sendTest.isPending ? 'Enviando...' : 'Enviar mensaje de prueba'}
+          </button>
+          {sendTest.isSuccess && (
+            <p className="text-sm text-green-600 text-center">Mensaje enviado exitosamente.</p>
+          )}
+          {sendTest.isError && (
+            <p className="text-sm text-red-600 text-center">Error al enviar el mensaje. Verifica el numero y la conexion.</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Main Tab ──────────────────────────────────────
 export function WhatsAppTab() {
   const { data: lines, isLoading } = useWhatsAppLines()
@@ -244,6 +318,7 @@ export function WhatsAppTab() {
   const [editLine, setEditLine] = useState<WhatsAppLine | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<WhatsAppLine | null>(null)
   const [qrLineId, setQrLineId] = useState<string | null>(null)
+  const [testLineId, setTestLineId] = useState<string | null>(null)
 
   // Create form
   const createForm = useForm<CreateForm>({
@@ -470,6 +545,7 @@ export function WhatsAppTab() {
               onEdit={openEdit}
               onDelete={setDeleteTarget}
               onShowQr={setQrLineId}
+              onTestMessage={setTestLineId}
             />
           ))}
         </div>
@@ -483,6 +559,9 @@ export function WhatsAppTab() {
 
       {/* QR Modal */}
       {qrLineId && <QrModal lineId={qrLineId} onClose={() => setQrLineId(null)} />}
+
+      {/* Test Message Modal */}
+      {testLineId && <TestMessageModal lineId={testLineId} onClose={() => setTestLineId(null)} />}
 
       {/* Delete confirm */}
       <ConfirmDialog

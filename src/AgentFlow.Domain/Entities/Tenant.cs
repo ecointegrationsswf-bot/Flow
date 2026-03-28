@@ -29,6 +29,11 @@ public class Tenant
     public TimeOnly BusinessHoursEnd { get; set; }   = new(17, 0);
     public string TimeZone { get; set; } = "America/Panama";
 
+    // Configuración LLM — cada tenant elige su proveedor de IA y su API key
+    public LlmProviderType LlmProvider { get; set; } = LlmProviderType.Anthropic;
+    public string? LlmApiKey { get; set; }            // cifrado en BD, nunca se expone completo
+    public string LlmModel { get; set; } = "claude-sonnet-4-6";  // modelo por defecto
+
     // Configuración SendGrid para envío de emails
     public string? SendGridApiKey { get; set; }
     public string? SenderEmail { get; set; }

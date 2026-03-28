@@ -16,7 +16,8 @@ public record AgentRunRequest(
     Conversation Conversation,
     string IncomingMessage,
     List<Message> RecentHistory,
-    Dictionary<string, string>? ClientContext = null   // saldo, póliza, etc.
+    Dictionary<string, string>? ClientContext = null,   // saldo, póliza, etc.
+    string? TenantLlmApiKey = null                      // API key del tenant para el LLM
 );
 
 public record AgentResponse(

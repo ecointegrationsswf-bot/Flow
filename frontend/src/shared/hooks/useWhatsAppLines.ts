@@ -141,3 +141,12 @@ export function useLogoutLine() {
     },
   })
 }
+
+export function useSendTestMessage() {
+  return useMutation({
+    mutationFn: async ({ lineId, to, message }: { lineId: string; to: string; message: string }) => {
+      const { data } = await api.post(`/whatsapp-lines/${lineId}/test-message`, { to, message })
+      return data as { message: string; externalId: string; to: string }
+    },
+  })
+}

@@ -13,6 +13,9 @@ export interface TenantInfo {
   timeZone: string
   isActive: boolean
   monthlyBillingAmount: number
+  llmProvider: string
+  llmApiKey: string | null
+  llmModel: string
   sendGridApiKey: string | null
   senderEmail: string | null
 }
@@ -32,6 +35,15 @@ export function useUpdateTenantSendGrid() {
   return useMutation({
     mutationFn: (data: { sendGridApiKey: string | null; senderEmail: string | null }) =>
       api.put('/auth/tenant/sendgrid', data).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateTenantLlm() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { llmProvider: string; llmApiKey: string | null; llmModel: string }) =>
+      api.put('/auth/tenant/llm', data).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
   })
 }

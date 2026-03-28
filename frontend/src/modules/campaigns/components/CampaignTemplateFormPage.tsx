@@ -19,8 +19,6 @@ const schema = z.object({
   name: z.string().min(1, 'El nombre es requerido'),
   agentDefinitionId: z.string().min(1, 'Selecciona un agente'),
   autoCloseHours: z.coerce.number().min(1).max(720).default(72),
-  sendEmail: z.boolean().default(false),
-  emailAddress: z.string().nullable().default(null),
 })
 type FormData = z.infer<typeof schema>
 
@@ -90,16 +88,11 @@ export function CampaignTemplateFormPage() {
           name: existing.name,
           agentDefinitionId: existing.agentDefinitionId,
           autoCloseHours: existing.autoCloseHours,
-          sendEmail: existing.sendEmail,
-          emailAddress: existing.emailAddress,
         }
       : {
           name: '', agentDefinitionId: '', autoCloseHours: 72,
-          sendEmail: false, emailAddress: null,
         },
   })
-
-  const sendEmail = watch('sendEmail')
 
   const addFollowUp = () => {
     const h = parseInt(newHour)
@@ -315,29 +308,7 @@ export function CampaignTemplateFormPage() {
           )}
         </section>
 
-        {/* Seccion 5: Email */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Configuracion de email</h2>
-          <div className="space-y-4">
-            <label className="flex cursor-pointer items-center gap-3">
-              <div className="relative">
-                <input type="checkbox" {...register('sendEmail')} className="sr-only peer" />
-                <div className="h-6 w-11 rounded-full bg-gray-200 peer-checked:bg-blue-600 transition-colors" />
-                <div className="absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform peer-checked:translate-x-5" />
-              </div>
-              <span className="text-sm font-medium text-gray-700">Enviar email</span>
-            </label>
-            {sendEmail && (
-              <div className="max-w-sm">
-                <label className="block text-sm font-medium text-gray-700">Cuenta de correo</label>
-                <input type="email" {...register('emailAddress')} className={inputClass} placeholder="cobros@empresa.com" />
-                <p className="mt-1 text-xs text-gray-500">El token de SendGrid se configura en Ajustes del tenant.</p>
-              </div>
-            )}
-          </div>
-        </section>
-
-        {/* Seccion 6: Acciones vinculadas */}
+        {/* Seccion 5: Acciones vinculadas */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
           <div className="mb-4 flex items-center gap-2">
             <Zap className="h-5 w-5 text-amber-500" />

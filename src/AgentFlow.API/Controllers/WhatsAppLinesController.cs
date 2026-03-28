@@ -13,6 +13,7 @@ public record UpdateWhatsAppLineRequest(string DisplayName, string PhoneNumber, 
 
 [ApiController]
 [Route("api/whatsapp-lines")]
+[Microsoft.AspNetCore.Authorization.Authorize]
 public class WhatsAppLinesController(
     ITenantContext tenantCtx,
     AgentFlowDbContext db,
@@ -234,9 +235,43 @@ public class WhatsAppLinesController(
         }
     }
 
+    /// <summary>
+    /// Envía un mensaje de prueba desde una línea WhatsApp específica.
+    /// Útil para verificar que la conexión UltraMsg está funcionando.
+    /// </summary>
+    [HttpPost("{id:guid}/test-message")]
+    public async Task<IActionResult> SendTestMessage(
+        Guid id,
+        [FromBody] TestMessageRequest req,
+        [FromServices] IChannelProviderFactory providerFactory,
+        CancellationToken ct)
+    {
+        var line = await GetLine(id, ct);
+        if (line is null) return NotFound(new { error = "Linea no encontrada." });
+
+        var provider = await providerFactory.GetProviderByLineAsync(id, ct);
+        if (provider is null)
+            return BadRequest(new { error = "No se pudo crear el proveedor para esta linea. Verifica Instance ID y Token." });
+
+        var result = await provider.SendMessageAsync(
+            new Domain.Interfaces.SendMessageRequest(req.To, req.Message), ct);
+
+        if (!result.Success)
+            return BadRequest(new { error = $"Error al enviar: {result.Error}" });
+
+        return Ok(new
+        {
+            message = "Mensaje de prueba enviado exitosamente.",
+            externalId = result.ExternalMessageId,
+            to = req.To,
+        });
+    }
+
     private async Task<WhatsAppLine?> GetLine(Guid id, CancellationToken ct)
     {
         return await db.WhatsAppLines
             .FirstOrDefaultAsync(l => l.Id == id && l.TenantId == tenantCtx.TenantId, ct);
     }
 }
+
+public record TestMessageRequest(string To, string Message);

@@ -1,18 +1,44 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Save, Mail } from 'lucide-react'
-import { useTenant, useUpdateTenantSendGrid } from '@/shared/hooks/useTenant'
+import { Loader2, Save, Mail, Brain } from 'lucide-react'
+import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm } from '@/shared/hooks/useTenant'
+
+// Modelos disponibles por proveedor — para poblar el selector dinámicamente
+const LLM_MODELS: Record<string, { value: string; label: string }[]> = {
+  Anthropic: [
+    { value: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6 (Recomendado)' },
+    { value: 'claude-opus-4-6', label: 'Claude Opus 4.6 (Premium)' },
+    { value: 'claude-haiku-4-5-20251001', label: 'Claude Haiku 4.5 (Economico)' },
+  ],
+  OpenAI: [
+    { value: 'gpt-4o', label: 'GPT-4o (Recomendado)' },
+    { value: 'gpt-4o-mini', label: 'GPT-4o Mini (Economico)' },
+    { value: 'gpt-4.1', label: 'GPT-4.1' },
+  ],
+  Gemini: [
+    { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro (Recomendado)' },
+    { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Economico)' },
+  ],
+}
 
 export function TenantSettingsTab() {
   const { data: tenant, isLoading, error } = useTenant()
   const updateSendGrid = useUpdateTenantSendGrid()
+  const updateLlm = useUpdateTenantLlm()
 
   const [sendGridApiKey, setSendGridApiKey] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
+
+  const [llmProvider, setLlmProvider] = useState('Anthropic')
+  const [llmApiKey, setLlmApiKey] = useState('')
+  const [llmModel, setLlmModel] = useState('claude-sonnet-4-6')
 
   useEffect(() => {
     if (tenant) {
       setSendGridApiKey('')
       setSenderEmail(tenant.senderEmail ?? '')
+      setLlmProvider(tenant.llmProvider ?? 'Anthropic')
+      setLlmApiKey('')
+      setLlmModel(tenant.llmModel ?? 'claude-sonnet-4-6')
     }
   }, [tenant])
 
@@ -21,6 +47,21 @@ export function TenantSettingsTab() {
       sendGridApiKey: sendGridApiKey || null,
       senderEmail: senderEmail || null,
     })
+  }
+
+  const handleSaveLlm = () => {
+    updateLlm.mutate({
+      llmProvider,
+      llmApiKey: llmApiKey || null,
+      llmModel,
+    })
+  }
+
+  // Cuando cambia el proveedor, seleccionar el primer modelo de ese proveedor
+  const handleProviderChange = (provider: string) => {
+    setLlmProvider(provider)
+    const models = LLM_MODELS[provider]
+    if (models?.length) setLlmModel(models[0].value)
   }
 
   if (isLoading) {
@@ -86,6 +127,70 @@ export function TenantSettingsTab() {
           <p className="text-xs text-gray-400">
             La configuracion del tenant se administra desde el panel de administrador.
           </p>
+        </div>
+      </div>
+
+      {/* Configuración LLM */}
+      <div className="rounded-lg bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <Brain className="h-4 w-4 text-purple-600" />
+          <h3 className="text-sm font-semibold text-gray-900">Configuracion del modelo de IA (LLM)</h3>
+        </div>
+        <p className="mb-4 text-xs text-gray-500">
+          Selecciona el proveedor de inteligencia artificial y el modelo que usaran los agentes de este tenant para responder mensajes.
+        </p>
+        <div className="grid grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Proveedor</label>
+            <select
+              value={llmProvider}
+              onChange={e => handleProviderChange(e.target.value)}
+              className={inputClass}
+            >
+              <option value="Anthropic">Anthropic (Claude)</option>
+              <option value="OpenAI">OpenAI (GPT)</option>
+              <option value="Gemini">Google (Gemini)</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">Modelo</label>
+            <select
+              value={llmModel}
+              onChange={e => setLlmModel(e.target.value)}
+              className={inputClass}
+            >
+              {(LLM_MODELS[llmProvider] ?? []).map(m => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700">API Key</label>
+            <input
+              type="password"
+              value={llmApiKey}
+              onChange={e => setLlmApiKey(e.target.value)}
+              className={inputClass}
+              placeholder={tenant.llmApiKey ? `Configurado (${tenant.llmApiKey})` : 'sk-...'}
+            />
+          </div>
+        </div>
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={handleSaveLlm}
+            disabled={updateLlm.isPending}
+            className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 transition-colors"
+          >
+            {updateLlm.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {updateLlm.isPending ? 'Guardando...' : 'Guardar configuracion LLM'}
+          </button>
+          {updateLlm.isSuccess && (
+            <p className="mt-2 text-sm text-green-600">Configuracion de LLM actualizada correctamente.</p>
+          )}
+          {updateLlm.isError && (
+            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuracion de LLM.</p>
+          )}
         </div>
       </div>
 

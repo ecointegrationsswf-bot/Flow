@@ -21,7 +21,8 @@ var isDev   = builder.Environment.IsDevelopment();
 // ── Persistencia ──────────────────────────────────────
 builder.Services.AddDbContext<AgentFlowDbContext>(o =>
     o.UseSqlServer(cfg.GetConnectionString("DefaultConnection"),
-        sql => sql.MigrationsAssembly("AgentFlow.Infrastructure")));
+        sql => sql.MigrationsAssembly("AgentFlow.Infrastructure"))
+     .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
 // ── Redis (sesiones activas) — opcional en dev ───────────
 var redisConn = cfg.GetConnectionString("Redis");
@@ -124,6 +125,7 @@ builder.Services.AddAuthorization();
 
 // ── UltraMsg (gestion de instancias WhatsApp) ───────────
 builder.Services.AddHttpClient<IUltraMsgInstanceService, UltraMsgInstanceService>();
+builder.Services.AddScoped<IChannelProviderFactory, AgentFlow.Infrastructure.Channels.ChannelProviderFactory>();
 
 // ── Azure Blob Storage (documentos de agentes) ──────────
 builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
@@ -280,9 +282,9 @@ app.Use(async (context, next) =>
 
 app.UseRateLimiter();
 app.UseCors("dev");
-app.UseMiddleware<TenantMiddleware>();
 
 app.UseAuthentication();
+app.UseMiddleware<TenantMiddleware>();   // DESPUÉS de auth, para que el JWT ya esté validado
 app.UseAuthorization();
 
 if (isDev)
