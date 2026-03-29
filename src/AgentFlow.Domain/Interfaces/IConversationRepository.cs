@@ -10,5 +10,7 @@ public interface IConversationRepository
     Task<IEnumerable<Conversation>> GetActiveByTenantAsync(Guid tenantId, CancellationToken ct = default);
     Task<Conversation> CreateAsync(Conversation conversation, CancellationToken ct = default);
     Task UpdateAsync(Conversation conversation, CancellationToken ct = default);
+    Task AddMessageAsync(Message message, CancellationToken ct = default);
+    Task SaveChangesAsync(CancellationToken ct = default);
     Task<IEnumerable<Conversation>> GetByStatusAsync(Guid tenantId, ConversationStatus status, CancellationToken ct = default);
 }

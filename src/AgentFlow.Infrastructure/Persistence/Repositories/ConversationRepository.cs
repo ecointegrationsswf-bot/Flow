@@ -34,7 +34,20 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
 
     public async Task UpdateAsync(Conversation conversation, CancellationToken ct = default)
     {
-        db.Conversations.Update(conversation);
+        var entry = db.Entry(conversation);
+        if (entry.State == EntityState.Detached)
+            db.Conversations.Update(conversation);
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    public async Task AddMessageAsync(Message message, CancellationToken ct = default)
+    {
+        db.Set<Message>().Add(message);
+    }
+
+    public async Task SaveChangesAsync(CancellationToken ct = default)
+    {
         await db.SaveChangesAsync(ct);
     }
 

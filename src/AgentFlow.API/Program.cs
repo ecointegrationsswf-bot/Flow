@@ -71,6 +71,7 @@ builder.Services.AddMediatR(c =>
 // ── SignalR (monitor en vivo) ──────────────────────────
 builder.Services.AddSignalR();
 builder.Services.AddSingleton<ConversationNotifier>();
+builder.Services.AddSingleton<IConversationNotifier>(sp => sp.GetRequiredService<ConversationNotifier>());
 
 // ── Hangfire — opcional, no bloquea el inicio si la BD no responde ──
 var hangfireEnabled = false;
@@ -94,6 +95,10 @@ catch (Exception ex)
 {
     Console.WriteLine($"Hangfire no disponible: {ex.Message}");
 }
+
+// ── Campaign Dispatcher (envío de campañas con rate limiting) ────────
+builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
+builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
 var jwtSecret = cfg["Jwt:Secret"] ?? "AgentFlow_Dev_Secret_Key_Min32Chars!!";
@@ -136,6 +141,8 @@ builder.Services.AddScoped<AgentFlow.Application.Modules.Campaigns.IExcelFilePro
 
 // ── Repositorios y servicios de dominio ──────────────────
 builder.Services.AddScoped<IConversationRepository, ConversationRepository>();
+builder.Services.AddScoped<IAgentRepository, AgentRepository>();
+builder.Services.AddScoped<ICampaignRepository, CampaignRepository>();
 builder.Services.AddScoped<IContextDispatcher, ContextDispatcher>();
 
 // ── Tenant context ─────────────────────────────────────

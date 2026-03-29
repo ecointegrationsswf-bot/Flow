@@ -7,8 +7,7 @@ namespace AgentFlow.Application.Modules.Webhooks;
 
 /// <summary>
 /// Comando principal: procesa un mensaje entrante de cualquier canal.
-/// Orquesta: Dispatcher → Agente → Persistencia → SignalR notification.
-/// Llamado por n8n vía POST /api/webhooks/message o directamente por el Controller.
+/// Orquesta TODO el flujo: Dispatcher → Memoria → Agente IA → Respuesta → Notificación.
 /// </summary>
 public record ProcessIncomingMessageCommand(
     Guid TenantId,
@@ -27,22 +26,37 @@ public record ProcessIncomingMessageResult(
     string AgentType
 );
 
+/// <summary>
+/// Handler que orquesta el flujo completo de un mensaje entrante:
+///
+/// 1. DISPATCHER — Identifica conversación existente o crea una nueva
+/// 2. PERSISTIR MENSAJE — Guarda el mensaje del cliente en BD
+/// 3. MEMORIA — Carga los últimos 10 mensajes de la conversación (historial para el LLM)
+/// 4. RESOLVER AGENTE — Busca el AgentDefinition con su system prompt y config
+/// 5. EJECUTAR LLM — Llama a Claude/OpenAI con: system prompt + historial + mensaje nuevo
+/// 6. PERSISTIR RESPUESTA — Guarda la respuesta del agente en BD
+/// 7. ENVIAR POR WHATSAPP — Envía la respuesta al cliente via UltraMsg
+/// 8. ACTUALIZAR SESIÓN — Redis guarda el estado para continuidad
+/// 9. NOTIFICAR MONITOR — SignalR envía evento al frontend en tiempo real
+/// </summary>
 public class ProcessIncomingMessageHandler(
     IContextDispatcher dispatcher,
     IAgentRunner agentRunner,
     IConversationRepository conversations,
+    IAgentRepository agents,
+    IChannelProviderFactory channelFactory,
     ISessionStore sessions,
-    IMediator mediator
+    IConversationNotifier notifier
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
     public async Task<ProcessIncomingMessageResult> Handle(
         ProcessIncomingMessageCommand cmd, CancellationToken ct)
     {
-        // 1. Dispatcher: ¿qué agente responde?
+        // ── 1. DISPATCHER: ¿qué agente responde? ────────
         var dispatch = await dispatcher.DispatchAsync(new(
             cmd.TenantId, cmd.FromPhone, cmd.Message, cmd.Channel.ToString()), ct);
 
-        // 2. Obtener o crear conversación
+        // ── 2. OBTENER O CREAR CONVERSACIÓN ──────────────
         Conversation conversation;
         if (dispatch.IsExistingSession && dispatch.ExistingConversationId.HasValue)
         {
@@ -66,7 +80,7 @@ public class ProcessIncomingMessageHandler(
             conversation = await conversations.CreateAsync(conversation, ct);
         }
 
-        // 3. Registrar mensaje entrante
+        // ── 3. PERSISTIR MENSAJE ENTRANTE ────────────────
         var inbound = new Message
         {
             Id = Guid.NewGuid(),
@@ -78,37 +92,194 @@ public class ProcessIncomingMessageHandler(
             IsFromAgent = false,
             SentAt = DateTime.UtcNow
         };
-        conversation.Messages.Add(inbound);
+        await conversations.AddMessageAsync(inbound, ct);
+        await conversations.SaveChangesAsync(ct);
 
-        // 4. Ejecutar agente (si no está manejado por humano)
-        AgentResponse? agentResponse = null;
-        if (!conversation.IsHumanHandled && dispatch.SelectedAgentId.HasValue)
+        // Notificar al monitor que llegó un mensaje
+        try
         {
-            // Aquí se resuelve el agente desde el contenedor — simplificado para el scaffold
-            agentResponse = new AgentResponse(
-                "Procesando...", dispatch.Intent, 0.9, false, false, 0);
+            await notifier.NotifyMessageAsync(cmd.TenantId.ToString(), new
+            {
+                Type = "inbound",
+                ConversationId = conversation.Id,
+                From = cmd.FromPhone,
+                Body = cmd.Message,
+                ClientName = cmd.ClientName,
+                Timestamp = DateTime.UtcNow
+            });
+        }
+        catch { /* SignalR no disponible — no es crítico */ }
+
+        // ── 4. EJECUTAR AGENTE IA ────────────────────────
+        AgentResponse? agentResponse = null;
+        string replyText = "";
+
+        // Solo ejecutar si no está manejado por humano y hay un agente asignado
+        if (!conversation.IsHumanHandled)
+        {
+            // Resolver qué agente usar
+            var agentId = dispatch.SelectedAgentId
+                ?? conversation.ActiveAgentId;
+
+            AgentDefinition? agent = null;
+            if (agentId.HasValue)
+                agent = await agents.GetByIdAsync(agentId.Value, ct);
+
+            // Si no hay agente específico, usar el primero activo del tenant
+            agent ??= await agents.GetFirstActiveByTenantAsync(cmd.TenantId, ct);
+
+            if (agent is not null)
+            {
+                // Actualizar el agente activo en la conversación
+                if (conversation.ActiveAgentId != agent.Id)
+                {
+                    conversation.ActiveAgentId = agent.Id;
+                }
+
+                // Cargar MEMORIA: últimos 10 mensajes de la conversación
+                var recentHistory = conversation.Messages?
+                    .OrderByDescending(m => m.SentAt)
+                    .Take(10)
+                    .OrderBy(m => m.SentAt)  // reordenar cronológicamente
+                    .ToList() ?? [];
+
+                // Obtener API key del tenant para el LLM
+                var tenant = await agents.GetTenantByIdAsync(cmd.TenantId, ct);
+                var tenantApiKey = tenant?.LlmApiKey;
+
+                // Construir contexto del cliente (datos de campaña si aplica)
+                var clientContext = new Dictionary<string, string>
+                {
+                    ["nombre"] = cmd.ClientName ?? conversation.ClientName ?? "Cliente",
+                    ["telefono"] = cmd.FromPhone
+                };
+
+                // Si es contacto de campaña, agregar datos de la póliza
+                if (dispatch.IsCampaignContact && conversation.PolicyNumber is not null)
+                {
+                    clientContext["poliza"] = conversation.PolicyNumber;
+                }
+
+                // ── LLAMAR AL LLM ────────────────────────
+                try
+                {
+                    agentResponse = await agentRunner.RunAsync(new AgentRunRequest(
+                        Agent: agent,
+                        Conversation: conversation,
+                        IncomingMessage: cmd.Message,
+                        RecentHistory: recentHistory,
+                        ClientContext: clientContext,
+                        TenantLlmApiKey: tenantApiKey
+                    ), ct);
+
+                    replyText = agentResponse.ReplyText;
+                }
+                catch (Exception ex)
+                {
+                    // LLM no disponible — respuesta de fallback
+                    replyText = "Gracias por su mensaje. En este momento no puedo procesar su solicitud. Un ejecutivo se comunicará con usted a la brevedad.";
+                    agentResponse = new AgentResponse(replyText, dispatch.Intent, 0, false, false, 0);
+                    Console.WriteLine($"[AgentRunner] Error: {ex.Message}");
+                }
+
+                // ── 5. PERSISTIR RESPUESTA DEL AGENTE ────
+                var outbound = new Message
+                {
+                    Id = Guid.NewGuid(),
+                    ConversationId = conversation.Id,
+                    Direction = MessageDirection.Outbound,
+                    Status = MessageStatus.Sent,
+                    Content = replyText,
+                    IsFromAgent = true,
+                    AgentName = agent.AvatarName ?? agent.Name,
+                    DetectedIntent = agentResponse.DetectedIntent,
+                    ConfidenceScore = agentResponse.ConfidenceScore,
+                    TokensUsed = agentResponse.TokensUsed,
+                    SentAt = DateTime.UtcNow
+                };
+                await conversations.AddMessageAsync(outbound, ct);
+
+                // ── 6. ENVIAR POR WHATSAPP ───────────────
+                try
+                {
+                    var provider = await channelFactory.GetProviderAsync(cmd.TenantId, ct);
+                    if (provider is not null)
+                    {
+                        var sendResult = await provider.SendMessageAsync(
+                            new SendMessageRequest(cmd.FromPhone, replyText), ct);
+
+                        outbound.ExternalMessageId = sendResult.ExternalMessageId;
+                        outbound.Status = sendResult.Success
+                            ? MessageStatus.Sent
+                            : MessageStatus.Failed;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[WhatsApp] Error enviando respuesta: {ex.Message}");
+                    outbound.Status = MessageStatus.Failed;
+                }
+
+                // Notificar al monitor la respuesta del agente
+                try
+                {
+                    await notifier.NotifyMessageAsync(cmd.TenantId.ToString(), new
+                    {
+                        Type = "outbound",
+                        ConversationId = conversation.Id,
+                        Body = replyText,
+                        AgentName = agent.AvatarName ?? agent.Name,
+                        Intent = agentResponse.DetectedIntent,
+                        Timestamp = DateTime.UtcNow
+                    });
+                }
+                catch { /* SignalR no disponible */ }
+
+                // Si el agente detecta que debe escalar a humano
+                if (agentResponse.ShouldEscalate)
+                {
+                    conversation.Status = ConversationStatus.EscalatedToHuman;
+                    try
+                    {
+                        await notifier.NotifyEscalationAsync(
+                            cmd.TenantId.ToString(), conversation.Id);
+                    }
+                    catch { }
+                }
+
+                // Si el agente detecta que debe cerrar la conversación
+                if (agentResponse.ShouldClose)
+                {
+                    conversation.Status = ConversationStatus.Closed;
+                    conversation.ClosedAt = DateTime.UtcNow;
+                }
+            }
         }
 
-        // 5. Actualizar sesión en Redis
-        await sessions.SetAsync(cmd.TenantId, cmd.FromPhone, new SessionState(
-            conversation.Id,
-            dispatch.SelectedAgentId ?? Guid.Empty,
-            dispatch.Intent,
-            null,
-            conversation.IsHumanHandled,
-            DateTime.UtcNow
-        ), TimeSpan.FromHours(72), ct);
+        // ── 7. ACTUALIZAR SESIÓN EN REDIS ────────────────
+        try
+        {
+            await sessions.SetAsync(cmd.TenantId, cmd.FromPhone, new SessionState(
+                conversation.Id,
+                conversation.ActiveAgentId ?? dispatch.SelectedAgentId ?? Guid.Empty,
+                agentResponse?.DetectedIntent ?? dispatch.Intent,
+                null,
+                conversation.IsHumanHandled,
+                DateTime.UtcNow
+            ), TimeSpan.FromHours(72), ct);
+        }
+        catch { /* Redis no disponible */ }
 
-        // 6. Persistir
+        // ── 8. PERSISTIR TODO ────────────────────────────
         conversation.LastActivityAt = DateTime.UtcNow;
-        await conversations.UpdateAsync(conversation, ct);
+        await conversations.SaveChangesAsync(ct);
 
         return new ProcessIncomingMessageResult(
             conversation.Id,
-            agentResponse?.ReplyText ?? string.Empty,
+            replyText,
             agentResponse?.ShouldEscalate ?? false,
             agentResponse?.ShouldClose ?? false,
-            dispatch.Intent
+            agentResponse?.DetectedIntent ?? dispatch.Intent
         );
     }
 }

@@ -2,6 +2,7 @@ using AgentFlow.Application.Modules.Campaigns;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Storage;
+using Hangfire;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -25,8 +26,134 @@ public class CampaignsController(
     IMediator mediator,
     ITenantContext tenantCtx,
     IExcelFileProcessor excelProcessor,
-    IBlobStorageService blobStorage) : ControllerBase
+    IBlobStorageService blobStorage,
+    ICampaignRepository campaignRepo) : ControllerBase
 {
+    /// <summary>
+    /// Lista todas las campañas del tenant autenticado.
+    /// Muestra: nombre, estado, total contactos, fecha creación, etc.
+    /// </summary>
+    [HttpGet]
+    public async Task<IActionResult> List(CancellationToken ct)
+    {
+        var campaigns = await campaignRepo.ListByTenantAsync(tenantCtx.TenantId, ct);
+        return Ok(campaigns.Select(c => new
+        {
+            c.Id,
+            c.Name,
+            Channel = c.Channel.ToString(),
+            Trigger = c.Trigger.ToString(),
+            c.IsActive,
+            c.TotalContacts,
+            c.ProcessedContacts,
+            c.ScheduledAt,
+            c.StartedAt,
+            c.CompletedAt,
+            c.CreatedAt,
+            c.SourceFileName,
+            // Progreso en porcentaje
+            Progress = c.TotalContacts > 0
+                ? Math.Round((double)c.ProcessedContacts / c.TotalContacts * 100, 1)
+                : 0
+        }));
+    }
+
+    /// <summary>
+    /// Obtiene el detalle de una campaña con todos sus contactos.
+    /// </summary>
+    [HttpGet("{id:guid}")]
+    public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
+    {
+        var campaign = await campaignRepo.GetByIdAsync(id, tenantCtx.TenantId, ct);
+        if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
+
+        return Ok(new
+        {
+            campaign.Id,
+            campaign.Name,
+            Channel = campaign.Channel.ToString(),
+            Trigger = campaign.Trigger.ToString(),
+            campaign.IsActive,
+            campaign.TotalContacts,
+            campaign.ProcessedContacts,
+            campaign.ScheduledAt,
+            campaign.StartedAt,
+            campaign.CompletedAt,
+            campaign.CreatedAt,
+            campaign.SourceFileName,
+            Contacts = campaign.Contacts.Select(cc => new
+            {
+                cc.Id,
+                cc.PhoneNumber,
+                cc.ClientName,
+                cc.PolicyNumber,
+                cc.InsuranceCompany,
+                cc.PendingAmount,
+                cc.IsPhoneValid,
+                cc.RetryCount,
+                Result = cc.Result.ToString(),
+                cc.LastContactAt
+            })
+        });
+    }
+
+    /// <summary>
+    /// Lanza el envío de una campaña. Programa un job en Hangfire
+    /// que enviará los mensajes de forma controlada (anti-ban).
+    /// </summary>
+    [HttpPost("{id:guid}/start")]
+    public IActionResult StartCampaign(
+        Guid id,
+        [FromServices] Hangfire.IBackgroundJobClient? jobClient)
+    {
+        if (jobClient is null)
+            return StatusCode(503, new { error = "Hangfire no disponible. El envío masivo requiere Hangfire." });
+
+        // Programar el primer lote inmediatamente
+        var jobId = jobClient.Enqueue<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>(
+            job => job.ExecuteAsync(id, CancellationToken.None));
+
+        return Ok(new
+        {
+            message = "Campaña iniciada. Los mensajes se enviarán de forma controlada.",
+            hangfireJobId = jobId,
+            campaignId = id
+        });
+    }
+
+    /// <summary>
+    /// Pausa una campaña activa (detiene el envío de mensajes).
+    /// </summary>
+    [HttpPost("{id:guid}/pause")]
+    public async Task<IActionResult> PauseCampaign(Guid id, CancellationToken ct)
+    {
+        var campaign = await campaignRepo.GetByIdAsync(id, tenantCtx.TenantId, ct);
+        if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
+
+        campaign.IsActive = false;
+        await campaignRepo.UpdateAsync(campaign, ct);
+
+        return Ok(new { message = "Campaña pausada. Los envíos pendientes se detienen." });
+    }
+
+    /// <summary>
+    /// Reactiva una campaña pausada.
+    /// </summary>
+    [HttpPost("{id:guid}/resume")]
+    public IActionResult ResumeCampaign(
+        Guid id,
+        [FromServices] Hangfire.IBackgroundJobClient? jobClient)
+    {
+        if (jobClient is null)
+            return StatusCode(503, new { error = "Hangfire no disponible." });
+
+        // Reactivar: el job verificará si la campaña está activa
+        var jobId = jobClient.Enqueue<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>(
+            job => job.ExecuteAsync(id, CancellationToken.None));
+
+        return Ok(new { message = "Campaña reactivada.", hangfireJobId = jobId });
+    }
+
     [HttpPost("parse")]
     [RequestSizeLimit(10 * 1024 * 1024)]
     public async Task<IActionResult> ParseFile(IFormFile file, CancellationToken ct)

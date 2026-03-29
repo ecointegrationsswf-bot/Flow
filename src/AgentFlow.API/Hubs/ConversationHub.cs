@@ -1,3 +1,4 @@
+using AgentFlow.Domain.Interfaces;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.SignalR;
 
@@ -24,7 +25,7 @@ public class ConversationHub : Hub
 /// <summary>
 /// Servicio inyectable para emitir eventos desde handlers y commands.
 /// </summary>
-public class ConversationNotifier(IHubContext<ConversationHub> hub)
+public class ConversationNotifier(IHubContext<ConversationHub> hub) : IConversationNotifier
 {
     public Task NotifyMessageAsync(string tenantId, object payload)
         => hub.Clients.Group($"tenant:{tenantId}").SendAsync("MessageReceived", payload);
