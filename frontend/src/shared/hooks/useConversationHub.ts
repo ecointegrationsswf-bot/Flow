@@ -21,8 +21,16 @@ export function useConversationHub(
   useEffect(() => {
     if (!tenantId) return
 
+    // Construir URL absoluta del hub usando la misma base que el API.
+    // En producción VITE_API_BASE_URL = "http://api-server/api" → hub = "http://api-server/hubs/conversations"
+    // En dev sin env var: usa URL relativa (el proxy de Vite la redirige a localhost:5000)
+    const apiBase = import.meta.env.VITE_API_BASE_URL as string | undefined
+    const hubUrl = apiBase
+      ? apiBase.replace(/\/api\/?$/, '') + '/hubs/conversations'
+      : '/hubs/conversations'
+
     const hub = new signalR.HubConnectionBuilder()
-      .withUrl('/hubs/conversations', {
+      .withUrl(hubUrl, {
         accessTokenFactory: () => localStorage.getItem('token') ?? '',
       })
       .withAutomaticReconnect()

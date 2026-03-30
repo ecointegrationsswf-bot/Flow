@@ -155,10 +155,26 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
+        var tenantId = tenantCtx.TenantId;
         var agent = await db.AgentDefinitions
-            .FirstOrDefaultAsync(a => a.Id == id && a.TenantId == tenantCtx.TenantId, ct);
+            .FirstOrDefaultAsync(a => a.Id == id && a.TenantId == tenantId, ct);
 
         if (agent is null) return NotFound();
+
+        // Verificar si el agente está vinculado a algún Maestro de Campaña
+        var linkedTemplates = await db.CampaignTemplates
+            .Where(t => t.AgentDefinitionId == id && t.TenantId == tenantId)
+            .Select(t => t.Name)
+            .ToListAsync(ct);
+
+        if (linkedTemplates.Count > 0)
+        {
+            var names = string.Join(", ", linkedTemplates.Select(n => $"\"{n}\""));
+            return Conflict(new
+            {
+                error = $"Este agente está vinculado a {linkedTemplates.Count} maestro(s) de campaña: {names}. Desvincula el agente de esos maestros antes de eliminarlo."
+            });
+        }
 
         db.AgentDefinitions.Remove(agent);
         await db.SaveChangesAsync(ct);

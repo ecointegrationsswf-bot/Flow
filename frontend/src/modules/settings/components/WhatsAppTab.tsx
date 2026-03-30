@@ -373,8 +373,16 @@ export function WhatsAppTab() {
 
   const handleDelete = async () => {
     if (!deleteTarget) return
-    await deleteMutation.mutateAsync(deleteTarget.id)
-    setDeleteTarget(null)
+    console.log('[DELETE] Intentando eliminar linea:', deleteTarget.id, deleteTarget.displayName)
+    try {
+      await deleteMutation.mutateAsync(deleteTarget.id)
+      console.log('[DELETE] Eliminado correctamente')
+      setDeleteTarget(null)
+    } catch (err: any) {
+      const msg = err?.response?.data?.error ?? err?.message ?? 'Error desconocido'
+      console.error('[DELETE] Error:', err?.response?.status, msg, err)
+      alert(`No se pudo eliminar la linea: ${msg}`)
+    }
   }
 
   if (isLoading) return <LoadingSpinner />

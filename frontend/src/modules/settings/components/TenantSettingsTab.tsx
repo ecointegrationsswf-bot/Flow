@@ -1,6 +1,28 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Save, Mail, Brain } from 'lucide-react'
-import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm } from '@/shared/hooks/useTenant'
+import { Loader2, Save, Mail, Brain, Clock } from 'lucide-react'
+import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone } from '@/shared/hooks/useTenant'
+
+const TIMEZONES = [
+  { value: 'America/Panama',      label: 'America/Panama (UTC-5)' },
+  { value: 'America/Bogota',      label: 'America/Bogota (UTC-5)' },
+  { value: 'America/Lima',        label: 'America/Lima (UTC-5)' },
+  { value: 'America/Guayaquil',   label: 'America/Guayaquil (UTC-5)' },
+  { value: 'America/Caracas',     label: 'America/Caracas (UTC-4)' },
+  { value: 'America/Santiago',    label: 'America/Santiago (UTC-3/-4)' },
+  { value: 'America/Argentina/Buenos_Aires', label: 'America/Buenos Aires (UTC-3)' },
+  { value: 'America/Sao_Paulo',   label: 'America/Sao Paulo (UTC-3)' },
+  { value: 'America/Mexico_City', label: 'America/Mexico City (UTC-6)' },
+  { value: 'America/Guatemala',   label: 'America/Guatemala (UTC-6)' },
+  { value: 'America/Costa_Rica',  label: 'America/Costa Rica (UTC-6)' },
+  { value: 'America/El_Salvador', label: 'America/El Salvador (UTC-6)' },
+  { value: 'America/Tegucigalpa', label: 'America/Tegucigalpa (UTC-6)' },
+  { value: 'America/Managua',     label: 'America/Managua (UTC-6)' },
+  { value: 'America/New_York',    label: 'America/New York (UTC-4/-5)' },
+  { value: 'America/Chicago',     label: 'America/Chicago (UTC-5/-6)' },
+  { value: 'America/Los_Angeles', label: 'America/Los Angeles (UTC-7/-8)' },
+  { value: 'Europe/Madrid',       label: 'Europe/Madrid (UTC+1/+2)' },
+  { value: 'UTC',                 label: 'UTC (UTC+0)' },
+]
 
 // Modelos disponibles por proveedor — para poblar el selector dinámicamente
 const LLM_MODELS: Record<string, { value: string; label: string }[]> = {
@@ -24,6 +46,7 @@ export function TenantSettingsTab() {
   const { data: tenant, isLoading, error } = useTenant()
   const updateSendGrid = useUpdateTenantSendGrid()
   const updateLlm = useUpdateTenantLlm()
+  const updateTimezone = useUpdateTenantTimezone()
 
   const [sendGridApiKey, setSendGridApiKey] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
@@ -32,6 +55,9 @@ export function TenantSettingsTab() {
   const [llmApiKey, setLlmApiKey] = useState('')
   const [llmModel, setLlmModel] = useState('claude-sonnet-4-6')
 
+  const [timeZone, setTimeZone] = useState('America/Panama')
+  const [timezoneSaved, setTimezoneSaved] = useState(false)
+
   useEffect(() => {
     if (tenant) {
       setSendGridApiKey('')
@@ -39,8 +65,15 @@ export function TenantSettingsTab() {
       setLlmProvider(tenant.llmProvider ?? 'Anthropic')
       setLlmApiKey('')
       setLlmModel(tenant.llmModel ?? 'claude-sonnet-4-6')
+      setTimeZone(tenant.timeZone ?? 'America/Panama')
     }
   }, [tenant])
+
+  const handleSaveTimezone = async () => {
+    await updateTimezone.mutateAsync(timeZone)
+    setTimezoneSaved(true)
+    setTimeout(() => setTimezoneSaved(false), 2500)
+  }
 
   const handleSaveSendGrid = () => {
     updateSendGrid.mutate({
@@ -113,9 +146,35 @@ export function TenantSettingsTab() {
               <label className="block text-xs font-medium text-gray-500">Horario de atencion</label>
               <p className="mt-1 text-sm text-gray-900">{tenant.businessHoursStart} - {tenant.businessHoursEnd}</p>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500">Zona horaria</label>
-              <p className="mt-1 text-sm text-gray-900">{tenant.timeZone}</p>
+            <div className="col-span-2">
+              <div className="flex items-end gap-3">
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-gray-500 mb-1">
+                    <Clock className="inline h-3.5 w-3.5 mr-1 text-gray-400" />
+                    Zona horaria
+                  </label>
+                  <select
+                    value={timeZone}
+                    onChange={e => setTimeZone(e.target.value)}
+                    className="block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  >
+                    {TIMEZONES.map(tz => (
+                      <option key={tz.value} value={tz.value}>{tz.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSaveTimezone}
+                  disabled={updateTimezone.isPending}
+                  className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                >
+                  {updateTimezone.isPending
+                    ? <Loader2 className="h-4 w-4 animate-spin" />
+                    : <Save className="h-4 w-4" />}
+                  {timezoneSaved ? '¡Guardado!' : 'Guardar'}
+                </button>
+              </div>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-500">Estado</label>
@@ -125,7 +184,7 @@ export function TenantSettingsTab() {
             </div>
           </div>
           <p className="text-xs text-gray-400">
-            La configuracion del tenant se administra desde el panel de administrador.
+            El nombre, pais y proveedor WhatsApp se administran desde el panel de administrador.
           </p>
         </div>
       </div>

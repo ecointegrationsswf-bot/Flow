@@ -4,19 +4,38 @@ using Microsoft.Extensions.Configuration;
 
 namespace AgentFlow.Infrastructure.Storage;
 
-public class AzureBlobStorageService(IConfiguration config) : IBlobStorageService
+public class AzureBlobStorageService : IBlobStorageService
 {
-    private readonly BlobContainerClient _container = new(
-        config["AzureBlobStorage:ConnectionString"],
-        config["AzureBlobStorage:ContainerName"] ?? "agent-documents");
+    private readonly string _connStr;
+    private readonly BlobContainerClient _container;
+
+    public AzureBlobStorageService(IConfiguration config)
+    {
+        _connStr   = config["AzureBlobStorage:ConnectionString"] ?? "";
+        _container = new BlobContainerClient(_connStr,
+            config["AzureBlobStorage:ContainerName"] ?? "agent-documents");
+    }
 
     public async Task<string> UploadAsync(string path, Stream content, string contentType, CancellationToken ct = default)
     {
         await _container.CreateIfNotExistsAsync(PublicAccessType.None, cancellationToken: ct);
-
         var blob = _container.GetBlobClient(path);
         await blob.UploadAsync(content, new BlobHttpHeaders { ContentType = contentType }, cancellationToken: ct);
+        return blob.Uri.ToString();
+    }
 
+    /// <summary>
+    /// Sube un archivo de media de WhatsApp al container público "whatsapp-media".
+    /// Devuelve la URL pública del blob para que UltraMsg pueda servirla al cliente.
+    /// </summary>
+    public async Task<string> UploadWhatsAppMediaAsync(string filename, byte[] content, string contentType, CancellationToken ct = default)
+    {
+        var mediaContainer = new BlobContainerClient(_connStr, "whatsapp-media");
+        await mediaContainer.CreateIfNotExistsAsync(PublicAccessType.Blob, cancellationToken: ct);
+
+        var blob = mediaContainer.GetBlobClient(filename);
+        using var ms = new MemoryStream(content);
+        await blob.UploadAsync(ms, new BlobHttpHeaders { ContentType = contentType }, cancellationToken: ct);
         return blob.Uri.ToString();
     }
 

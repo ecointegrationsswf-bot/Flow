@@ -14,7 +14,12 @@ public record CampaignTemplateRequest(
     bool SendEmail = false, string? EmailAddress = null,
     List<Guid>? ActionIds = null,
     string? ActionConfigs = null,
-    List<Guid>? PromptTemplateIds = null
+    List<Guid>? PromptTemplateIds = null,
+    string SystemPrompt = "",
+    string? SendFrom = null, string? SendUntil = null,
+    int MaxRetries = 3, int RetryIntervalHours = 24,
+    int InactivityCloseHours = 72, string? CloseConditionKeyword = null,
+    int MaxTokens = 1024
 );
 
 [ApiController]
@@ -36,6 +41,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 t.FollowUpHours, t.AutoCloseHours, t.LabelIds,
                 t.SendEmail, t.EmailAddress,
                 t.ActionIds, t.ActionConfigs, t.PromptTemplateIds,
+                t.SystemPrompt, t.SendFrom, t.SendUntil,
+                t.MaxRetries, t.RetryIntervalHours, t.InactivityCloseHours,
+                t.CloseConditionKeyword, t.MaxTokens,
                 t.IsActive, t.CreatedAt, t.UpdatedAt
             })
             .ToListAsync(ct);
@@ -55,7 +63,10 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 AgentName = db.AgentDefinitions.Where(a => a.Id == x.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
                 x.FollowUpHours, x.AutoCloseHours, x.LabelIds,
                 x.SendEmail, x.EmailAddress,
-                x.ActionIds, x.PromptTemplateIds,
+                x.ActionIds, x.ActionConfigs, x.PromptTemplateIds,
+                x.SystemPrompt, x.SendFrom, x.SendUntil,
+                x.MaxRetries, x.RetryIntervalHours, x.InactivityCloseHours,
+                x.CloseConditionKeyword, x.MaxTokens,
                 x.IsActive, x.CreatedAt, x.UpdatedAt
             })
             .FirstOrDefaultAsync(ct);
@@ -83,6 +94,14 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             ActionIds = req.ActionIds ?? [],
             ActionConfigs = req.ActionConfigs,
             PromptTemplateIds = req.PromptTemplateIds ?? [],
+            SystemPrompt = req.SystemPrompt,
+            SendFrom = req.SendFrom,
+            SendUntil = req.SendUntil,
+            MaxRetries = req.MaxRetries,
+            RetryIntervalHours = req.RetryIntervalHours,
+            InactivityCloseHours = req.InactivityCloseHours,
+            CloseConditionKeyword = req.CloseConditionKeyword,
+            MaxTokens = req.MaxTokens,
         };
 
         db.CampaignTemplates.Add(template);
@@ -109,6 +128,14 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         template.ActionIds = req.ActionIds ?? [];
         template.ActionConfigs = req.ActionConfigs;
         template.PromptTemplateIds = req.PromptTemplateIds ?? [];
+        template.SystemPrompt = req.SystemPrompt;
+        template.SendFrom = req.SendFrom;
+        template.SendUntil = req.SendUntil;
+        template.MaxRetries = req.MaxRetries;
+        template.RetryIntervalHours = req.RetryIntervalHours;
+        template.InactivityCloseHours = req.InactivityCloseHours;
+        template.CloseConditionKeyword = req.CloseConditionKeyword;
+        template.MaxTokens = req.MaxTokens;
         template.UpdatedAt = DateTime.UtcNow;
 
         await db.SaveChangesAsync(ct);

@@ -13,13 +13,26 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
 
     public async Task<SendResult> SendMessageAsync(SendMessageRequest req, CancellationToken ct = default)
     {
+        if (!string.IsNullOrEmpty(req.MediaUrl))
+        {
+            return req.MediaType switch
+            {
+                "image"    => await SendImageAsync(req, ct),
+                "document" => await SendDocumentAsync(req, ct),
+                _          => await SendTextAsync(req, ct)
+            };
+        }
+        return await SendTextAsync(req, ct);
+    }
+
+    private async Task<SendResult> SendTextAsync(SendMessageRequest req, CancellationToken ct)
+    {
         var payload = new FormUrlEncodedContent(new Dictionary<string, string>
         {
             ["token"] = options.Token,
             ["to"]    = req.To,
             ["body"]  = req.Body
         });
-
         var response = await http.PostAsync(
             $"https://api.ultramsg.com/{options.InstanceId}/messages/chat", payload, ct);
 
@@ -28,7 +41,52 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
 
         var json = await response.Content.ReadAsStringAsync(ct);
         var doc  = JsonDocument.Parse(json);
-        var id   = doc.RootElement.GetProperty("id").GetString();
+        var id   = doc.RootElement.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+        return new SendResult(true, id);
+    }
+
+    private async Task<SendResult> SendImageAsync(SendMessageRequest req, CancellationToken ct)
+    {
+        var fields = new Dictionary<string, string>
+        {
+            ["token"]   = options.Token,
+            ["to"]      = req.To,
+            ["image"]   = req.MediaUrl!,
+            ["caption"] = req.Body
+        };
+        var response = await http.PostAsync(
+            $"https://api.ultramsg.com/{options.InstanceId}/messages/image",
+            new FormUrlEncodedContent(fields), ct);
+
+        if (!response.IsSuccessStatusCode)
+            return new SendResult(false, null, $"UltraMsg image HTTP {response.StatusCode}");
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        var doc  = JsonDocument.Parse(json);
+        var id   = doc.RootElement.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+        return new SendResult(true, id);
+    }
+
+    private async Task<SendResult> SendDocumentAsync(SendMessageRequest req, CancellationToken ct)
+    {
+        var fields = new Dictionary<string, string>
+        {
+            ["token"]    = options.Token,
+            ["to"]       = req.To,
+            ["document"] = req.MediaUrl!,
+            ["filename"] = req.Filename ?? "documento.pdf",
+            ["caption"]  = req.Body
+        };
+        var response = await http.PostAsync(
+            $"https://api.ultramsg.com/{options.InstanceId}/messages/document",
+            new FormUrlEncodedContent(fields), ct);
+
+        if (!response.IsSuccessStatusCode)
+            return new SendResult(false, null, $"UltraMsg document HTTP {response.StatusCode}");
+
+        var json = await response.Content.ReadAsStringAsync(ct);
+        var doc  = JsonDocument.Parse(json);
+        var id   = doc.RootElement.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
         return new SendResult(true, id);
     }
 

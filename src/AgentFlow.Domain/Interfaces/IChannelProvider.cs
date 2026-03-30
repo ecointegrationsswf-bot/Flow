@@ -21,6 +21,8 @@ public record SendMessageRequest(
     string To,
     string Body,
     string? MediaUrl = null,
+    string? MediaType = null,   // "image" | "document" | "audio"
+    string? Filename = null,    // nombre de archivo para documentos
     string? ExternalId = null
 );
 

@@ -54,7 +54,7 @@ export function ConfirmDialog({
             Cancelar
           </button>
           <button
-            onClick={() => { onConfirm(); onClose() }}
+            onClick={onConfirm}
             className={`rounded-md px-3 py-1.5 text-sm font-medium ${btnColor}`}
           >
             {confirmLabel}

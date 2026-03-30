@@ -48,17 +48,14 @@ else
 }
 
 // ── Anthropic Claude ───────────────────────────────────
+// El sistema usa la API key del tenant (tabla Tenants.LlmApiKey).
+// Si hay una key global en appsettings la usamos como fallback; si no, se usa siempre la del tenant.
 var anthropicKey = cfg["Anthropic:ApiKey"];
-if (!string.IsNullOrEmpty(anthropicKey) && anthropicKey != "YOUR_ANTHROPIC_API_KEY")
-{
-    builder.Services.AddSingleton(new Anthropic.SDK.AnthropicClient(anthropicKey));
-    builder.Services.AddScoped<IAgentRunner, AnthropicAgentRunner>();
-}
-else
-{
-    Console.WriteLine("Anthropic no configurado. Usando NoOpAgentRunner.");
-    builder.Services.AddScoped<IAgentRunner, NoOpAgentRunner>();
-}
+var hasGlobalKey = !string.IsNullOrEmpty(anthropicKey) && anthropicKey != "YOUR_ANTHROPIC_API_KEY";
+builder.Services.AddSingleton(new Anthropic.SDK.AnthropicClient(hasGlobalKey ? anthropicKey! : "no-global-key"));
+builder.Services.AddSingleton(new AgentFlow.Infrastructure.AI.AnthropicSettings(hasGlobalKey));
+builder.Services.AddScoped<IAgentRunner, AnthropicAgentRunner>();
+Console.WriteLine(hasGlobalKey ? "Anthropic configurado con key global." : "Anthropic: usando API key por tenant.");
 
 // ── Email (SendGrid) ────────────────────────────────────
 builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService, AgentFlow.Infrastructure.Email.SendGridEmailService>();
@@ -130,6 +127,7 @@ builder.Services.AddAuthorization();
 
 // ── UltraMsg (gestion de instancias WhatsApp) ───────────
 builder.Services.AddHttpClient<IUltraMsgInstanceService, UltraMsgInstanceService>();
+builder.Services.AddHttpClient(); // IHttpClientFactory para descargar media de UltraMsg
 builder.Services.AddScoped<IChannelProviderFactory, AgentFlow.Infrastructure.Channels.ChannelProviderFactory>();
 
 // ── Azure Blob Storage (documentos de agentes) ──────────

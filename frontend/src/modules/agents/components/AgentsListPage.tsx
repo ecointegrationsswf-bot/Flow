@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Bot, Plus, Pencil, Trash2, Phone } from 'lucide-react'
+import { Bot, Plus, Pencil, Trash2, Phone, AlertCircle } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -12,6 +12,19 @@ export function AgentsListPage() {
   const { data: agents, isLoading } = useAgents()
   const deleteMutation = useDeleteAgent()
   const [deleteId, setDeleteId] = useState<string | null>(null)
+  const [blockMessage, setBlockMessage] = useState<string | null>(null)
+
+  const handleDelete = async () => {
+    if (!deleteId) return
+    try {
+      await deleteMutation.mutateAsync(deleteId)
+      setDeleteId(null)
+    } catch (err: any) {
+      const msg = err?.response?.data?.error ?? 'No se pudo eliminar el agente.'
+      setDeleteId(null)
+      setBlockMessage(msg)
+    }
+  }
 
   if (isLoading) return <LoadingSpinner />
 
@@ -110,15 +123,45 @@ export function AgentsListPage() {
         </div>
       )}
 
+      {/* Confirmar eliminación */}
       <ConfirmDialog
         open={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => { if (deleteId) deleteMutation.mutate(deleteId) }}
+        onConfirm={handleDelete}
         title="Eliminar agente"
         description="Esta accion no se puede deshacer. El agente sera eliminado permanentemente."
         confirmLabel="Eliminar"
         variant="danger"
       />
+
+      {/* Bloqueo: agente vinculado a campaña */}
+      {blockMessage && (
+        <dialog
+          ref={(el) => { if (el && !el.open) el.showModal() }}
+          onClose={() => setBlockMessage(null)}
+          className="rounded-xl p-0 backdrop:bg-black/40 shadow-xl"
+        >
+          <div className="w-[420px] p-6">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100">
+                <AlertCircle className="h-5 w-5 text-amber-600" />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">No se puede eliminar el agente</h3>
+                <p className="mt-2 text-sm text-gray-600 leading-relaxed">{blockMessage}</p>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                onClick={() => setBlockMessage(null)}
+                className="rounded-lg bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 transition-colors"
+              >
+                Entendido
+              </button>
+            </div>
+          </div>
+        </dialog>
+      )}
     </div>
   )
 }

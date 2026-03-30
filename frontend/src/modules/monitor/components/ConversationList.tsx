@@ -9,15 +9,6 @@ interface ConversationListProps {
   onSelect: (id: string) => void
 }
 
-const avatarImages: Record<string, string> = {
-  'mock-1': 'https://i.pravatar.cc/150?img=1',
-  'mock-2': 'https://i.pravatar.cc/150?img=3',
-  'mock-3': 'https://i.pravatar.cc/150?img=5',
-  'mock-4': 'https://i.pravatar.cc/150?img=8',
-  'mock-5': 'https://i.pravatar.cc/150?img=9',
-  'mock-6': 'https://i.pravatar.cc/150?img=11',
-  'mock-7': 'https://i.pravatar.cc/150?img=16',
-}
 
 function getInitials(name: string) {
   return name.split(' ').map(w => w[0]).filter(Boolean).slice(0, 2).join('').toUpperCase()
@@ -118,8 +109,6 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
           const isSelected = selectedId === c.id
           const minutesSince = differenceInMinutes(new Date(), new Date(c.lastActivityAt))
           const isStale = minutesSince > 8 && c.status === 'WaitingClient'
-          const avatarUrl = avatarImages[c.id]
-
           return (
             <button
               key={c.id}
@@ -129,19 +118,11 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
               }`}
             >
               <div className="flex items-center gap-3">
-                {/* Avatar - circular with image or initials */}
+                {/* Avatar - circular with initials */}
                 <div className="relative shrink-0">
-                  {avatarUrl ? (
-                    <img
-                      src={avatarUrl}
-                      alt={displayName}
-                      className="h-12 w-12 rounded-full object-cover"
-                    />
-                  ) : (
-                    <div className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold text-white ${getAvatarBg(displayName)}`}>
-                      {getInitials(displayName)}
-                    </div>
-                  )}
+                  <div className={`flex h-12 w-12 items-center justify-center rounded-full text-sm font-bold text-white ${getAvatarBg(displayName)}`}>
+                    {getInitials(displayName)}
+                  </div>
                   {c.status === 'Active' && (
                     <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-green-400" />
                   )}

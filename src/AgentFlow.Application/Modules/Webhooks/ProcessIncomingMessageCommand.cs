@@ -15,7 +15,9 @@ public record ProcessIncomingMessageCommand(
     string Message,
     ChannelType Channel,
     string? ClientName,
-    string? ExternalMessageId
+    string? ExternalMessageId,
+    string? MediaUrl = null,    // URL pública del archivo (Azure Blob o UltraMsg)
+    string? MediaType = null    // "image" | "document" | "audio"
 ) : IRequest<ProcessIncomingMessageResult>;
 
 public record ProcessIncomingMessageResult(
@@ -81,13 +83,18 @@ public class ProcessIncomingMessageHandler(
         }
 
         // ── 3. PERSISTIR MENSAJE ENTRANTE ────────────────
+        // Si hay media, incluir la URL en el contenido para que quede registrado
+        var inboundContent = cmd.Message;
+        if (!string.IsNullOrEmpty(cmd.MediaUrl))
+            inboundContent = $"{cmd.Message}\n[media:{cmd.MediaUrl}]";
+
         var inbound = new Message
         {
             Id = Guid.NewGuid(),
             ConversationId = conversation.Id,
             Direction = MessageDirection.Inbound,
             Status = MessageStatus.Delivered,
-            Content = cmd.Message,
+            Content = inboundContent,
             ExternalMessageId = cmd.ExternalMessageId,
             IsFromAgent = false,
             SentAt = DateTime.UtcNow

@@ -7,6 +7,7 @@ interface Profile {
   email: string
   role: string
   avatarUrl?: string | null
+  createdAt?: string | null
 }
 
 export function useProfile() {

@@ -6,20 +6,35 @@ using Anthropic.SDK.Messaging;
 
 namespace AgentFlow.Infrastructure.AI;
 
+/// <summary>Configuración global de Anthropic — indica si hay key global disponible.</summary>
+public record AnthropicSettings(bool HasGlobalKey);
+
 /// <summary>
 /// Ejecuta el agente llamando a Claude vía Anthropic SDK.
 /// Usa la API key del tenant si está disponible; si no, usa la key global (fallback).
 /// El system prompt incluye: definición del agente + contexto del cliente + historial.
 /// </summary>
-public class AnthropicAgentRunner(AnthropicClient anthropic) : IAgentRunner
+public class AnthropicAgentRunner(AnthropicClient anthropic, AnthropicSettings settings) : IAgentRunner
 {
     public async Task<AgentResponse> RunAsync(AgentRunRequest req, CancellationToken ct = default)
     {
         // Si el tenant tiene su propia API key, crear un cliente dedicado para esta petición.
         // Si no, usar el cliente global inyectado (key de appsettings).
-        var client = !string.IsNullOrEmpty(req.TenantLlmApiKey)
-            ? new AnthropicClient(req.TenantLlmApiKey)
-            : anthropic;
+        AnthropicClient client;
+        if (!string.IsNullOrEmpty(req.TenantLlmApiKey))
+        {
+            client = new AnthropicClient(req.TenantLlmApiKey);
+        }
+        else if (settings.HasGlobalKey)
+        {
+            client = anthropic;
+        }
+        else
+        {
+            // Ni key de tenant ni key global — el tenant no tiene LLM configurado
+            const string noKey = "Hola, estoy aquí para ayudarte. Un ejecutivo se comunicará contigo pronto.";
+            return new AgentResponse(noKey, "general", 0, false, false, 0);
+        }
 
         var systemPrompt = BuildSystemPrompt(req);
         var messages     = BuildMessages(req);

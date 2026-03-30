@@ -21,8 +21,9 @@ public class MonitorController(IMediator mediator, ITenantContext tenantCtx) : C
     [HttpGet("conversations/{id:guid}")]
     public async Task<IActionResult> GetDetail(Guid id, CancellationToken ct)
     {
-        // TODO: GetConversationDetailQuery
-        return Ok(new { id });
+        var result = await mediator.Send(new GetConversationDetailQuery(tenantCtx.TenantId, id), ct);
+        if (result is null) return NotFound();
+        return Ok(result);
     }
 
     /// <summary>

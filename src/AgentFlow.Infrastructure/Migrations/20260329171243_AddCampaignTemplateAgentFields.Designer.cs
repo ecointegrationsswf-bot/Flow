@@ -4,6 +4,7 @@ using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AgentFlow.Infrastructure.Migrations
 {
     [DbContext(typeof(AgentFlowDbContext))]
-    partial class AgentFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260329171243_AddCampaignTemplateAgentFields")]
+    partial class AddCampaignTemplateAgentFields
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -976,52 +979,6 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Tenants");
-                });
-
-            modelBuilder.Entity("AgentFlow.Domain.Entities.WebhookLog", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Body")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("ExternalMessageId")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("FromPhone")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("InstanceId")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("MessageType")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Provider")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("RawPayload")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<DateTime>("ReceivedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<string>("Status")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("StatusReason")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<Guid?>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("WebhookLogs");
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.WhatsAppLine", b =>

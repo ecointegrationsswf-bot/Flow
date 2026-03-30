@@ -30,6 +30,14 @@ export interface CampaignTemplate {
   actionIds: string[]
   actionConfigs: Record<string, ActionConfig> | null
   promptTemplateIds: string[]
+  systemPrompt: string
+  sendFrom: string | null
+  sendUntil: string | null
+  maxRetries: number
+  retryIntervalHours: number
+  inactivityCloseHours: number
+  closeConditionKeyword: string | null
+  maxTokens: number
   isActive: boolean
   createdAt: string
   updatedAt: string
@@ -46,6 +54,14 @@ export interface CampaignTemplatePayload {
   actionIds: string[]
   actionConfigs?: string | null
   promptTemplateIds: string[]
+  systemPrompt: string
+  sendFrom?: string | null
+  sendUntil?: string | null
+  maxRetries: number
+  retryIntervalHours: number
+  inactivityCloseHours: number
+  closeConditionKeyword?: string | null
+  maxTokens: number
 }
 
 export interface ActionConfig {

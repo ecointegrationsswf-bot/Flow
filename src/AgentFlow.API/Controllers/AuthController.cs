@@ -16,6 +16,7 @@ namespace AgentFlow.API.Controllers;
 public record LoginRequest(string Email, string Password);
 public record UpdateSendGridRequest(string? SendGridApiKey, string? SenderEmail);
 public record UpdateLlmConfigRequest(string LlmProvider, string? LlmApiKey, string LlmModel);
+public record UpdateTimezoneRequest(string TimeZone);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
 public record Verify2FARequest(string TempToken, string Code);
@@ -237,6 +238,22 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
         await db.SaveChangesAsync(ct);
 
         return Ok(new { message = "Configuracion de SendGrid actualizada." });
+    }
+
+    [HttpPut("tenant/timezone")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateTenantTimezone([FromBody] UpdateTimezoneRequest req, CancellationToken ct)
+    {
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        tenant.TimeZone = req.TimeZone;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Zona horaria actualizada." });
     }
 
     [HttpPut("tenant/llm")]

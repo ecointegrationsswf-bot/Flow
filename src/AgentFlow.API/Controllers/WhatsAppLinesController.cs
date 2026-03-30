@@ -135,6 +135,14 @@ public class WhatsAppLinesController(
         if (line is null)
             return NotFound(new { error = "Linea no encontrada." });
 
+        // Desvincula agentes que referencian esta línea antes de eliminarla
+        var agentsUsingLine = await db.AgentDefinitions
+            .Where(a => a.WhatsAppLineId == id)
+            .ToListAsync(ct);
+
+        foreach (var agent in agentsUsingLine)
+            agent.WhatsAppLineId = null;
+
         db.WhatsAppLines.Remove(line);
         await db.SaveChangesAsync(ct);
 

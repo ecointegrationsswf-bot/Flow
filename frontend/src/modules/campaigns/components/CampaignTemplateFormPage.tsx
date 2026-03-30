@@ -19,6 +19,8 @@ const schema = z.object({
   name: z.string().min(1, 'El nombre es requerido'),
   agentDefinitionId: z.string().min(1, 'Selecciona un agente'),
   autoCloseHours: z.coerce.number().min(1).max(720).default(72),
+  sendFrom: z.string().nullable().default(null),
+  sendUntil: z.string().nullable().default(null),
 })
 type FormData = z.infer<typeof schema>
 
@@ -88,9 +90,12 @@ export function CampaignTemplateFormPage() {
           name: existing.name,
           agentDefinitionId: existing.agentDefinitionId,
           autoCloseHours: existing.autoCloseHours,
+          sendFrom: existing.sendFrom ?? null,
+          sendUntil: existing.sendUntil ?? null,
         }
       : {
           name: '', agentDefinitionId: '', autoCloseHours: 72,
+          sendFrom: null, sendUntil: null,
         },
   })
 
@@ -190,6 +195,13 @@ export function CampaignTemplateFormPage() {
       actionIds: selectedActionIds,
       actionConfigs: Object.keys(actionConfigs).length > 0 ? JSON.stringify(actionConfigs) : null,
       promptTemplateIds: selectedPromptIds,
+      sendFrom: data.sendFrom || null,
+      sendUntil: data.sendUntil || null,
+      systemPrompt: '',
+      maxRetries: 3,
+      retryIntervalHours: 24,
+      inactivityCloseHours: 72,
+      maxTokens: 1024,
     }
     if (isEdit && id) {
       updateMut.mutate({ id, ...payload }, { onSuccess: () => navigate('/campaign-templates') })
@@ -236,7 +248,22 @@ export function CampaignTemplateFormPage() {
           </div>
         </section>
 
-        {/* Seccion 2: Seguimientos automaticos */}
+        {/* Seccion 2: Horario de envio */}
+        <section className="rounded-lg bg-white p-5 shadow-sm">
+          <h2 className="mb-4 text-sm font-semibold text-gray-900">Horario de envio</h2>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Enviar desde</label>
+              <input type="time" {...register('sendFrom')} className={inputClass} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Enviar hasta</label>
+              <input type="time" {...register('sendUntil')} className={inputClass} />
+            </div>
+          </div>
+        </section>
+
+        {/* Seccion 3: Seguimientos automaticos */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-semibold text-gray-900">Seguimientos automaticos</h2>
           <p className="mb-3 text-xs text-gray-500">Define los intervalos de seguimiento en horas despues del primer contacto.</p>

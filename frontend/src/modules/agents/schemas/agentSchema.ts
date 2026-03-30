@@ -4,7 +4,7 @@ export const agentSchema = z.object({
   name: z.string().min(1, 'El nombre es requerido').max(100),
   type: z.enum(['Cobros', 'Reclamos', 'Renovaciones', 'General']),
   isActive: z.boolean().default(true),
-  systemPrompt: z.string().min(10, 'El prompt debe tener al menos 10 caracteres'),
+  systemPrompt: z.string().default(''),
   tone: z.string().nullable().default(null),
   language: z.string().default('es'),
   avatarName: z.string().nullable().default(null),

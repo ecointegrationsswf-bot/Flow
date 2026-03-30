@@ -47,3 +47,12 @@ export function useUpdateTenantLlm() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
   })
 }
+
+export function useUpdateTenantTimezone() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (timeZone: string) =>
+      api.put('/auth/tenant/timezone', { timeZone }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}

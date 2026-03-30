@@ -45,6 +45,16 @@ public class CampaignTemplate
     public bool SendEmail { get; set; }
     public string? EmailAddress { get; set; }
 
+    // ── Prompt y comportamiento del agente para esta campaña ──────────────
+    public string SystemPrompt { get; set; } = string.Empty;
+    public string? SendFrom { get; set; }
+    public string? SendUntil { get; set; }
+    public int MaxRetries { get; set; } = 3;
+    public int RetryIntervalHours { get; set; } = 24;
+    public int InactivityCloseHours { get; set; } = 72;
+    public string? CloseConditionKeyword { get; set; }
+    public int MaxTokens { get; set; } = 1024;
+
     // ── Acciones y Prompts vinculados ─────────────────────
     // IDs de acciones globales (definidas en admin) vinculadas a este maestro
     public List<Guid> ActionIds { get; set; } = [];

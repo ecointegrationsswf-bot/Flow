@@ -3,6 +3,7 @@ using AgentFlow.Application.Modules.Webhooks;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Persistence;
+using AgentFlow.Infrastructure.Storage;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +12,12 @@ namespace AgentFlow.API.Controllers;
 
 [ApiController]
 [Route("api/webhooks")]
-public class WebhookController(IMediator mediator, ITenantContext tenantCtx, AgentFlowDbContext db) : ControllerBase
+public class WebhookController(
+    IMediator mediator,
+    ITenantContext tenantCtx,
+    AgentFlowDbContext db,
+    IBlobStorageService blobStorage,
+    IHttpClientFactory httpClientFactory) : ControllerBase
 {
     /// <summary>
     /// Endpoint normalizado — usado por n8n o cualquier integrador que ya tenga
@@ -56,82 +62,257 @@ public class WebhookController(IMediator mediator, ITenantContext tenantCtx, Age
         [FromQuery] string? token,
         CancellationToken ct)
     {
-        // ── 1. Leer el body como JSON ────────────────────
-        // UltraMsg puede enviar como JSON o form-data, normalizamos
+        // ── 1. Leer el body ──────────────────────────────
         string bodyContent;
         using (var reader = new StreamReader(Request.Body))
-        {
             bodyContent = await reader.ReadToEndAsync(ct);
-        }
+
+        // Registrar en bitácora — siempre, aunque falle el procesamiento
+        var log = new AgentFlow.Domain.Entities.WebhookLog
+        {
+            Provider = "ultramsg",
+            InstanceId = instanceId,
+            RawPayload = bodyContent?.Length > 4000 ? bodyContent[..4000] : bodyContent,
+            ReceivedAt = DateTime.UtcNow,
+            Status = "received"
+        };
 
         if (string.IsNullOrEmpty(bodyContent))
+        {
+            log.Status = "ignored"; log.StatusReason = "empty body";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
             return Ok(new { status = "ignored", reason = "empty body" });
+        }
 
-        // ── 2. Parsear el payload de UltraMsg ────────────
+        // ── 2. Parsear payload ───────────────────────────
+        // UltraMsg envía los datos del mensaje dentro de un objeto "data":
+        // { "data": { "id":"...", "from":"...", "body":"...", ... },
+        //   "instanceId": "instance140984", "token": "..." }
+        //
+        // Algunos entornos envían los datos como application/x-www-form-urlencoded.
+        // En ese caso intentamos extraer el campo "data" del form body.
         UltraMsgWebhookPayload? payload;
+        string? wrapperInstanceId = null;
         try
         {
-            payload = JsonSerializer.Deserialize<UltraMsgWebhookPayload>(bodyContent,
-                new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            var opts = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+
+            // Intentar parsear el bodyContent directamente como JSON
+            string jsonToParse = bodyContent;
+
+            // Si el body parece form-encoded (contiene '=' y no empieza con '{'),
+            // intentar extraer el campo "data" del form body.
+            if (!bodyContent.TrimStart().StartsWith('{') && bodyContent.Contains('='))
+            {
+                // Parsear como form-encoded: data={"id":"...",...}&token=xxx
+                var formParts = System.Web.HttpUtility.ParseQueryString(bodyContent);
+                var dataField  = formParts["data"];
+                var tokenField = formParts["token"];
+                var instField  = formParts["instanceId"] ?? formParts["instance_id"];
+                if (!string.IsNullOrEmpty(dataField))
+                {
+                    jsonToParse = $"{{\"data\":{dataField},\"instanceId\":\"{instField}\",\"token\":\"{tokenField}\"}}";
+                }
+                // Si no hay campo "data", el body entero podría ser la data directamente
+                else
+                {
+                    jsonToParse = bodyContent; // intentar parsear tal cual
+                }
+            }
+
+            var wrapper = JsonSerializer.Deserialize<UltraMsgWebhookWrapper>(jsonToParse, opts);
+
+            if (wrapper?.Data is not null)
+            {
+                // Formato wrapeado: { data: {...}, instanceId: "instance140984" }
+                payload = wrapper.Data;
+                wrapperInstanceId = wrapper.InstanceId;
+            }
+            else
+            {
+                // Fallback: intentar deserializar directamente (algunos webhooks pueden enviarlo sin wrapper)
+                payload = JsonSerializer.Deserialize<UltraMsgWebhookPayload>(jsonToParse, opts);
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            return Ok(new { status = "ignored", reason = "invalid JSON" });
+            log.Status = "error"; log.StatusReason = $"parse error: {ex.Message}";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+            return Ok(new { status = "ignored", reason = "invalid JSON", detail = ex.Message });
         }
 
-        if (payload is null || string.IsNullOrEmpty(payload.Body))
-            return Ok(new { status = "ignored", reason = "no body" });
+        if (payload is null)
+        {
+            log.Status = "ignored"; log.StatusReason = "null payload";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+            return Ok(new { status = "ignored", reason = "null payload" });
+        }
+
+        // Enriquecer bitácora con datos del payload
+        log.FromPhone = payload.From;
+        log.MessageType = payload.Type;
+        log.Body = payload.Body?.Length > 500 ? payload.Body[..500] : payload.Body;
+        log.ExternalMessageId = payload.Id;
 
         // ── 3. Ignorar mensajes salientes ────────────────
-        // UltraMsg envía TODOS los mensajes (entrantes y salientes).
-        // Solo procesamos los entrantes (fromMe = false).
         if (payload.FromMe == true)
+        {
+            log.Status = "ignored"; log.StatusReason = "outbound";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
             return Ok(new { status = "ignored", reason = "outbound message" });
+        }
 
-        // ── 4. Identificar tenant por instanceId ─────────
-        // Buscar la línea WhatsApp cuyo instanceId coincide
-        var normalizedInstance = instanceId?.Trim() ?? payload.InstanceId ?? "";
+        // ── 4. Ignorar tipos no soportados ───────────────
+        var msgType = payload.Type?.ToLower() ?? "chat";
+        var supportedTypes = new[] { "chat", "ptt", "audio", "image", "document" };
+        if (!supportedTypes.Contains(msgType))
+        {
+            log.Status = "ignored"; log.StatusReason = $"unsupported type: {msgType}";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+            return Ok(new { status = "ignored", reason = $"unsupported type: {msgType}" });
+        }
 
-        // Quitar prefijo "instance" si lo tiene, para comparar solo el número
+        // ── 5. Identificar tenant por instanceId ─────────
+        // Prioridad: query param > wrapper instanceId > campo en el payload
+        var normalizedInstance = instanceId?.Trim()
+            ?? wrapperInstanceId?.Trim()
+            ?? payload.InstanceId
+            ?? "";
         var instanceNumber = normalizedInstance
-            .Replace("instance", "", StringComparison.OrdinalIgnoreCase)
-            .Trim();
+            .Replace("instance", "", StringComparison.OrdinalIgnoreCase).Trim();
 
         var line = await db.WhatsAppLines
             .Include(l => l.Tenant)
-            .Where(l => l.TenantId != null && l.IsActive)  // solo líneas con tenant y activas
+            .Where(l => l.TenantId != null && l.IsActive)
             .FirstOrDefaultAsync(l =>
                 l.InstanceId == instanceNumber
                 || l.InstanceId == normalizedInstance
                 || l.InstanceId == $"instance{instanceNumber}", ct);
 
         if (line?.TenantId is null)
-            return Ok(new { status = "ignored", reason = "unknown instanceId" });
+        {
+            log.Status = "ignored"; log.StatusReason = $"unknown instanceId: {normalizedInstance}";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+            return Ok(new { status = "ignored", reason = "unknown instanceId", tried = normalizedInstance });
+        }
 
-        // ── 5. Validar token (seguridad básica) ──────────
+        log.TenantId = line.TenantId;
+
+        // ── 6. Validar token ─────────────────────────────
         if (!string.IsNullOrEmpty(token) && line.ApiToken != token)
         {
-            // Si se envió token pero no coincide, podría ser spam
+            log.Status = "ignored"; log.StatusReason = "invalid token";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
             return Unauthorized(new { error = "Token inválido." });
         }
 
-        // ── 6. Extraer datos del mensaje ─────────────────
-        // UltraMsg envía el remitente como "5076000XXXX@c.us"
+        // ── 7. Anti-duplicados por ID de mensaje ─────────
+        if (!string.IsNullOrEmpty(payload.Id))
+        {
+            var alreadyProcessed = await db.Messages
+                .AnyAsync(m => m.ExternalMessageId == payload.Id, ct);
+            if (alreadyProcessed)
+            {
+                log.Status = "ignored"; log.StatusReason = "duplicate";
+                db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+                return Ok(new { status = "ignored", reason = "duplicate" });
+            }
+        }
+
+        // ── 8. Extraer remitente ──────────────────────────
         var fromPhone = ExtractPhoneFromJid(payload.From ?? "");
         if (string.IsNullOrEmpty(fromPhone))
+        {
+            log.Status = "ignored"; log.StatusReason = $"invalid sender: {payload.From}";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
             return Ok(new { status = "ignored", reason = "invalid sender" });
+        }
 
-        var clientName = payload.PushName ?? payload.NotifyName;
+        var clientName = payload.Pushname ?? payload.NotifyName;
 
-        // ── 7. Procesar como mensaje entrante ────────────
+        // ── 9. Normalizar contenido según tipo ───────────
+        // Para media (imagen, documento, audio), body contiene la URL del archivo.
+        // Construimos un texto descriptivo para el agente y pasamos la URL como MediaUrl.
+        string messageText;
+        string? mediaUrl = null;
+        string? mediaType = null;
+
+        switch (msgType)
+        {
+            case "image":
+                mediaUrl  = payload.Body;   // UltraMsg pone la URL del archivo en body
+                mediaType = "image";
+                var imgCaption = string.IsNullOrWhiteSpace(payload.Caption) ? "" : $": {payload.Caption}";
+                messageText = $"📷 [Imagen recibida{imgCaption}]";
+                break;
+
+            case "document":
+                mediaUrl  = payload.Body;
+                mediaType = "document";
+                var docName = string.IsNullOrWhiteSpace(payload.Caption) ? "archivo" : payload.Caption;
+                messageText = $"📄 [Documento recibido: {docName}]";
+                break;
+
+            case "ptt":
+            case "audio":
+                mediaUrl  = payload.Body;
+                mediaType = "audio";
+                messageText = "🎤 [Nota de voz recibida] Por favor escribe tu mensaje para que pueda ayudarte.";
+                break;
+
+            default: // chat
+                if (string.IsNullOrEmpty(payload.Body))
+                    return Ok(new { status = "ignored", reason = "empty text message" });
+                messageText = payload.Body;
+                break;
+        }
+
+        // ── 10. Subir media a Azure Blob Storage ─────────
+        // Descarga el archivo desde UltraMsg y lo sube a Azure para persistencia y acceso externo.
+        // Si Azure no está configurado o falla, usa la URL original de UltraMsg como fallback.
+        if (!string.IsNullOrEmpty(mediaUrl))
+        {
+            try
+            {
+                var httpClient = httpClientFactory.CreateClient();
+                var mediaBytes = await httpClient.GetByteArrayAsync(mediaUrl, ct);
+
+                var ext = msgType switch
+                {
+                    "image"    => DetectImageExtension(payload.Mimetype) ,
+                    "document" => DetectDocExtension(payload.Mimetype, payload.Caption),
+                    "audio"    => "ogg",
+                    _          => "bin"
+                };
+                var contentType = payload.Mimetype ?? (msgType == "image" ? "image/jpeg" : "application/octet-stream");
+                var blobName    = $"conversations/{line.TenantId.Value}/{DateTime.UtcNow:yyyyMMdd}/{payload.Id ?? Guid.NewGuid().ToString()}.{ext}";
+
+                var azureUrl = await blobStorage.UploadWhatsAppMediaAsync(blobName, mediaBytes, contentType, ct);
+                mediaUrl = azureUrl;  // reemplazar URL temporal de UltraMsg por URL permanente de Azure
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[Azure] No se pudo subir media a Blob Storage: {ex.Message}. Usando URL original.");
+            }
+        }
+
+        // ── 11. Procesar mensaje ──────────────────────────
         var result = await mediator.Send(new ProcessIncomingMessageCommand(
             line.TenantId.Value,
             fromPhone,
-            payload.Body,
+            messageText,
             ChannelType.WhatsApp,
             clientName,
-            payload.Id
+            payload.Id,
+            mediaUrl,
+            mediaType
         ), ct);
+
+        // Actualizar bitácora como procesado exitosamente
+        log.Status = "processed";
+        log.StatusReason = result.AgentType;
+        db.WebhookLogs.Add(log);
+        await db.SaveChangesAsync(ct);
 
         return Ok(new
         {
@@ -139,6 +320,38 @@ public class WebhookController(IMediator mediator, ITenantContext tenantCtx, Age
             conversationId = result.ConversationId,
             agentType = result.AgentType
         });
+    }
+
+    /// <summary>
+    /// Endpoint de diagnóstico — muestra los últimos 50 registros de la bitácora del webhook.
+    /// Solo para uso interno. No requiere autenticación para facilitar el diagnóstico.
+    /// </summary>
+    [HttpGet("ultramsg/logs")]
+    public async Task<IActionResult> WebhookLogs(
+        [FromQuery] int take = 50,
+        CancellationToken ct = default)
+    {
+        var logs = await db.WebhookLogs
+            .OrderByDescending(l => l.ReceivedAt)
+            .Take(Math.Min(take, 200))
+            .Select(l => new
+            {
+                l.Id,
+                l.ReceivedAt,
+                l.Provider,
+                l.InstanceId,
+                l.TenantId,
+                l.FromPhone,
+                l.MessageType,
+                l.Body,
+                l.ExternalMessageId,
+                l.Status,
+                l.StatusReason,
+                RawPayload = l.RawPayload  // incluir el payload completo para diagnóstico
+            })
+            .ToListAsync(ct);
+
+        return Ok(new { count = logs.Count, logs });
     }
 
     /// <summary>
@@ -162,12 +375,27 @@ public class WebhookController(IMediator mediator, ITenantContext tenantCtx, Age
     /// </summary>
     private static string ExtractPhoneFromJid(string jid)
     {
-        // Formato: "5076000XXXX@c.us" o "5076000XXXX@s.whatsapp.net"
         var atIndex = jid.IndexOf('@');
         if (atIndex <= 0) return "";
-
         var digits = jid[..atIndex];
         return digits.StartsWith('+') ? digits : $"+{digits}";
+    }
+
+    private static string DetectImageExtension(string? mimeType) => mimeType switch
+    {
+        "image/png"  => "png",
+        "image/gif"  => "gif",
+        "image/webp" => "webp",
+        _            => "jpg"
+    };
+
+    private static string DetectDocExtension(string? mimeType, string? caption)
+    {
+        if (mimeType == "application/pdf") return "pdf";
+        if (caption?.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) == true) return "pdf";
+        if (mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
+        if (mimeType == "application/msword") return "doc";
+        return "bin";
     }
 }
 
@@ -182,27 +410,37 @@ public record IncomingMessageDto(
 );
 
 /// <summary>
-/// Payload que UltraMsg envía al webhook.
-/// Documentación: https://docs.ultramsg.com/api/webhooks
-///
-/// UltraMsg envía campos como:
-/// - id: ID del mensaje en WhatsApp
-/// - from: remitente ("5076000XXXX@c.us")
-/// - to: destinatario
-/// - body: texto del mensaje
-/// - fromMe: true si lo envió la instancia (saliente), false si lo recibió (entrante)
-/// - pushName: nombre que el contacto tiene en WhatsApp
-/// - type: "chat", "image", "video", etc.
+/// Wrapper externo que UltraMsg envía al webhook.
+/// Formato: { "data": { ...mensaje... }, "instanceId": "instance140984", "token": "...", "event_type": "..." }
 /// </summary>
-public record UltraMsgWebhookPayload
+public class UltraMsgWebhookWrapper
 {
-    public string? Id { get; init; }
-    public string? From { get; init; }
-    public string? To { get; init; }
-    public string? Body { get; init; }
-    public bool? FromMe { get; init; }
-    public string? PushName { get; init; }
-    public string? NotifyName { get; init; }
-    public string? Type { get; init; }
-    public string? InstanceId { get; init; }
+    public UltraMsgWebhookPayload? Data { get; set; }
+    public string? InstanceId { get; set; }
+    public string? Token { get; set; }
+    public string? EventType { get; set; }
+}
+
+/// <summary>
+/// Payload del mensaje dentro del objeto "data" de UltraMsg.
+/// Documentación: https://docs.ultramsg.com/api/webhooks
+/// </summary>
+public class UltraMsgWebhookPayload
+{
+    public string? Id { get; set; }
+    public string? From { get; set; }
+    public string? To { get; set; }
+    public string? Body { get; set; }          // texto o URL del media
+    public bool? FromMe { get; set; }
+
+    // UltraMsg envía "pushname" (lowercase). Solo un campo para evitar colisión con PropertyNameCaseInsensitive.
+    [System.Text.Json.Serialization.JsonPropertyName("pushname")]
+    public string? Pushname { get; set; }
+
+    public string? NotifyName { get; set; }
+    public string? Type { get; set; }          // chat | ptt | audio | image | document | video
+    public string? InstanceId { get; set; }
+    public string? Caption { get; set; }       // texto adjunto a imagen/documento
+    public string? Mimetype { get; set; }      // ej: "image/jpeg", "application/pdf"
+    public string? Media { get; set; }         // URL del archivo en algunos formatos de UltraMsg
 }
