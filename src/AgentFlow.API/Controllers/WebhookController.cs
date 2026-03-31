@@ -17,7 +17,8 @@ public class WebhookController(
     ITenantContext tenantCtx,
     AgentFlowDbContext db,
     IBlobStorageService blobStorage,
-    IHttpClientFactory httpClientFactory) : ControllerBase
+    IHttpClientFactory httpClientFactory,
+    AgentFlow.Domain.Interfaces.ITranscriptionService transcriptionService) : ControllerBase
 {
     /// <summary>
     /// Endpoint normalizado — usado por n8n o cualquier integrador que ya tenga
@@ -240,14 +241,15 @@ public class WebhookController(
         switch (msgType)
         {
             case "image":
-                mediaUrl  = payload.Body;   // UltraMsg pone la URL del archivo en body
+                // UltraMsg puede enviar la URL en "body" o en "media"
+                mediaUrl  = string.IsNullOrEmpty(payload.Body) ? payload.Media : payload.Body;
                 mediaType = "image";
                 var imgCaption = string.IsNullOrWhiteSpace(payload.Caption) ? "" : $": {payload.Caption}";
                 messageText = $"📷 [Imagen recibida{imgCaption}]";
                 break;
 
             case "document":
-                mediaUrl  = payload.Body;
+                mediaUrl  = string.IsNullOrEmpty(payload.Body) ? payload.Media : payload.Body;
                 mediaType = "document";
                 var docName = string.IsNullOrWhiteSpace(payload.Caption) ? "archivo" : payload.Caption;
                 messageText = $"📄 [Documento recibido: {docName}]";
@@ -255,9 +257,10 @@ public class WebhookController(
 
             case "ptt":
             case "audio":
-                mediaUrl  = payload.Body;
+                // UltraMsg envía la URL del audio en el campo "media", NO en "body"
+                mediaUrl  = payload.Media ?? payload.Body;
                 mediaType = "audio";
-                messageText = "🎤 [Nota de voz recibida] Por favor escribe tu mensaje para que pueda ayudarte.";
+                messageText = "🎤 [Nota de voz — transcripción en proceso]";
                 break;
 
             default: // chat
@@ -267,32 +270,74 @@ public class WebhookController(
                 break;
         }
 
-        // ── 10. Subir media a Azure Blob Storage ─────────
-        // Descarga el archivo desde UltraMsg y lo sube a Azure para persistencia y acceso externo.
-        // Si Azure no está configurado o falla, usa la URL original de UltraMsg como fallback.
+        // ── 10. Descargar media y subir a Azure ──────────
+        byte[]? capturedAudioBytes = null;
+        bool audioDownloadFailed = false;
         if (!string.IsNullOrEmpty(mediaUrl))
         {
+            // Paso A: descargar el archivo (separado del upload a Azure)
             try
             {
                 var httpClient = httpClientFactory.CreateClient();
+                httpClient.Timeout = TimeSpan.FromSeconds(30);
                 var mediaBytes = await httpClient.GetByteArrayAsync(mediaUrl, ct);
 
-                var ext = msgType switch
-                {
-                    "image"    => DetectImageExtension(payload.Mimetype) ,
-                    "document" => DetectDocExtension(payload.Mimetype, payload.Caption),
-                    "audio"    => "ogg",
-                    _          => "bin"
-                };
-                var contentType = payload.Mimetype ?? (msgType == "image" ? "image/jpeg" : "application/octet-stream");
-                var blobName    = $"conversations/{line.TenantId.Value}/{DateTime.UtcNow:yyyyMMdd}/{payload.Id ?? Guid.NewGuid().ToString()}.{ext}";
+                if (msgType is "ptt" or "audio")
+                    capturedAudioBytes = mediaBytes;
 
-                var azureUrl = await blobStorage.UploadWhatsAppMediaAsync(blobName, mediaBytes, contentType, ct);
-                mediaUrl = azureUrl;  // reemplazar URL temporal de UltraMsg por URL permanente de Azure
+                // Paso B: subir a Azure Blob (si falla, se usa la URL original de UltraMsg)
+                try
+                {
+                    var ext = msgType switch
+                    {
+                        "image"    => DetectImageExtension(payload.Mimetype),
+                        "document" => DetectDocExtension(payload.Mimetype, payload.Caption),
+                        "audio"    => "ogg",
+                        "ptt"      => "ogg",
+                        _          => "bin"
+                    };
+                    var contentType = payload.Mimetype ?? (msgType == "image" ? "image/jpeg" : "application/octet-stream");
+                    var blobName    = $"conversations/{line.TenantId.Value}/{DateTime.UtcNow:yyyyMMdd}/{payload.Id ?? Guid.NewGuid().ToString()}.{ext}";
+                    var azureUrl    = await blobStorage.UploadWhatsAppMediaAsync(blobName, mediaBytes, contentType, ct);
+                    mediaUrl = azureUrl;
+                }
+                catch (Exception azEx)
+                {
+                    Console.WriteLine($"[Azure] No se pudo subir media: {azEx.Message}. Usando URL original.");
+                }
             }
-            catch (Exception ex)
+            catch (Exception dlEx)
             {
-                Console.WriteLine($"[Azure] No se pudo subir media a Blob Storage: {ex.Message}. Usando URL original.");
+                Console.WriteLine($"[Media] No se pudo descargar el archivo desde UltraMsg: {dlEx.Message}");
+                if (msgType is "ptt" or "audio")
+                    audioDownloadFailed = true;
+            }
+        }
+
+        // ── 10b. Transcribir nota de voz con Whisper ─────
+        if (msgType is "ptt" or "audio")
+        {
+            if (audioDownloadFailed || capturedAudioBytes is null)
+            {
+                // No se pudo obtener el audio — pedir al cliente que escriba
+                messageText = "🎤 [Nota de voz recibida] No pude procesar el audio. ¿Puedes escribir tu mensaje?";
+                Console.WriteLine($"[Whisper] Audio no disponible para {fromPhone} — se usó fallback.");
+            }
+            else
+            {
+                var audioFileName = $"{payload.Id ?? Guid.NewGuid().ToString()}.ogg";
+                var transcription = await transcriptionService.TranscribeAsync(capturedAudioBytes, audioFileName, ct);
+                if (!string.IsNullOrWhiteSpace(transcription))
+                {
+                    messageText = transcription;
+                    Console.WriteLine($"[Whisper] Audio transcripto ({capturedAudioBytes.Length / 1024}KB): \"{transcription}\"");
+                }
+                else
+                {
+                    // Whisper no disponible o falló — pedir al cliente que escriba
+                    messageText = "🎤 [Nota de voz recibida] No pude transcribir el audio. ¿Puedes escribir tu mensaje?";
+                    Console.WriteLine($"[Whisper] Transcripción fallida para {fromPhone} — se usó fallback.");
+                }
             }
         }
 

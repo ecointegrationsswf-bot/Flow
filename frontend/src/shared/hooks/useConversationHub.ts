@@ -32,6 +32,7 @@ export function useConversationHub(
     const hub = new signalR.HubConnectionBuilder()
       .withUrl(hubUrl, {
         accessTokenFactory: () => localStorage.getItem('token') ?? '',
+        transport: signalR.HttpTransportType.LongPolling,
       })
       .withAutomaticReconnect()
       .build()
@@ -42,7 +43,12 @@ export function useConversationHub(
     hub.on('ConversationUpdated', onMessage)
     hub.on('ConversationClosed', onEscalation)
 
-    hub.start().then(() => hub.invoke('JoinTenantGroup', tenantId))
+    hub.start()
+      .then(() => {
+        console.log('[SignalR] Conectado, uniendo grupo tenant:', tenantId)
+        hub.invoke('JoinTenantGroup', tenantId)
+      })
+      .catch((err) => console.error('[SignalR] Error al conectar:', err))
 
     hubRef.current = hub
     return () => { hub.stop() }

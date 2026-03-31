@@ -83,6 +83,15 @@ public class ProcessIncomingMessageHandler(
         }
 
         // ── 3. PERSISTIR MENSAJE ENTRANTE ────────────────
+        // Capturar historial ANTES de agregar el nuevo mensaje para evitar duplicarlo
+        // en el contexto del LLM (EF Core añade el nuevo mensaje a conversation.Messages
+        // en cuanto se llama AddMessageAsync, lo que causaría que aparezca dos veces)
+        var recentHistorySnapshot = conversation.Messages?
+            .OrderByDescending(m => m.SentAt)
+            .Take(10)
+            .OrderBy(m => m.SentAt)
+            .ToList() ?? [];
+
         // Si hay media, incluir la URL en el contenido para que quede registrado
         var inboundContent = cmd.Message;
         if (!string.IsNullOrEmpty(cmd.MediaUrl))
@@ -99,6 +108,8 @@ public class ProcessIncomingMessageHandler(
             IsFromAgent = false,
             SentAt = DateTime.UtcNow
         };
+        // Actualizar LastActivityAt ANTES de guardar para que la lista se actualice inmediatamente
+        conversation.LastActivityAt = DateTime.UtcNow;
         await conversations.AddMessageAsync(inbound, ct);
         await conversations.SaveChangesAsync(ct);
 
@@ -143,12 +154,9 @@ public class ProcessIncomingMessageHandler(
                     conversation.ActiveAgentId = agent.Id;
                 }
 
-                // Cargar MEMORIA: últimos 10 mensajes de la conversación
-                var recentHistory = conversation.Messages?
-                    .OrderByDescending(m => m.SentAt)
-                    .Take(10)
-                    .OrderBy(m => m.SentAt)  // reordenar cronológicamente
-                    .ToList() ?? [];
+                // Usar el historial capturado ANTES de agregar el mensaje actual,
+                // para evitar que el mismo mensaje aparezca dos veces en el contexto del LLM
+                var recentHistory = recentHistorySnapshot;
 
                 // Obtener API key del tenant para el LLM
                 var tenant = await agents.GetTenantByIdAsync(cmd.TenantId, ct);
@@ -176,7 +184,9 @@ public class ProcessIncomingMessageHandler(
                         IncomingMessage: cmd.Message,
                         RecentHistory: recentHistory,
                         ClientContext: clientContext,
-                        TenantLlmApiKey: tenantApiKey
+                        TenantLlmApiKey: tenantApiKey,
+                        MediaUrl: cmd.MediaType == "image" ? cmd.MediaUrl : null,
+                        MediaType: cmd.MediaType
                     ), ct);
 
                     replyText = agentResponse.ReplyText;
@@ -190,6 +200,8 @@ public class ProcessIncomingMessageHandler(
                 }
 
                 // ── 5. PERSISTIR RESPUESTA DEL AGENTE ────
+                // Guardar en BD INMEDIATAMENTE para que aparezca en el monitor
+                // sin esperar la confirmación de WhatsApp
                 var outbound = new Message
                 {
                     Id = Guid.NewGuid(),
@@ -205,6 +217,23 @@ public class ProcessIncomingMessageHandler(
                     SentAt = DateTime.UtcNow
                 };
                 await conversations.AddMessageAsync(outbound, ct);
+                conversation.LastActivityAt = DateTime.UtcNow;
+                await conversations.SaveChangesAsync(ct);  // ← guardar ya, sin esperar WhatsApp
+
+                // Notificar al monitor la respuesta del agente (antes de enviar por WhatsApp)
+                try
+                {
+                    await notifier.NotifyMessageAsync(cmd.TenantId.ToString(), new
+                    {
+                        Type = "outbound",
+                        ConversationId = conversation.Id,
+                        Body = replyText,
+                        AgentName = agent.AvatarName ?? agent.Name,
+                        Intent = agentResponse.DetectedIntent,
+                        Timestamp = DateTime.UtcNow
+                    });
+                }
+                catch { /* SignalR no disponible */ }
 
                 // ── 6. ENVIAR POR WHATSAPP ───────────────
                 try
@@ -226,21 +255,6 @@ public class ProcessIncomingMessageHandler(
                     Console.WriteLine($"[WhatsApp] Error enviando respuesta: {ex.Message}");
                     outbound.Status = MessageStatus.Failed;
                 }
-
-                // Notificar al monitor la respuesta del agente
-                try
-                {
-                    await notifier.NotifyMessageAsync(cmd.TenantId.ToString(), new
-                    {
-                        Type = "outbound",
-                        ConversationId = conversation.Id,
-                        Body = replyText,
-                        AgentName = agent.AvatarName ?? agent.Name,
-                        Intent = agentResponse.DetectedIntent,
-                        Timestamp = DateTime.UtcNow
-                    });
-                }
-                catch { /* SignalR no disponible */ }
 
                 // Si el agente detecta que debe escalar a humano
                 if (agentResponse.ShouldEscalate)

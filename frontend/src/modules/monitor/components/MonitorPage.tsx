@@ -17,8 +17,14 @@ export function MonitorPage() {
 
   useConversationHub(
     tenantId,
-    () => queryClient.invalidateQueries({ queryKey: ['conversations'] }),
-    () => queryClient.invalidateQueries({ queryKey: ['conversations'] }),
+    (msg) => {
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['conversations', msg.conversationId] })
+    },
+    (convId) => {
+      queryClient.invalidateQueries({ queryKey: ['conversations'] })
+      queryClient.invalidateQueries({ queryKey: ['conversations', convId] })
+    },
   )
 
   if (isLoading) return <LoadingSpinner />

@@ -17,7 +17,9 @@ public record AgentRunRequest(
     string IncomingMessage,
     List<Message> RecentHistory,
     Dictionary<string, string>? ClientContext = null,   // saldo, póliza, etc.
-    string? TenantLlmApiKey = null                      // API key del tenant para el LLM
+    string? TenantLlmApiKey = null,                     // API key del tenant para el LLM
+    string? MediaUrl = null,                            // URL de imagen para visión IA
+    string? MediaType = null                            // "image" | "document" | "audio"
 );
 
 public record AgentResponse(

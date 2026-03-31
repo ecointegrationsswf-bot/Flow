@@ -57,6 +57,13 @@ builder.Services.AddSingleton(new AgentFlow.Infrastructure.AI.AnthropicSettings(
 builder.Services.AddScoped<IAgentRunner, AnthropicAgentRunner>();
 Console.WriteLine(hasGlobalKey ? "Anthropic configurado con key global." : "Anthropic: usando API key por tenant.");
 
+// ── Transcripción de audio (OpenAI Whisper) ─────────────
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ITranscriptionService,
+    AgentFlow.Infrastructure.AI.WhisperTranscriptionService>();
+Console.WriteLine(!string.IsNullOrEmpty(cfg["OpenAI:ApiKey"]) && cfg["OpenAI:ApiKey"] != "YOUR_OPENAI_API_KEY"
+    ? "OpenAI Whisper configurado — transcripción de notas de voz activa."
+    : "OpenAI Whisper no configurado — notas de voz sin transcripción.");
+
 // ── Email (SendGrid) ────────────────────────────────────
 builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService, AgentFlow.Infrastructure.Email.SendGridEmailService>();
 
@@ -116,6 +123,15 @@ builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer
         };
         o.Events = new Microsoft.AspNetCore.Authentication.JwtBearer.JwtBearerEvents
         {
+            // Necesario para SignalR: el token viaja como ?access_token= en LongPolling/SSE
+            OnMessageReceived = ctx =>
+            {
+                var token = ctx.Request.Query["access_token"];
+                var path = ctx.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(token) && path.StartsWithSegments("/hubs"))
+                    ctx.Token = token;
+                return Task.CompletedTask;
+            },
             OnAuthenticationFailed = ctx =>
             {
                 if (isDev) Console.WriteLine($"JWT AUTH FAILED: {ctx.Exception.GetType().Name}");

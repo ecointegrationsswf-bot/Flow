@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { UserCheck, PauseCircle, PlayCircle, Send, Paperclip, Smile, X, Loader2, MoreVertical } from 'lucide-react'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { MessageBubble } from './MessageBubble'
-import { useConversationDetail, useTakeConversation, useSendReply, useSendFile } from '@/shared/hooks/useMonitor'
+import { useConversationDetail, useTakeConversation, useSendReply, useSendFile, useReactivateAgent } from '@/shared/hooks/useMonitor'
 import { format } from 'date-fns'
 
 interface ConversationDetailPanelProps {
@@ -22,6 +22,7 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
   const takeMutation = useTakeConversation()
   const replyMutation = useSendReply()
   const fileMutation = useSendFile()
+  const reactivateMutation = useReactivateAgent()
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -104,20 +105,19 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
           </span>
 
           {!conversation.isHumanHandled ? (
-            <>
-              <button
-                onClick={() => takeMutation.mutate(conversationId)}
-                disabled={takeMutation.isPending}
-                className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
-              >
-                <UserCheck className="h-3.5 w-3.5" /> Tomar
-              </button>
-              <button className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600 transition-colors">
-                <PauseCircle className="h-3.5 w-3.5" /> Pausar IA
-              </button>
-            </>
+            <button
+              onClick={() => takeMutation.mutate(conversationId)}
+              disabled={takeMutation.isPending}
+              className="flex items-center gap-1.5 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600 transition-colors disabled:opacity-50"
+            >
+              <PauseCircle className="h-3.5 w-3.5" /> Pausar IA
+            </button>
           ) : (
-            <button className="flex items-center gap-1.5 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600 transition-colors">
+            <button
+              onClick={() => reactivateMutation.mutate(conversationId)}
+              disabled={reactivateMutation.isPending}
+              className="flex items-center gap-1.5 rounded-lg bg-green-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-600 transition-colors disabled:opacity-50"
+            >
               <PlayCircle className="h-3.5 w-3.5" /> Reactivar IA
             </button>
           )}
@@ -181,7 +181,7 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
           <Paperclip className="h-5 w-5" />
         </button>
 
-        <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelect} />
+        <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelect} accept="image/*,.pdf" />
 
         <div className="flex-1">
           <textarea

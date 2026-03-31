@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '@/shared/api/client'
 import type { ConversationSummary, Conversation } from '@/shared/types'
 
@@ -6,7 +6,7 @@ export function useConversations() {
   return useQuery({
     queryKey: ['conversations'],
     queryFn: () => api.get<ConversationSummary[]>('/monitor/conversations').then((r) => r.data),
-    refetchInterval: 15_000,
+    refetchInterval: 1000,
   })
 }
 
@@ -15,6 +15,10 @@ export function useConversationDetail(id: string | null) {
     queryKey: ['conversations', id],
     queryFn: () => api.get<Conversation>(`/monitor/conversations/${id}`).then((r) => r.data),
     enabled: !!id,
+    staleTime: 0,
+    refetchInterval: 100,
+    refetchIntervalInBackground: true,
+    placeholderData: keepPreviousData,
   })
 }
 
@@ -22,7 +26,12 @@ export function useTakeConversation() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => api.post(`/monitor/conversations/${id}/take`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['conversations'] }),
+    onSuccess: (response: any, id) => {
+      const conv = response?.data?.conversation
+      if (conv) qc.setQueryData(['conversations', id], conv)
+      qc.invalidateQueries({ queryKey: ['conversations'] })
+      qc.invalidateQueries({ queryKey: ['conversations', id] })
+    },
   })
 }
 
@@ -31,7 +40,38 @@ export function useSendReply() {
   return useMutation({
     mutationFn: ({ id, message }: { id: string; message: string }) =>
       api.post(`/monitor/conversations/${id}/reply`, { message }),
-    onSuccess: (_, { id }) => qc.invalidateQueries({ queryKey: ['conversations', id] }),
+
+    onSuccess: (response: any, { id }) => {
+      const conv = response?.data?.conversation
+      if (conv) {
+        // Actualizar cache directamente con la conversación fresca del servidor
+        qc.setQueryData(['conversations', id], conv)
+      }
+      qc.invalidateQueries({ queryKey: ['conversations'] })
+    },
+
+    onError: (err: any) => {
+      const detail = err?.response?.data?.error ?? err?.message ?? 'Error desconocido'
+      alert(`Error al enviar: ${detail}`)
+    },
+
+    onSettled: (_, __, { id }) => {
+      // Forzar refetch del detalle para sincronizar
+      qc.invalidateQueries({ queryKey: ['conversations', id] })
+    },
+  })
+}
+
+export function useReactivateAgent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.post(`/monitor/conversations/${id}/reactivate`),
+    onSuccess: (response: any, id) => {
+      const conv = response?.data?.conversation
+      if (conv) qc.setQueryData(['conversations', id], conv)
+      qc.invalidateQueries({ queryKey: ['conversations'] })
+      qc.invalidateQueries({ queryKey: ['conversations', id] })
+    },
   })
 }
 
@@ -41,10 +81,17 @@ export function useSendFile() {
     mutationFn: ({ id, file }: { id: string; file: File }) => {
       const formData = new FormData()
       formData.append('file', file)
-      return api.post(`/monitor/conversations/${id}/file`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
-      })
+      // No establecer Content-Type manualmente — Axios lo setea con el boundary correcto
+      return api.post(`/monitor/conversations/${id}/file`, formData)
     },
-    onSuccess: (_, { id }) => qc.invalidateQueries({ queryKey: ['conversations', id] }),
+    onSuccess: (response: any, { id }) => {
+      const conv = response?.data?.conversation
+      if (conv) qc.setQueryData(['conversations', id], conv)
+      qc.invalidateQueries({ queryKey: ['conversations', id] })
+    },
+    onError: (err: any) => {
+      const detail = err?.response?.data?.error ?? err?.message ?? 'Error desconocido'
+      alert(`Error al enviar archivo: ${detail}`)
+    },
   })
 }

@@ -24,7 +24,9 @@ public record MessageDetail(
     bool IsFromAgent,
     string Direction,
     DateTime SentAt,
-    string? ExternalMessageId
+    string? ExternalMessageId,
+    string? AgentName,
+    string? DetectedIntent
 );
 
 public class GetConversationDetailHandler(IConversationRepository repo)
@@ -56,7 +58,9 @@ public class GetConversationDetailHandler(IConversationRepository repo)
                     m.IsFromAgent,
                     m.Direction.ToString(),
                     m.SentAt,
-                    m.ExternalMessageId
+                    m.ExternalMessageId,
+                    m.AgentName,
+                    m.DetectedIntent
                 ))
         );
     }

@@ -6,6 +6,7 @@ interface Props {
 
 interface State {
   hasError: boolean
+  errorMessage?: string
 }
 
 export class ErrorBoundary extends Component<Props, State> {
@@ -14,8 +15,8 @@ export class ErrorBoundary extends Component<Props, State> {
     this.state = { hasError: false }
   }
 
-  static getDerivedStateFromError(): State {
-    return { hasError: true }
+  static getDerivedStateFromError(error: Error): State {
+    return { hasError: true, errorMessage: error.message }
   }
 
   componentDidCatch(error: Error, info: React.ErrorInfo) {
@@ -26,17 +27,17 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.state.hasError) {
       return (
         <div className="flex min-h-screen items-center justify-center bg-gray-50">
-          <div className="text-center">
-            <h2 className="text-lg font-semibold text-gray-900">Algo salio mal</h2>
+          <div className="text-center max-w-md px-4">
+            <h2 className="text-lg font-semibold text-gray-900">Algo salió mal</h2>
             <p className="mt-2 text-sm text-gray-500">Ha ocurrido un error inesperado.</p>
+            {this.state.errorMessage && (
+              <p className="mt-1 text-xs text-red-500 font-mono break-all">{this.state.errorMessage}</p>
+            )}
             <button
-              onClick={() => {
-                this.setState({ hasError: false })
-                window.location.href = '/'
-              }}
+              onClick={() => this.setState({ hasError: false, errorMessage: undefined })}
               className="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
-              Volver al inicio
+              Reintentar
             </button>
           </div>
         </div>
