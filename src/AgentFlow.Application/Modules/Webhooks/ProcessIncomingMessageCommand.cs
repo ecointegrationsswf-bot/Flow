@@ -63,6 +63,18 @@ public class ProcessIncomingMessageHandler(
         if (dispatch.IsExistingSession && dispatch.ExistingConversationId.HasValue)
         {
             conversation = (await conversations.GetByIdAsync(dispatch.ExistingConversationId.Value, ct))!;
+
+            // Si la conversación estaba cerrada o sin respuesta, reabrirla
+            // para mantener un único hilo por contacto (sin duplicados en el monitor)
+            if (conversation.Status == ConversationStatus.Closed ||
+                conversation.Status == ConversationStatus.Unresponsive)
+            {
+                conversation.Status = ConversationStatus.Active;
+                conversation.IsHumanHandled = false;
+                conversation.LastActivityAt = DateTime.UtcNow;
+                if (cmd.ClientName is not null)
+                    conversation.ClientName = cmd.ClientName;
+            }
         }
         else
         {
@@ -185,7 +197,9 @@ public class ProcessIncomingMessageHandler(
                         RecentHistory: recentHistory,
                         ClientContext: clientContext,
                         TenantLlmApiKey: tenantApiKey,
-                        MediaUrl: cmd.MediaType == "image" ? cmd.MediaUrl : null,
+                        // Pasar MediaUrl para imágenes Y documentos PDF
+                        MediaUrl: (cmd.MediaType == "image" || cmd.MediaType == "document")
+                            ? cmd.MediaUrl : null,
                         MediaType: cmd.MediaType
                     ), ct);
 

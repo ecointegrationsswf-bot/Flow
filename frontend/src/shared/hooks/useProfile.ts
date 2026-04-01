@@ -33,14 +33,17 @@ export function useUploadAvatar() {
   return useMutation({
     mutationFn: (file: File) => {
       const formData = new FormData()
-      formData.append('file', file)
+      formData.append('photo', file)
       return api
-        .post<{ avatarUrl: string }>('/profile/avatar', formData, {
-          headers: { 'Content-Type': 'multipart/form-data' },
-        })
+        .post<{ avatarUrl: string }>('/profile/avatar', formData)
         .then((r) => r.data)
     },
-    onSuccess: () => {
+    onSuccess: (data) => {
+      // Actualizar el cache directamente con la nueva data URL
+      // para que el avatar aparezca de inmediato sin esperar el refetch
+      qc.setQueryData<Profile>(['profile'], (prev) =>
+        prev ? { ...prev, avatarUrl: data.avatarUrl } : prev
+      )
       qc.invalidateQueries({ queryKey: ['profile'] })
     },
   })

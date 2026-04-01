@@ -84,44 +84,38 @@ public class ContextDispatcher(
             );
         }
 
-        // ── Paso 3: Conversación abierta en BD ───────────
-        // Buscar conversaciones no cerradas del mismo teléfono en el tenant.
-        // Si existe una, la retomamos con el mismo agente.
-        var openConversation = await db.Conversations
+        // ── Paso 3: Conversación existente en BD (abierta O cerrada) ───────────
+        // Reutilizamos SIEMPRE la conversación más reciente del contacto.
+        // Si estaba cerrada, el handler la reabrirá — así un contacto nunca
+        // tiene más de una conversación visible en el monitor.
+        var existingConversation = await db.Conversations
             .Where(c =>
                 c.TenantId == request.TenantId
-                && c.ClientPhone == request.FromPhone
-                && c.Status != ConversationStatus.Closed)
-            .OrderByDescending(c => c.LastActivityAt)  // la más reciente
+                && c.ClientPhone == request.FromPhone)
+            .OrderByDescending(c => c.LastActivityAt)
             .FirstOrDefaultAsync(ct);
 
-        if (openConversation is not null)
+        if (existingConversation is not null)
         {
-            // Determinar el intent basado en el tipo de agente activo
             var intent = "cobros"; // default
-            if (openConversation.ActiveAgentId.HasValue)
+            if (existingConversation.ActiveAgentId.HasValue)
             {
                 var agent = await db.Set<Domain.Entities.AgentDefinition>()
-                    .FirstOrDefaultAsync(a => a.Id == openConversation.ActiveAgentId, ct);
+                    .FirstOrDefaultAsync(a => a.Id == existingConversation.ActiveAgentId, ct);
                 if (agent is not null)
-                {
                     intent = agent.Type.ToString().ToLower();
-                }
             }
 
             return new DispatchResult(
-                ExistingConversationId: openConversation.Id,
-                SelectedAgentId: openConversation.ActiveAgentId,
+                ExistingConversationId: existingConversation.Id,
+                SelectedAgentId: existingConversation.ActiveAgentId,
                 Intent: intent,
                 IsExistingSession: true,
-                IsCampaignContact: openConversation.CampaignId.HasValue
+                IsCampaignContact: existingConversation.CampaignId.HasValue
             );
         }
 
-        // ── Paso 4: Contacto nuevo ───────────────────────
-        // No tiene sesión, no está en campaña, no tiene conversación abierta.
-        // El handler creará una conversación nueva.
-        // TODO (futuro): usar LLM para clasificar la intención del primer mensaje.
+        // ── Paso 4: Contacto nuevo (primera vez que escribe) ─────────────────
         return new DispatchResult(
             ExistingConversationId: null,
             SelectedAgentId: null,

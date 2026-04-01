@@ -286,6 +286,43 @@ if (isDev)
     }
 }
 
+// ── Seed super admin en producción (si no existe ninguno) ───────────
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
+
+    // Expandir columna AvatarUrl a nvarchar(MAX) para almacenar data URLs base64
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID('AppUsers')
+                  AND name = 'AvatarUrl'
+                  AND max_length <> -1
+            )
+            BEGIN
+                ALTER TABLE AppUsers ALTER COLUMN AvatarUrl nvarchar(MAX) NULL;
+            END");
+    }
+    catch { /* Columna ya es MAX o tabla aún no existe */ }
+
+    if (!db.SuperAdmins.Any())
+    {
+        db.SuperAdmins.Add(new AgentFlow.Domain.Entities.SuperAdmin
+        {
+            Id = Guid.Parse("00000000-0000-0000-0000-000000000099"),
+            FullName = "Super Admin",
+            Email = "admin@talkia.app",
+            PasswordHash = AgentFlow.API.Controllers.AuthController.HashPassword("TalkIA2026!"),
+            IsActive = true,
+            MustChangePassword = false,
+        });
+        db.SaveChanges();
+        Console.WriteLine("[Seed] Super Admin creado en producción.");
+    }
+}
+
 // ── Security headers ─────────────────────────────────
 app.Use(async (context, next) =>
 {

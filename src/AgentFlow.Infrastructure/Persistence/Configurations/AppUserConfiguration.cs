@@ -23,7 +23,7 @@ public class AppUserConfiguration : IEntityTypeConfiguration<AppUser>
                     : JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
             ).HasMaxLength(2000)
             .HasDefaultValue(new List<Guid>());
-        b.Property(u => u.AvatarUrl).HasMaxLength(500);
+        b.Property(u => u.AvatarUrl); // nvarchar(MAX) — almacena data URLs base64 o rutas blob
         b.HasOne(u => u.Tenant).WithMany().HasForeignKey(u => u.TenantId).OnDelete(DeleteBehavior.Restrict);
     }
 }

@@ -21,8 +21,11 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
 
     public async Task<IEnumerable<Conversation>> GetActiveByTenantAsync(Guid tenantId, CancellationToken ct = default)
         => await db.Conversations
-            .Where(c => c.TenantId == tenantId && c.Status != ConversationStatus.Closed)
+            .Include(c => c.ActiveAgent)   // necesario para agentType/agentName en el monitor
+            .Include(c => c.Messages)      // necesario para lastMessagePreview
+            .Where(c => c.TenantId == tenantId)
             .OrderByDescending(c => c.LastActivityAt)
+            .Take(200)                     // límite para no sobrecargar el monitor
             .ToListAsync(ct);
 
     public async Task<Conversation> CreateAsync(Conversation conversation, CancellationToken ct = default)

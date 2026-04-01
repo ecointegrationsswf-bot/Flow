@@ -1,6 +1,6 @@
 import axios from 'axios'
 
-export const adminClient = axios.create({ baseURL: '/api' })
+export const adminClient = axios.create({ baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api' })
 
 adminClient.interceptors.request.use(cfg => {
   const token = localStorage.getItem('sa_token')

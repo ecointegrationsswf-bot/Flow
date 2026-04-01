@@ -241,18 +241,31 @@ public class WebhookController(
         switch (msgType)
         {
             case "image":
-                // UltraMsg puede enviar la URL en "body" o en "media"
-                mediaUrl  = string.IsNullOrEmpty(payload.Body) ? payload.Media : payload.Body;
+                // En UltraMsg, la URL del archivo está SIEMPRE en "media".
+                // "body" contiene el caption/texto que el usuario escribió junto a la imagen.
+                mediaUrl  = payload.Media;
                 mediaType = "image";
-                var imgCaption = string.IsNullOrWhiteSpace(payload.Caption) ? "" : $": {payload.Caption}";
-                messageText = $"📷 [Imagen recibida{imgCaption}]";
+                // Usar el texto del caption como messageText para que el agente reciba
+                // la pregunta real del cliente y pueda responder en contexto.
+                var imgCaptionText = !string.IsNullOrWhiteSpace(payload.Body) ? payload.Body
+                    : !string.IsNullOrWhiteSpace(payload.Caption) ? payload.Caption
+                    : "";
+                messageText = string.IsNullOrWhiteSpace(imgCaptionText)
+                    ? "📷 [Imagen]"
+                    : imgCaptionText;
                 break;
 
             case "document":
-                mediaUrl  = string.IsNullOrEmpty(payload.Body) ? payload.Media : payload.Body;
+                // URL del archivo siempre en "media"; caption del usuario en "body" o "caption"
+                mediaUrl  = payload.Media;
                 mediaType = "document";
-                var docName = string.IsNullOrWhiteSpace(payload.Caption) ? "archivo" : payload.Caption;
-                messageText = $"📄 [Documento recibido: {docName}]";
+                var docCaptionText = !string.IsNullOrWhiteSpace(payload.Body) ? payload.Body
+                    : !string.IsNullOrWhiteSpace(payload.Caption) ? payload.Caption
+                    : "";
+                // Usar el caption directo — sin corchetes ni emojis extra
+                messageText = string.IsNullOrWhiteSpace(docCaptionText)
+                    ? "📄 [Documento]"
+                    : docCaptionText;
                 break;
 
             case "ptt":
@@ -291,7 +304,7 @@ public class WebhookController(
                     var ext = msgType switch
                     {
                         "image"    => DetectImageExtension(payload.Mimetype),
-                        "document" => DetectDocExtension(payload.Mimetype, payload.Caption),
+                        "document" => DetectDocExtension(payload.Mimetype, payload.Caption, payload.Filename),
                         "audio"    => "ogg",
                         "ptt"      => "ogg",
                         _          => "bin"
@@ -434,9 +447,10 @@ public class WebhookController(
         _            => "jpg"
     };
 
-    private static string DetectDocExtension(string? mimeType, string? caption)
+    private static string DetectDocExtension(string? mimeType, string? caption, string? filename = null)
     {
         if (mimeType == "application/pdf") return "pdf";
+        if (filename?.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) == true) return "pdf";
         if (caption?.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) == true) return "pdf";
         if (mimeType == "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
         if (mimeType == "application/msword") return "doc";
@@ -488,4 +502,5 @@ public class UltraMsgWebhookPayload
     public string? Caption { get; set; }       // texto adjunto a imagen/documento
     public string? Mimetype { get; set; }      // ej: "image/jpeg", "application/pdf"
     public string? Media { get; set; }         // URL del archivo en algunos formatos de UltraMsg
+    public string? Filename { get; set; }      // nombre original del archivo (ej: "factura.pdf")
 }

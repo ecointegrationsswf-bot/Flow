@@ -45,7 +45,19 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
     return Array.from(names).sort()
   }, [conversations])
 
-  const filtered = conversations.filter((c) => {
+  // Deduplicar: conservar solo la conversación más reciente por número de teléfono
+  const deduplicated = useMemo(() => {
+    const byPhone = new Map<string, typeof conversations[0]>()
+    // Las conversaciones ya vienen ordenadas por lastActivityAt desc desde el backend
+    for (const c of conversations) {
+      if (!byPhone.has(c.clientPhone)) {
+        byPhone.set(c.clientPhone, c)
+      }
+    }
+    return Array.from(byPhone.values())
+  }, [conversations])
+
+  const filtered = deduplicated.filter((c) => {
     if (search) {
       const q = search.toLowerCase()
       const matchName = c.clientName?.toLowerCase().includes(q)
@@ -93,9 +105,11 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
           className="flex-1 rounded-lg border border-gray-200 bg-[#f6f6f6] px-3 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
         >
           <option value="">Todo estado</option>
-          <option value="Active">Activa</option>
-          <option value="WaitingClient">Esperando</option>
-          <option value="EscalatedToHuman">Escalada</option>
+          <option value="Active">🟢 Activa</option>
+          <option value="WaitingClient">🕐 Esperando cliente</option>
+          <option value="EscalatedToHuman">🔴 Escalada a humano</option>
+          <option value="Unresponsive">😶 Sin respuesta</option>
+          <option value="Closed">⚫ Cerrada</option>
         </select>
       </div>
 

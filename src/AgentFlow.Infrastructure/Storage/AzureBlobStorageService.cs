@@ -18,7 +18,9 @@ public class AzureBlobStorageService : IBlobStorageService
 
     public async Task<string> UploadAsync(string path, Stream content, string contentType, CancellationToken ct = default)
     {
-        await _container.CreateIfNotExistsAsync(PublicAccessType.None, cancellationToken: ct);
+        await _container.CreateIfNotExistsAsync(PublicAccessType.Blob, cancellationToken: ct);
+        // Asegurar acceso público aunque el contenedor ya existiera con None
+        await _container.SetAccessPolicyAsync(PublicAccessType.Blob, cancellationToken: ct);
         var blob = _container.GetBlobClient(path);
         await blob.UploadAsync(content, new BlobHttpHeaders { ContentType = contentType }, cancellationToken: ct);
         return blob.Uri.ToString();

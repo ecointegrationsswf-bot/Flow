@@ -119,6 +119,14 @@ export function ProfilePage() {
   const hasAvatar = !!profile.avatarUrl
   const initials = getInitials(profile.fullName)
   const bgGradient = initialsColor(profile.fullName)
+  // Nuevos avatares: data URL base64 (usable directamente como src).
+  // Legado: ruta blob → servir vía proxy de la API.
+  const apiBase = import.meta.env.VITE_API_BASE_URL ?? '/api'
+  const avatarSrc = hasAvatar
+    ? profile.avatarUrl?.startsWith('data:')
+      ? profile.avatarUrl
+      : `${apiBase}/profile/avatar-img/${profile.id}?v=${encodeURIComponent(profile.avatarUrl ?? '')}`
+    : null
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-gray-50">
@@ -140,11 +148,12 @@ export function ProfilePage() {
             {/* Avatar */}
             <div className="relative flex-shrink-0">
               <div className="rounded-full border-4 border-white shadow-xl">
-                {hasAvatar ? (
+                {hasAvatar && avatarSrc ? (
                   <img
-                    src={profile.avatarUrl!}
+                    src={avatarSrc}
                     alt={profile.fullName}
-                    className="h-32 w-32 rounded-full object-cover"
+                    className="h-32 w-32 rounded-full object-cover object-center"
+                    style={{ minWidth: '8rem', minHeight: '8rem' }}
                   />
                 ) : (
                   <div

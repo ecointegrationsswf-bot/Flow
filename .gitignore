@@ -24,3 +24,5 @@ Thumbs.db
 # PowerShell scripts (temp)
 *.ps1
 .mcp.json
+publish/api/
+publish/frontend/

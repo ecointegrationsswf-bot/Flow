@@ -38,7 +38,7 @@ export function AppLayout() {
         {/* Toggle */}
         <button
           onClick={toggleSidebar}
-          className="flex items-center justify-center py-2 text-gray-400 hover:text-gray-600"
+          className="flex items-center justify-end px-4 py-2 text-gray-400 hover:text-gray-600"
         >
           {sidebarCollapsed ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         </button>

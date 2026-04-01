@@ -55,35 +55,107 @@ public class ProfileController(AgentFlowDbContext db, IBlobStorageService blobSt
         var user = await db.AppUsers.FirstOrDefaultAsync(u => u.Id == userId, ct);
         if (user is null) return NotFound();
 
-        if (photo.Length > 5 * 1024 * 1024)
-            return BadRequest(new { error = "La foto no puede superar 5 MB." });
+        // Límite de 3 MB para avatares (base64 lo aumenta un 33%)
+        if (photo.Length > 3 * 1024 * 1024)
+            return BadRequest(new { error = "La foto no puede superar 3 MB." });
 
-        var allowedTypes = new[] { "image/jpeg", "image/png", "image/webp" };
-        if (!allowedTypes.Contains(photo.ContentType.ToLower()))
-            return BadRequest(new { error = "Formato no soportado. Use JPG, PNG o WebP." });
-
-        var ext = photo.ContentType.ToLower() switch
+        // Detectar tipo real por los primeros bytes (magic bytes)
+        string detectedMime;
+        byte[] fileBytes;
+        using (var stream = photo.OpenReadStream())
         {
-            "image/png" => ".png",
-            "image/webp" => ".webp",
-            _ => ".jpg"
-        };
-
-        var blobPath = $"profiles/{user.TenantId}/{user.Id}{ext}";
-
-        // Eliminar avatar anterior si existe
-        if (!string.IsNullOrEmpty(user.AvatarUrl))
-        {
-            try { await blobStorage.DeleteAsync(ExtractBlobPath(user.AvatarUrl), ct); } catch { }
+            using var ms = new System.IO.MemoryStream();
+            await stream.CopyToAsync(ms, ct);
+            fileBytes = ms.ToArray();
         }
 
-        using var stream = photo.OpenReadStream();
-        var url = await blobStorage.UploadAsync(blobPath, stream, photo.ContentType, ct);
+        if (fileBytes.Length < 4)
+            return BadRequest(new { error = "Archivo inválido." });
 
-        user.AvatarUrl = url;
+        detectedMime = DetectImageMime(fileBytes[..4], photo.ContentType);
+        if (detectedMime == "unknown")
+            return BadRequest(new { error = "Formato no soportado. Use JPG, PNG, WebP o GIF." });
+
+        // Convertir a data URL base64 — se almacena directamente en la BD
+        // sin depender de Azure Blob Storage ni de ningún servicio externo
+        var base64 = Convert.ToBase64String(fileBytes);
+        var dataUrl = $"data:{detectedMime};base64,{base64}";
+
+        user.AvatarUrl = dataUrl;
         await db.SaveChangesAsync(ct);
 
-        return Ok(new { avatarUrl = url });
+        return Ok(new { avatarUrl = dataUrl });
+    }
+
+    /// <summary>
+    /// Sirve el avatar de un usuario.
+    /// - Si AvatarUrl es una data URL (base64), la decodifica y la devuelve como imagen.
+    /// - Si AvatarUrl es una ruta blob (legacy), la descarga de Azure y la retransmite.
+    /// </summary>
+    [HttpGet("avatar-img/{userId:guid}")]
+    [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+    public async Task<IActionResult> GetAvatarImage(Guid userId, CancellationToken ct)
+    {
+        var user = await db.AppUsers
+            .Where(u => u.Id == userId)
+            .Select(u => new { u.AvatarUrl })
+            .FirstOrDefaultAsync(ct);
+
+        if (user?.AvatarUrl is null) return NotFound();
+
+        // Nuevo formato: data URL base64 almacenada directamente en BD
+        if (user.AvatarUrl.StartsWith("data:"))
+        {
+            try
+            {
+                // Formato: "data:{mime};base64,{base64data}"
+                var comma = user.AvatarUrl.IndexOf(',');
+                if (comma < 0) return BadRequest();
+                var meta = user.AvatarUrl[5..comma]; // quitar "data:"
+                var mime = meta.Contains(';') ? meta[..meta.IndexOf(';')] : meta;
+                var base64 = user.AvatarUrl[(comma + 1)..];
+                var bytes = Convert.FromBase64String(base64);
+                return File(bytes, mime);
+            }
+            catch
+            {
+                return BadRequest();
+            }
+        }
+
+        // Legacy: ruta blob (Azure) o URL absoluta
+        var blobPath = user.AvatarUrl.StartsWith("http")
+            ? ExtractBlobPath(user.AvatarUrl)
+            : user.AvatarUrl;
+
+        try
+        {
+            var (stream, contentType) = await blobStorage.DownloadAsync(blobPath, ct);
+            return File(stream, contentType);
+        }
+        catch
+        {
+            return NotFound();
+        }
+    }
+
+    private static string DetectImageMime(byte[] header, string fallbackMime)
+    {
+        // PNG: 89 50 4E 47
+        if (header.Length >= 4 && header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47)
+            return "image/png";
+        // JPEG: FF D8 FF
+        if (header.Length >= 3 && header[0] == 0xFF && header[1] == 0xD8 && header[2] == 0xFF)
+            return "image/jpeg";
+        // GIF: 47 49 46 38
+        if (header.Length >= 4 && header[0] == 0x47 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x38)
+            return "image/gif";
+        // WebP: 52 49 46 46 (RIFF)
+        if (header.Length >= 4 && header[0] == 0x52 && header[1] == 0x49 && header[2] == 0x46 && header[3] == 0x46)
+            return "image/webp";
+        // Confiar en el Content-Type del navegador si es imagen conocida
+        var allowed = new[] { "image/jpeg", "image/png", "image/webp", "image/gif" };
+        return allowed.Contains(fallbackMime.ToLower()) ? fallbackMime : "unknown";
     }
 
     [HttpDelete("avatar")]

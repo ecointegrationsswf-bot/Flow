@@ -13,6 +13,7 @@ public record AnthropicSettings(bool HasGlobalKey);
 /// Ejecuta el agente llamando a Claude vía Anthropic SDK.
 /// Usa la API key del tenant si está disponible; si no, usa la key global (fallback).
 /// El system prompt incluye: definición del agente + contexto del cliente + historial.
+/// Soporta visión de imágenes y lectura de PDFs.
 /// </summary>
 public class AnthropicAgentRunner(
     AnthropicClient anthropic,
@@ -42,13 +43,16 @@ public class AnthropicAgentRunner(
         var systemPrompt = BuildSystemPrompt(req);
         var messages     = await BuildMessagesAsync(req, ct);
 
+        // SDK v5: System es List<SystemMessage>; Stream=false requerido para llamada síncrona
         var response = await client.Messages.GetClaudeMessageAsync(
             new MessageParameters
             {
-                Model         = req.Agent.LlmModel,
-                MaxTokens     = req.Agent.MaxTokens,
-                SystemMessage = systemPrompt,
-                Messages      = messages
+                Model       = req.Agent.LlmModel,
+                MaxTokens   = req.Agent.MaxTokens,
+                System      = [new SystemMessage(systemPrompt)],
+                Messages    = messages,
+                Stream      = false,
+                Temperature = (decimal)req.Agent.Temperature
             }, ct);
 
         var replyText = response.Content.OfType<TextContent>().FirstOrDefault()?.Text ?? string.Empty;
@@ -98,45 +102,91 @@ public class AnthropicAgentRunner(
                 Content = [new TextContent { Text = StripMediaTag(m.Content) }]
             }).ToList();
 
-        // Mensaje actual — si es imagen, incluir bloque de visión
+        // Mensaje actual — construir el bloque de contenido según el tipo de media
         var userContent = new List<ContentBase>();
 
         if (req.MediaType == "image" && !string.IsNullOrEmpty(req.MediaUrl))
         {
+            // ── Visión de imagen ──────────────────────────────────────────
             try
             {
                 var http = httpClientFactory.CreateClient();
-                http.Timeout = TimeSpan.FromSeconds(15);
+                http.Timeout = TimeSpan.FromSeconds(20);
                 var imageBytes = await http.GetByteArrayAsync(req.MediaUrl, ct);
-                var base64 = Convert.ToBase64String(imageBytes);
+                var base64     = Convert.ToBase64String(imageBytes);
 
-                // Detectar media type por URL o usar jpeg como fallback
-                var mimeType = req.MediaUrl.Contains(".png") ? "image/png"
-                    : req.MediaUrl.Contains(".gif") ? "image/gif"
-                    : req.MediaUrl.Contains(".webp") ? "image/webp"
-                    : "image/jpeg";
+                var mimeType = req.MediaUrl.Contains(".png",  StringComparison.OrdinalIgnoreCase) ? "image/png"
+                             : req.MediaUrl.Contains(".gif",  StringComparison.OrdinalIgnoreCase) ? "image/gif"
+                             : req.MediaUrl.Contains(".webp", StringComparison.OrdinalIgnoreCase) ? "image/webp"
+                             : "image/jpeg";
 
                 userContent.Add(new ImageContent
                 {
-                    Source = new ImageSource
-                    {
-                        MediaType = mimeType,
-                        Data      = base64
-                    }
+                    Source = new ImageSource { MediaType = mimeType, Data = base64 }
                 });
 
-                // Añadir texto descriptivo
+                // Si el IncomingMessage es el caption real del cliente, usarlo.
+                // Si solo es el marcador "📷 [Imagen]", usar texto genérico.
                 var caption = string.IsNullOrWhiteSpace(req.IncomingMessage) ||
-                              req.IncomingMessage.StartsWith("📷")
-                    ? "El cliente envió esta imagen."
+                              req.IncomingMessage is "📷 [Imagen]" or "📷 [Imagen recibida]"
+                    ? "El cliente envió esta imagen. Descríbela y responde según el contexto."
                     : req.IncomingMessage;
                 userContent.Add(new TextContent { Text = caption });
 
-                Console.WriteLine($"[Vision] Imagen enviada a Claude ({imageBytes.Length / 1024}KB, {mimeType})");
+                Console.WriteLine($"[Vision] Imagen ({imageBytes.Length / 1024}KB, {mimeType}) → Claude");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[Vision] No se pudo descargar imagen: {ex.Message}");
+                Console.WriteLine($"[Vision] Error descargando imagen: {ex.Message}");
+                userContent.Add(new TextContent { Text = req.IncomingMessage });
+            }
+        }
+        else if (req.MediaType == "document" && !string.IsNullOrEmpty(req.MediaUrl))
+        {
+            // ── Lectura de documento (PDF) ────────────────────────────────
+            // UltraMsg puede enviar PDFs con extensión .bin — detectamos por magic bytes
+            try
+            {
+                var http = httpClientFactory.CreateClient();
+                http.Timeout = TimeSpan.FromSeconds(30);
+                var docBytes = await http.GetByteArrayAsync(req.MediaUrl, ct);
+
+                // Verificar si es un PDF por los primeros bytes: %PDF- = 0x25 0x50 0x44 0x46
+                var isPdf = docBytes.Length > 4 &&
+                            docBytes[0] == 0x25 && docBytes[1] == 0x50 &&
+                            docBytes[2] == 0x44 && docBytes[3] == 0x46;
+
+                if (isPdf)
+                {
+                    var base64 = Convert.ToBase64String(docBytes);
+                    userContent.Add(new DocumentContent
+                    {
+                        Source = new DocumentSource
+                        {
+                            Type      = SourceType.base64,
+                            MediaType = "application/pdf",
+                            Data      = base64
+                        }
+                    });
+
+                    var docCaption = string.IsNullOrWhiteSpace(req.IncomingMessage) ||
+                                     req.IncomingMessage is "📄 [Documento]"
+                        ? "El cliente envió este documento PDF. Léelo y responde según el contexto."
+                        : req.IncomingMessage;
+                    userContent.Add(new TextContent { Text = docCaption });
+
+                    Console.WriteLine($"[DocVision] PDF ({docBytes.Length / 1024}KB) → Claude");
+                }
+                else
+                {
+                    // Documento no PDF (Word, etc.) — solo texto descriptivo
+                    Console.WriteLine($"[DocVision] Documento no-PDF ({docBytes.Length / 1024}KB), enviando texto");
+                    userContent.Add(new TextContent { Text = req.IncomingMessage });
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[DocVision] Error descargando documento: {ex.Message}");
                 userContent.Add(new TextContent { Text = req.IncomingMessage });
             }
         }
