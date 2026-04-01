@@ -61,6 +61,8 @@ public class CampaignsController(
             c.CompletedAt,
             c.CreatedAt,
             c.SourceFileName,
+            Status = c.Status.ToString(),
+            c.LaunchedAt,
             // Progreso en porcentaje
             Progress = c.TotalContacts > 0
                 ? Math.Round((double)c.ProcessedContacts / c.TotalContacts * 100, 1)
@@ -435,14 +437,35 @@ public class CampaignsController(
         {
             try
             {
+                // Cargar contactos pendientes para enviar a n8n
+                var contacts = await db.CampaignContacts
+                    .Where(c => c.CampaignId == id
+                             && c.IsPhoneValid
+                             && c.DispatchStatus == DispatchStatus.Pending)
+                    .Select(c => new
+                    {
+                        phone           = c.PhoneNumber,
+                        clientName      = c.ClientName,
+                        policyNumber    = c.PolicyNumber,
+                        pendingAmount   = c.PendingAmount,
+                        insurance       = c.InsuranceCompany,
+                        contactDataJson = c.ContactDataJson,
+                    })
+                    .ToListAsync(ct);
+
                 var httpClient = httpClientFactory.CreateClient();
                 var payload = JsonSerializer.Serialize(new
                 {
                     campaignId    = campaign.Id,
-                    tenantId      = campaign.TenantId,
-                    totalContacts = pendingCount,
-                    apiBaseUrl    = cfg["App:Url"] ?? "",
-                    apiKey        = cfg["N8n:ApiKey"] ?? "",
+                    agentId       = campaign.AgentDefinitionId,
+                    warmupDay     = 0,
+                    tenantConfig  = new
+                    {
+                        tenantId             = campaign.TenantId,
+                        ultraMsgInstanceId   = campaign.Tenant.WhatsAppInstanceId,
+                        ultraMsgToken        = campaign.Tenant.WhatsAppApiToken,
+                    },
+                    contacts,
                 });
                 await httpClient.PostAsync(webhookUrl,
                     new StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);

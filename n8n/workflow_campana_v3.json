@@ -1,0 +1,340 @@
+{
+  "name": "workflow_campana_v3",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "campaign/launch",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "b4b7481b-7292-40da-935e-bf493cc35f35",
+      "name": "Trigger: lanzar campaña",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [-1536, 80],
+      "webhookId": "agentflow-campaign-launch"
+    },
+    {
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\n\nif (!body.campaignId)   throw new Error('Falta campaignId');\nif (!body.tenantConfig) throw new Error('Falta tenantConfig');\nif (!body.tenantConfig.ultraMsgInstanceId) throw new Error('Falta tenantConfig.ultraMsgInstanceId');\nif (!body.tenantConfig.ultraMsgToken)      throw new Error('Falta tenantConfig.ultraMsgToken');\nif (!body.contacts || body.contacts.length === 0) throw new Error('Sin contactos');\n\nconst normalizePhone = (phone) => {\n  let p = String(phone).replace(/[\\s\\-\\(\\)]/g, '');\n  if (!p.startsWith('+')) p = '+507' + p.replace(/^507/, '');\n  return p;\n};\n\nconst valid = [], invalid = [];\nfor (const c of body.contacts) {\n  const normalized = normalizePhone(c.phone || c.telefono || '');\n  const digits = normalized.replace('+', '');\n  if (digits.length >= 10 && digits.length <= 12 && !normalized.includes('507507')) {\n    valid.push({ ...c, phone: normalized });\n  } else {\n    invalid.push({ ...c, phone: normalized, reason: 'formato_invalido' });\n  }\n}\n\nconst BATCH_SIZE = 10;\nconst batches = [];\nfor (let i = 0; i < valid.length; i += BATCH_SIZE) {\n  batches.push(valid.slice(i, i + BATCH_SIZE));\n}\n\nreturn [{\n  json: {\n    campaignId:      body.campaignId,\n    agentId:         body.agentId,\n    tenantConfig:    body.tenantConfig,\n    warmupDay:       body.warmupDay || 0,\n    valid,\n    invalid,\n    batches,\n    validCount:      valid.length,\n    invalidCount:    invalid.length,\n    totalBatches:    batches.length\n  }\n}];"
+      },
+      "id": "9e5ae3ae-7358-4d59-bae1-5cbc1ed27367",
+      "name": "Validar teléfonos y crear lotes",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-1312, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict", "version": 1 },
+          "conditions": [{ "id": "c001", "leftValue": "={{ $json.validCount }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d8bff7f8-ed58-4e74-bfef-1e90c9725506",
+      "name": "¿Hay contactos válidos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-1088, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://jamconsulting-004-site12.site4future.com/api/campaigns/{{ $('Validar teléfonos y crear lotes').item.json.campaignId }}/mark-invalid",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-N8N-Key", "value": "={{ $env.AGENTFLOW_N8N_SECRET }}" },
+            { "name": "X-Tenant-Id", "value": "={{ $('Validar teléfonos y crear lotes').item.json.tenantConfig.tenantId }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ invalidContacts: $json.invalid }) }}",
+        "options": {}
+      },
+      "id": "f87de175-fe39-4a84-bd7c-b66219d8dec2",
+      "name": "Registrar inválidos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-880, 256]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://jamconsulting-004-site12.site4future.com/api/campaigns/check-duplicates",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-N8N-Key", "value": "={{ $env.AGENTFLOW_N8N_SECRET }}" },
+            { "name": "X-Tenant-Id", "value": "={{ $json.tenantConfig.tenantId }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ phones: $json.valid.map(c => c.phone) }) }}",
+        "options": { "response": { "response": { "responseFormat": "json" } } }
+      },
+      "id": "467cce56-3a4c-408c-adfc-48be448913cb",
+      "name": "Verificar duplicados activos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-880, 80]
+    },
+    {
+      "parameters": {
+        "jsCode": "const validContacts  = $('Validar teléfonos y crear lotes').first().json.valid;\nconst tenantConfig   = $('Validar teléfonos y crear lotes').first().json.tenantConfig;\nconst campaignId     = $('Validar teléfonos y crear lotes').first().json.campaignId;\nconst agentId        = $('Validar teléfonos y crear lotes').first().json.agentId;\nconst warmupDay      = $('Validar teléfonos y crear lotes').first().json.warmupDay || 0;\nconst activeSessions = new Set($input.first().json.body?.activeSessions || []);\n\nconst toSend     = validContacts.filter(c => !activeSessions.has(c.phone));\nconst duplicates = validContacts.filter(c =>  activeSessions.has(c.phone));\n\nconst warmupLimits = { 1: 20, 2: 50, 3: 100, 4: 150, 5: 200, 6: 300, 7: 500 };\nconst dailyLimit = warmupDay > 0 ? (warmupLimits[warmupDay] || 500) : toSend.length;\nconst toSendLimited = toSend.slice(0, dailyLimit);\nconst deferred = toSend.slice(dailyLimit);\n\nconst BATCH_SIZE = 10;\nconst batches = [];\nfor (let i = 0; i < toSendLimited.length; i += BATCH_SIZE) {\n  batches.push(toSendLimited.slice(i, i + BATCH_SIZE));\n}\n\nreturn [{\n  json: {\n    campaignId, agentId, tenantConfig, warmupDay,\n    toSend: toSendLimited, deferred, duplicates, batches,\n    totalToSend:     toSendLimited.length,\n    totalDeferred:   deferred.length,\n    totalDuplicates: duplicates.length,\n    totalBatches:    batches.length,\n    dailyLimit\n  }\n}];"
+      },
+      "id": "d9080b81-74ec-4b00-82b1-c11603e7748a",
+      "name": "Filtrar duplicados y aplicar límite diario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-656, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "c_warm", "leftValue": "={{ $json.totalDeferred }}", "rightValue": 0, "operator": { "type": "number", "operation": "gt" } }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e466c859-ccc4-4968-acc7-45edacb7c874",
+      "name": "¿Hay contactos diferidos?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [-432, 256]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://jamconsulting-004-site12.site4future.com/api/campaigns/schedule-deferred",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-N8N-Key", "value": "={{ $env.AGENTFLOW_N8N_SECRET }}" },
+            { "name": "X-Tenant-Id", "value": "={{ $json.tenantConfig.tenantId }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaignId: $json.campaignId, agentId: $json.agentId, contacts: $json.deferred, warmupDay: $json.warmupDay + 1, tenantConfig: $json.tenantConfig }) }}",
+        "options": {}
+      },
+      "id": "4ec02cf5-fa45-4ccb-8148-e829377fa1a4",
+      "name": "Programar diferidos para mañana",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-208, 192]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "batches",
+        "options": {}
+      },
+      "id": "d120762d-c757-4704-ae6c-6ca4b26eb3ee",
+      "name": "Iterar por lote",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [-432, 80]
+    },
+    {
+      "parameters": { "amount": 30 },
+      "id": "37c73a8d-4f8c-4f5c-bc5e-134d2ca6e3dc",
+      "name": "Pausa 30s entre lotes",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [-432, -48],
+      "webhookId": "10b00de0-21f1-41f5-8fc6-7f93825d3ec5"
+    },
+    {
+      "parameters": {
+        "jsCode": "const batch        = $input.first().json;\nconst campaignData = $('Filtrar duplicados y aplicar límite diario').first().json;\n\nconst now       = new Date();\nconst panamaHour = parseInt(\n  now.toLocaleString('en-US', {\n    timeZone: 'America/Panama',\n    hour: 'numeric',\n    hour12: false\n  })\n);\n\nif (panamaHour < 8 || panamaHour >= 17) {\n  throw new Error(\n    `Envío cancelado: son las ${panamaHour}h en Panamá. Solo se envía entre 8am y 5pm.`\n  );\n}\n\nif (!Array.isArray(batch)) return [];\n\nreturn batch.map((contact, index) => ({\n  json: {\n    campaignId:    campaignData.campaignId,\n    agentId:       campaignData.agentId,\n    tenantConfig:  campaignData.tenantConfig,\n    phone:         contact.phone,\n    clientName:    contact.name    || contact.clientName    || contact.nombre    || '',\n    policyNumber:  contact.policy  || contact.policyNumber  || contact.poliza    || '',\n    pendingAmount: contact.amount  || contact.pendingAmount || contact.saldo     || 0,\n    insurance:     contact.insurer || contact.insurance     || contact.aseguradora || '',\n    contactDataJson: contact.contactDataJson || null,\n    delayMs:       4000 + Math.floor(Math.random() * 5000),\n    positionInBatch: index\n  }\n}));"
+      },
+      "id": "84003fd7-2419-4a1a-a2b0-06d55b64ae33",
+      "name": "Expandir lote con delay y horario",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-208, 80]
+    },
+    {
+      "parameters": {
+        "amount": "={{ $json.delayMs }}",
+        "unit": "milliseconds"
+      },
+      "id": "e51e71db-e9a0-46b2-bf17-7d4719db2c7b",
+      "name": "Esperar delay aleatorio (4-9s)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [16, 80],
+      "webhookId": "afa67e53-c4bf-41fa-96eb-9be764a16fd3"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://jamconsulting-004-site12.site4future.com/api/webhooks/campaign-send",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-N8N-Key", "value": "={{ $env.AGENTFLOW_N8N_SECRET }}" },
+            { "name": "X-Tenant-Id", "value": "={{ $json.tenantConfig.tenantId }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaignId: $json.campaignId, agentId: $json.agentId, phone: $json.phone, clientName: $json.clientName, policyNumber: $json.policyNumber, pendingAmount: $json.pendingAmount, insurance: $json.insurance, contactDataJson: $json.contactDataJson, tenantConfig: $json.tenantConfig }) }}",
+        "options": { "response": { "response": { "responseFormat": "json" } }, "timeout": 30000 }
+      },
+      "id": "b1a85992-7811-45c5-aed2-905367ebf676",
+      "name": "POST /api/webhooks/campaign-send",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 80]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{ "id": "c002", "leftValue": "={{ $json.success }}", "rightValue": true, "operator": { "type": "boolean", "operation": "true" } }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "41ff9c54-b40b-4386-9def-49ae6added23",
+      "name": "¿Envío exitoso?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [448, 80]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://jamconsulting-004-site12.site4future.com/api/campaigns/contact-sent",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-N8N-Key", "value": "={{ $env.AGENTFLOW_N8N_SECRET }}" },
+            { "name": "X-Tenant-Id", "value": "={{ $('Expandir lote con delay y horario').item.json.tenantConfig.tenantId }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaignId: $('Expandir lote con delay y horario').item.json.campaignId, phone: $('Expandir lote con delay y horario').item.json.phone, conversationId: $json.conversationId, externalMessageId: $json.externalMessageId, status: 'sent' }) }}",
+        "options": {}
+      },
+      "id": "a406ecc0-5d11-4603-8fbb-1a6ec38f528b",
+      "name": "Marcar contacto enviado",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [672, -32]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://jamconsulting-004-site12.site4future.com/api/campaigns/contact-failed",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-N8N-Key", "value": "={{ $env.AGENTFLOW_N8N_SECRET }}" },
+            { "name": "X-Tenant-Id", "value": "={{ $('Expandir lote con delay y horario').item.json.tenantConfig.tenantId }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaignId: $('Expandir lote con delay y horario').item.json.campaignId, phone: $('Expandir lote con delay y horario').item.json.phone, error: $json.error || 'send_failed' }) }}",
+        "options": {}
+      },
+      "id": "8fc2bc77-31fa-42a2-8e70-47523dc8377b",
+      "name": "Registrar fallo de envío",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [672, 192]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://jamconsulting-004-site12.site4future.com/api/campaigns/completed",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            { "name": "Content-Type", "value": "application/json" },
+            { "name": "X-N8N-Key", "value": "={{ $env.AGENTFLOW_N8N_SECRET }}" },
+            { "name": "X-Tenant-Id", "value": "={{ $('Filtrar duplicados y aplicar límite diario').first().json.tenantConfig.tenantId }}" }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ campaignId: $('Filtrar duplicados y aplicar límite diario').first().json.campaignId, totalSent: $('Filtrar duplicados y aplicar límite diario').first().json.totalToSend, totalDeferred: $('Filtrar duplicados y aplicar límite diario').first().json.totalDeferred, totalDuplicates: $('Filtrar duplicados y aplicar límite diario').first().json.totalDuplicates }) }}",
+        "options": {}
+      },
+      "id": "08db439b-103f-4a28-a40d-565d86a7fcee",
+      "name": "Marcar campaña completada",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [896, 80]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, campaignId: $('Filtrar duplicados y aplicar límite diario').first().json.campaignId, sent: $('Filtrar duplicados y aplicar límite diario').first().json.totalToSend, deferred: $('Filtrar duplicados y aplicar límite diario').first().json.totalDeferred, duplicatesSkipped: $('Filtrar duplicados y aplicar límite diario').first().json.totalDuplicates, invalid: $('Validar teléfonos y crear lotes').first().json.invalidCount, dailyLimit: $('Filtrar duplicados y aplicar límite diario').first().json.dailyLimit }) }}",
+        "options": {}
+      },
+      "id": "56322baa-24fb-452e-88b3-513dddf9b8ee",
+      "name": "Responder al API",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1120, 80]
+    }
+  ],
+  "connections": {
+    "Trigger: lanzar campaña": { "main": [[{ "node": "Validar teléfonos y crear lotes", "type": "main", "index": 0 }]] },
+    "Validar teléfonos y crear lotes": { "main": [[{ "node": "¿Hay contactos válidos?", "type": "main", "index": 0 }]] },
+    "¿Hay contactos válidos?": {
+      "main": [
+        [{ "node": "Verificar duplicados activos", "type": "main", "index": 0 }],
+        [{ "node": "Registrar inválidos", "type": "main", "index": 0 }]
+      ]
+    },
+    "Verificar duplicados activos": { "main": [[{ "node": "Filtrar duplicados y aplicar límite diario", "type": "main", "index": 0 }]] },
+    "Filtrar duplicados y aplicar límite diario": { "main": [[{ "node": "¿Hay contactos diferidos?", "type": "main", "index": 0 }]] },
+    "¿Hay contactos diferidos?": {
+      "main": [
+        [{ "node": "Programar diferidos para mañana", "type": "main", "index": 0 }],
+        [{ "node": "Iterar por lote", "type": "main", "index": 0 }]
+      ]
+    },
+    "Programar diferidos para mañana": { "main": [[{ "node": "Iterar por lote", "type": "main", "index": 0 }]] },
+    "Iterar por lote": { "main": [[{ "node": "Pausa 30s entre lotes", "type": "main", "index": 0 }]] },
+    "Pausa 30s entre lotes": { "main": [[{ "node": "Expandir lote con delay y horario", "type": "main", "index": 0 }]] },
+    "Expandir lote con delay y horario": { "main": [[{ "node": "Esperar delay aleatorio (4-9s)", "type": "main", "index": 0 }]] },
+    "Esperar delay aleatorio (4-9s)": { "main": [[{ "node": "POST /api/webhooks/campaign-send", "type": "main", "index": 0 }]] },
+    "POST /api/webhooks/campaign-send": { "main": [[{ "node": "¿Envío exitoso?", "type": "main", "index": 0 }]] },
+    "¿Envío exitoso?": {
+      "main": [
+        [{ "node": "Marcar contacto enviado", "type": "main", "index": 0 }],
+        [{ "node": "Registrar fallo de envío", "type": "main", "index": 0 }]
+      ]
+    },
+    "Marcar contacto enviado": { "main": [[{ "node": "Marcar campaña completada", "type": "main", "index": 0 }]] },
+    "Registrar fallo de envío": { "main": [[{ "node": "Marcar campaña completada", "type": "main", "index": 0 }]] },
+    "Marcar campaña completada": { "main": [[{ "node": "Responder al API", "type": "main", "index": 0 }]] }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": true
+  },
+  "tags": []
+}
