@@ -152,6 +152,8 @@ builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
 // ── Procesador de archivos Excel ──────────────────────
 builder.Services.AddScoped<AgentFlow.Application.Modules.Campaigns.IExcelFileProcessor,
     AgentFlow.Infrastructure.FileProcessing.ExcelFileProcessor>();
+builder.Services.AddScoped<AgentFlow.Application.Modules.Campaigns.IFixedFormatCampaignService,
+    AgentFlow.Infrastructure.FileProcessing.FixedFormatCampaignService>();
 
 // ── Repositorios y servicios de dominio ──────────────────
 builder.Services.AddScoped<IConversationRepository, ConversationRepository>();
@@ -306,6 +308,21 @@ if (isDev)
             END");
     }
     catch { /* Columna ya es MAX o tabla aún no existe */ }
+
+    // Agregar columna ContactDataJson para campañas en formato fijo
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (
+                SELECT 1 FROM sys.columns
+                WHERE object_id = OBJECT_ID('CampaignContacts')
+                  AND name = 'ContactDataJson'
+            )
+            BEGIN
+                ALTER TABLE CampaignContacts ADD ContactDataJson nvarchar(MAX) NULL;
+            END");
+    }
+    catch { /* Tabla aún no existe o columna ya creada */ }
 
     if (!db.SuperAdmins.Any())
     {

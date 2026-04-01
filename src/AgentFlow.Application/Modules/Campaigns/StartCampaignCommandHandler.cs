@@ -45,8 +45,20 @@ public class StartCampaignCommandHandler(ICampaignRepository campaigns) : IReque
 
         foreach (var row in cmd.Contacts)
         {
-            // Normalizar teléfono al formato E.164 panameño
-            var (normalizedPhone, isValid) = NormalizePanamanianPhone(row.PhoneNumber);
+            string normalizedPhone;
+            bool isValid;
+
+            if (row.IsAlreadyE164)
+            {
+                // Formato fixed: el teléfono ya viene en E.164 internacional
+                normalizedPhone = row.PhoneNumber;
+                isValid = normalizedPhone.StartsWith('+') && normalizedPhone.Length >= 10;
+            }
+            else
+            {
+                // Formato libre: normalizar al formato E.164 panameño
+                (normalizedPhone, isValid) = NormalizePanamanianPhone(row.PhoneNumber);
+            }
 
             // Detectar duplicados: si el teléfono ya apareció, marcarlo como inválido
             var isDuplicate = !seenPhones.Add(normalizedPhone);
@@ -62,6 +74,7 @@ public class StartCampaignCommandHandler(ICampaignRepository campaigns) : IReque
                 InsuranceCompany = row.InsuranceCompany?.Trim(),
                 PendingAmount = row.PendingAmount,
                 ExtraData = row.Extra ?? new Dictionary<string, string>(),
+                ContactDataJson = row.ContactDataJson,
                 IsPhoneValid = isValid && !isDuplicate,
                 RetryCount = 0,
                 Result = GestionResult.Pending,

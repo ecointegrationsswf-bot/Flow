@@ -21,5 +21,6 @@ public class CampaignContactConfiguration : IEntityTypeConfiguration<CampaignCon
             v => System.Text.Json.JsonSerializer.Serialize(v, (System.Text.Json.JsonSerializerOptions?)null),
             v => System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(v, (System.Text.Json.JsonSerializerOptions?)null) ?? new()
         ).HasColumnType("nvarchar(max)");
+        b.Property(c => c.ContactDataJson).HasColumnType("nvarchar(max)");
     }
 }

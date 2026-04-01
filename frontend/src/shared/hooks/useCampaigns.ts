@@ -3,7 +3,7 @@ import { api } from '@/shared/api/client'
 import type { Campaign } from '@/shared/types'
 
 export interface ParseResult {
-  columns: string[]
+  detectedColumns: string[]
   previewRows: Record<string, string>[]
   totalRows: number
   tempFilePath: string
@@ -51,6 +51,49 @@ export function useCreateCampaignFromFile() {
   return useMutation({
     mutationFn: (data: CreateCampaignFromFileRequest) =>
       api.post<{ campaignId: string }>('/campaigns/create', data).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  })
+}
+
+export interface FixedContactPreview {
+  phone: string
+  nombreCliente: string
+  keyValue: string
+  totalRegistros: number
+  contactDataJson: string
+}
+
+export interface FixedFormatPreviewResult {
+  contacts: FixedContactPreview[]
+  totalRowsRead: number
+  extraColumns: string[]
+  warnings: string[]
+}
+
+export function usePreviewFixedFormat() {
+  return useMutation({
+    mutationFn: (formData: FormData) =>
+      api.post<FixedFormatPreviewResult>('/campaigns/preview-fixed', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then((r) => r.data),
+  })
+}
+
+export interface FixedFormatUploadResult {
+  campaignId: string
+  contactCount: number
+  totalRowsRead: number
+  extraColumns: string[]
+  warnings: string[]
+}
+
+export function useUploadFixedFormat() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (formData: FormData) =>
+      api.post<FixedFormatUploadResult>('/campaigns/upload-fixed', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      }).then((r) => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
   })
 }

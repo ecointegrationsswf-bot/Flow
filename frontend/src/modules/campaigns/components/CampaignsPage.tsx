@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus } from 'lucide-react'
+import { Megaphone, Plus, FileSpreadsheet } from 'lucide-react'
 import { format } from 'date-fns'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
@@ -25,12 +25,20 @@ export function CampaignsPage() {
         title="Campanas"
         subtitle="Gestiona campanas de cobros, reclamos y renovaciones"
         action={
-          <Link
-            to="/campaigns/new"
-            className="flex items-center gap-1.5 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-          >
-            <Plus className="h-4 w-4" /> Nueva campana
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/campaigns/new-fixed"
+              className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              <FileSpreadsheet className="h-4 w-4" /> Formato fijo
+            </Link>
+            <Link
+              to="/campaigns/new"
+              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+            >
+              <Plus className="h-4 w-4" /> Nueva campana
+            </Link>
+          </div>
         }
       />
 
@@ -42,7 +50,7 @@ export function CampaignsPage() {
           action={
             <Link
               to="/campaigns/new"
-              className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
             >
               Crear campana
             </Link>

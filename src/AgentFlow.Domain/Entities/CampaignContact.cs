@@ -20,8 +20,12 @@ public class CampaignContact
     public string? InsuranceCompany { get; set; }
     public decimal? PendingAmount { get; set; }
 
-    // Metadatos extra del archivo (columnas adicionales)
+    // Metadatos extra del archivo (columnas adicionales — formato plano)
     public Dictionary<string, string> ExtraData { get; set; } = [];
+
+    // JSON consolidado para campañas con formato fijo (NombreCliente/Celular/CodigoPais/KeyValue + columnas extra)
+    // Almacena el array de registros agrupados por número de teléfono
+    public string? ContactDataJson { get; set; }
 
     // Estado
     public bool IsPhoneValid { get; set; } = true;

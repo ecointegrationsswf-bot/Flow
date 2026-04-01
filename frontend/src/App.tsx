@@ -11,6 +11,7 @@ import { CampaignsPage } from '@/modules/campaigns/components/CampaignsPage'
 import { CampaignUploadPage } from '@/modules/campaigns/components/CampaignUploadPage'
 import { CampaignTemplatesPage } from '@/modules/campaigns/components/CampaignTemplatesPage'
 import { CampaignTemplateFormPage } from '@/modules/campaigns/components/CampaignTemplateFormPage'
+import { CampaignFixedUploadPage } from '@/modules/campaigns/components/CampaignFixedUploadPage'
 import { AgentsListPage } from '@/modules/agents/components/AgentsListPage'
 import { AgentFormPage } from '@/modules/agents/components/AgentFormPage'
 import { SettingsPage } from '@/modules/settings/components/SettingsPage'
@@ -71,6 +72,7 @@ export default function App() {
           <Route path="/campaign-templates/:id/edit" element={<CampaignTemplateFormPage />} />
           <Route path="/campaigns" element={<CampaignsPage />} />
           <Route path="/campaigns/new" element={<CampaignUploadPage />} />
+          <Route path="/campaigns/new-fixed" element={<CampaignFixedUploadPage />} />
           <Route path="/agents" element={<AgentsListPage />} />
           <Route path="/agents/new" element={<AgentFormPage />} />
           <Route path="/agents/:id/edit" element={<AgentFormPage />} />

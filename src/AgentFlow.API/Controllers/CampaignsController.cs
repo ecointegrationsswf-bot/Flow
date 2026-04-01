@@ -6,10 +6,12 @@ using Hangfire;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using System.ComponentModel.DataAnnotations;
 
 namespace AgentFlow.API.Controllers;
 
 public record CampaignUploadRequest(string Name, Guid AgentId, DateTime? ScheduledAt);
+public record UploadFixedFormatRequest([Required] string Name, [Required] Guid AgentId, DateTime? ScheduledAt);
 
 public record CreateCampaignFromFileRequest(
     string Name,
@@ -26,6 +28,7 @@ public class CampaignsController(
     IMediator mediator,
     ITenantContext tenantCtx,
     IExcelFileProcessor excelProcessor,
+    IFixedFormatCampaignService fixedFormatService,
     IBlobStorageService blobStorage,
     ICampaignRepository campaignRepo) : ControllerBase
 {
@@ -244,6 +247,135 @@ public class CampaignsController(
         ), ct);
 
         return Ok(new { campaignId });
+    }
+
+    /// <summary>
+    /// Parsea un Excel en formato fijo y devuelve una vista previa de los contactos
+    /// consolidados sin crear la campaña. Permite al usuario revisar los datos
+    /// antes de confirmar.
+    /// </summary>
+    [HttpPost("preview-fixed")]
+    [RequestSizeLimit(10 * 1024 * 1024)]
+    public IActionResult PreviewFixed(IFormFile file)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { error = "Archivo vacío." });
+
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (ext is not ".xlsx" and not ".xls" and not ".csv")
+            return BadRequest(new { error = "Formato no soportado. Use Excel (.xlsx/.xls) o CSV." });
+
+        FixedFormatParseResult parsed;
+        using (var stream = file.OpenReadStream())
+            parsed = fixedFormatService.Parse(stream, file.FileName);
+
+        if (parsed.Warnings.Count > 0 && parsed.Contacts.Count == 0)
+            return BadRequest(new { error = parsed.Warnings[0], warnings = parsed.Warnings });
+
+        var preview = parsed.Contacts.Select(c =>
+        {
+            // Extraer NombreCliente y KeyValue del primer registro del JSON
+            string nombreCliente = c.ClientName ?? "";
+            string keyValue = "";
+            if (c.ContactDataJson is not null)
+            {
+                try
+                {
+                    var arr = System.Text.Json.JsonSerializer.Deserialize<List<Dictionary<string, object>>>(c.ContactDataJson);
+                    if (arr?.Count > 0)
+                    {
+                        keyValue = arr[0].GetValueOrDefault("KeyValue")?.ToString() ?? "";
+                    }
+                }
+                catch { }
+            }
+            return new
+            {
+                phone = c.PhoneNumber,
+                nombreCliente,
+                keyValue,
+                totalRegistros = GetRegistroCount(c.ContactDataJson),
+                contactDataJson = c.ContactDataJson,
+            };
+        }).ToList();
+
+        return Ok(new
+        {
+            contacts = preview,
+            totalRowsRead = parsed.TotalRowsRead,
+            extraColumns = parsed.ExtraColumns,
+            warnings = parsed.Warnings,
+        });
+    }
+
+    private static int GetRegistroCount(string? json)
+    {
+        if (json is null) return 1;
+        try
+        {
+            var arr = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(json);
+            return arr.ValueKind == System.Text.Json.JsonValueKind.Array ? arr.GetArrayLength() : 1;
+        }
+        catch { return 1; }
+    }
+
+    /// <summary>
+    /// Crea una campaña a partir de un Excel en formato fijo.
+    ///
+    /// Columnas requeridas: NombreCliente | Celular | CodigoPais | KeyValue
+    /// Columnas adicionales variables: se capturan automáticamente en ContactDataJson.
+    ///
+    /// Múltiples filas del mismo número de teléfono se consolidan en un único
+    /// contacto con un array "registros" en ContactDataJson.
+    /// </summary>
+    [HttpPost("upload-fixed")]
+    [RequestSizeLimit(10 * 1024 * 1024)]
+    public async Task<IActionResult> UploadFixed(
+        [FromForm] UploadFixedFormatRequest req,
+        IFormFile file,
+        CancellationToken ct)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { error = "Archivo vacío." });
+
+        if (file.Length > 10 * 1024 * 1024)
+            return BadRequest(new { error = "El archivo excede el límite de 10 MB." });
+
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (ext is not ".xlsx" and not ".xls" and not ".csv")
+            return BadRequest(new { error = "Formato no soportado. Use Excel (.xlsx/.xls) o CSV." });
+
+        FixedFormatParseResult parsed;
+        using (var stream = file.OpenReadStream())
+            parsed = fixedFormatService.Parse(stream, file.FileName);
+
+        // Si hay errores de columnas faltantes los warnings lo indican
+        if (parsed.Contacts.Count == 0)
+            return BadRequest(new
+            {
+                error = "No se encontraron contactos válidos en el archivo.",
+                warnings = parsed.Warnings
+            });
+
+        var campaignId = await mediator.Send(new StartCampaignCommand(
+            tenantCtx.TenantId,
+            req.Name,
+            req.AgentId,
+            ChannelType.WhatsApp,
+            CampaignTrigger.FileUpload,
+            parsed.Contacts,
+            User.Identity?.Name ?? "system",
+            req.ScheduledAt
+        ), ct);
+
+        return Ok(new
+        {
+            campaignId,
+            contactCount = parsed.Contacts.Count,
+            totalRowsRead = parsed.TotalRowsRead,
+            extraColumns = parsed.ExtraColumns,
+            warnings = parsed.Warnings
+        });
     }
 
     private static List<ContactRow> ParseWithMapping(Stream stream, Dictionary<string, string> mapping)

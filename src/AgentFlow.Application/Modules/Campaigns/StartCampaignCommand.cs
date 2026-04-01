@@ -22,5 +22,9 @@ public record ContactRow(
     string? PolicyNumber,
     string? InsuranceCompany,
     decimal? PendingAmount,
-    Dictionary<string, string>? Extra
+    Dictionary<string, string>? Extra,
+    // Cuando viene del FixedFormatCampaignService el teléfono ya está en E.164
+    // y los datos consolidados se entregan aquí como JSON.
+    string? ContactDataJson = null,
+    bool IsAlreadyE164 = false
 );
