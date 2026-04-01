@@ -134,7 +134,7 @@ export function CampaignTemplateFormPage() {
 
   const togglePrompt = (promptId: string) => {
     setSelectedPromptIds(prev =>
-      prev.includes(promptId) ? prev.filter(id => id !== promptId) : [...prev, promptId]
+      prev.includes(promptId) ? [] : [promptId]
     )
   }
 
@@ -554,7 +554,7 @@ export function CampaignTemplateFormPage() {
             <FileText className="h-5 w-5 text-indigo-500" />
             <h2 className="text-sm font-semibold text-gray-900">Prompts vinculados</h2>
           </div>
-          <p className="mb-3 text-xs text-gray-500">Selecciona los prompt templates que el agente usara en este maestro de campana.</p>
+          <p className="mb-3 text-xs text-gray-500">Selecciona el prompt template que el agente usara para generar mensajes en esta campana. Solo se permite un prompt por maestro.</p>
           {loadingPrompts ? (
             <p className="text-xs text-gray-400">Cargando prompts...</p>
           ) : !availablePrompts?.length ? (
@@ -567,7 +567,7 @@ export function CampaignTemplateFormPage() {
                 const selected = selectedPromptIds.includes(prompt.id)
                 return (
                   <label key={prompt.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors ${selected ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'}`}>
-                    <input type="checkbox" checked={selected} onChange={() => togglePrompt(prompt.id)} className="h-4 w-4 rounded border-gray-300 text-indigo-600" />
+                    <input type="radio" name="promptTemplate" checked={selected} onChange={() => togglePrompt(prompt.id)} className="h-4 w-4 border-gray-300 text-indigo-600" />
                     <FileText className="h-4 w-4 shrink-0 text-indigo-500" />
                     <div className="flex-1">
                       <span className="text-sm font-medium text-gray-900">{prompt.name}</span>
@@ -577,7 +577,7 @@ export function CampaignTemplateFormPage() {
                   </label>
                 )
               })}
-              {selectedPromptIds.length > 0 && <p className="mt-2 text-xs text-indigo-600">{selectedPromptIds.length} prompt{selectedPromptIds.length > 1 ? 's' : ''} vinculado{selectedPromptIds.length > 1 ? 's' : ''}</p>}
+              {selectedPromptIds.length > 0 && <p className="mt-2 text-xs text-indigo-600">Prompt seleccionado</p>}
             </div>
           )}
         </section>

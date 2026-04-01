@@ -16,6 +16,8 @@ public class CampaignConfiguration : IEntityTypeConfiguration<Campaign>
         b.Property(c => c.SourceFileName).HasMaxLength(500);
         b.Property(c => c.SourceFilePath).HasMaxLength(1000);
         b.Property(c => c.CreatedByUserId).HasMaxLength(100).IsRequired();
+        b.Property(c => c.Status).HasConversion<string>().HasMaxLength(30);
+        b.Property(c => c.LaunchedByUserId).HasMaxLength(100);
         b.HasOne(c => c.Tenant).WithMany().HasForeignKey(c => c.TenantId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne(c => c.AgentDefinition).WithMany().HasForeignKey(c => c.AgentDefinitionId).OnDelete(DeleteBehavior.Restrict);
         b.HasMany(c => c.Contacts).WithOne(cc => cc.Campaign).HasForeignKey(cc => cc.CampaignId);

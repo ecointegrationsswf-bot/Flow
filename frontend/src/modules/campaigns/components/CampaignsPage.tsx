@@ -1,11 +1,11 @@
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, FileSpreadsheet } from 'lucide-react'
+import { Megaphone, Plus, FileSpreadsheet, Rocket } from 'lucide-react'
 import { format } from 'date-fns'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
-import { useCampaigns } from '@/shared/hooks/useCampaigns'
+import { useCampaigns, useLaunchCampaign } from '@/shared/hooks/useCampaigns'
 
 const triggerLabels: Record<string, string> = {
   FileUpload: 'Archivo',
@@ -14,8 +14,18 @@ const triggerLabels: Record<string, string> = {
   Manual: 'Manual',
 }
 
+const statusConfig: Record<string, { label: string; className: string }> = {
+  Pending:    { label: 'Pendiente',  className: 'bg-gray-100 text-gray-600' },
+  Launching:  { label: 'Lanzando',   className: 'bg-yellow-100 text-yellow-700' },
+  Running:    { label: 'En curso',   className: 'bg-green-100 text-green-700' },
+  Paused:     { label: 'Pausada',    className: 'bg-orange-100 text-orange-700' },
+  Completed:  { label: 'Completada', className: 'bg-blue-100 text-blue-700' },
+  Failed:     { label: 'Error',      className: 'bg-red-100 text-red-700' },
+}
+
 export function CampaignsPage() {
   const { data: campaigns, isLoading, isError } = useCampaigns()
+  const launchMut = useLaunchCampaign()
 
   if (isLoading) return <LoadingSpinner />
 
@@ -67,6 +77,7 @@ export function CampaignsPage() {
                 <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Progreso</th>
                 <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Estado</th>
                 <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Fecha</th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Acciones</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
@@ -93,14 +104,26 @@ export function CampaignsPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-                        c.isActive ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
-                      }`}>
-                        {c.completedAt ? 'Completada' : c.isActive ? 'Activa' : 'Pausada'}
-                      </span>
+                      {(() => {
+                        const st = c.status ?? (c.completedAt ? 'Completed' : c.isActive ? 'Running' : 'Pending')
+                        const cfg = statusConfig[st] ?? statusConfig.Pending
+                        return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${cfg.className}`}>{cfg.label}</span>
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">
                       {format(new Date(c.createdAt), 'dd/MM/yyyy')}
+                    </td>
+                    <td className="px-4 py-3">
+                      {(!c.status || c.status === 'Pending') && (
+                        <button
+                          onClick={() => launchMut.mutate(c.id)}
+                          disabled={launchMut.isPending}
+                          className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                        >
+                          <Rocket className="h-3.5 w-3.5" />
+                          {launchMut.isPending ? 'Lanzando...' : 'Lanzar'}
+                        </button>
+                      )}
                     </td>
                   </tr>
                 )

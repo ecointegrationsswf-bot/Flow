@@ -27,10 +27,19 @@ public class CampaignContact
     // Almacena el array de registros agrupados por número de teléfono
     public string? ContactDataJson { get; set; }
 
-    // Estado
+    // Estado gestión (resultado de negocio — ¿pagó, rechazó, etc.?)
     public bool IsPhoneValid { get; set; } = true;
     public int RetryCount { get; set; }
     public GestionResult Result { get; set; } = GestionResult.Pending;
     public DateTime? LastContactAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    // Estado de despacho (técnico — ¿llegó el mensaje?)
+    public DispatchStatus DispatchStatus { get; set; } = DispatchStatus.Pending;
+    public DateTime? ClaimedAt { get; set; }
+    public DateTime? SentAt { get; set; }
+    public int DispatchAttempts { get; set; }
+    public string? GeneratedMessage { get; set; }       // Mensaje final enviado (auditoría)
+    public string? ExternalMessageId { get; set; }      // ID de UltraMsg
+    public string? DispatchError { get; set; }          // Detalle del último error
 }

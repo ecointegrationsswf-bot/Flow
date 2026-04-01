@@ -61,6 +61,8 @@ export interface Campaign {
   completedAt: string | null
   createdAt: string
   createdByUserId: string
+  status?: string
+  launchedAt?: string | null
 }
 
 export interface ConversationSummary {

@@ -313,16 +313,81 @@ if (isDev)
     try
     {
         db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT 1 FROM sys.columns
-                WHERE object_id = OBJECT_ID('CampaignContacts')
-                  AND name = 'ContactDataJson'
-            )
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'ContactDataJson')
+            BEGIN ALTER TABLE CampaignContacts ADD ContactDataJson nvarchar(MAX) NULL; END");
+    }
+    catch { }
+
+    // Columnas de dispatch en CampaignContacts
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DispatchStatus')
+            BEGIN ALTER TABLE CampaignContacts ADD DispatchStatus nvarchar(30) NOT NULL DEFAULT 'Pending'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'ClaimedAt')
+            BEGIN ALTER TABLE CampaignContacts ADD ClaimedAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'SentAt')
+            BEGIN ALTER TABLE CampaignContacts ADD SentAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DispatchAttempts')
+            BEGIN ALTER TABLE CampaignContacts ADD DispatchAttempts int NOT NULL DEFAULT 0; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'GeneratedMessage')
+            BEGIN ALTER TABLE CampaignContacts ADD GeneratedMessage nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'ExternalMessageId')
+            BEGIN ALTER TABLE CampaignContacts ADD ExternalMessageId nvarchar(200) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DispatchError')
+            BEGIN ALTER TABLE CampaignContacts ADD DispatchError nvarchar(2000) NULL; END");
+    }
+    catch { }
+
+    // Columnas de lanzamiento en Campaigns
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'Status')
+            BEGIN ALTER TABLE Campaigns ADD Status nvarchar(30) NOT NULL DEFAULT 'Pending'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LaunchedAt')
+            BEGIN ALTER TABLE Campaigns ADD LaunchedAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LaunchedByUserId')
+            BEGIN ALTER TABLE Campaigns ADD LaunchedByUserId nvarchar(100) NULL; END");
+    }
+    catch { }
+
+    // Tabla CampaignDispatchLogs
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'CampaignDispatchLogs')
             BEGIN
-                ALTER TABLE CampaignContacts ADD ContactDataJson nvarchar(MAX) NULL;
+                CREATE TABLE CampaignDispatchLogs (
+                    Id                  uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    CampaignId          uniqueidentifier NOT NULL,
+                    CampaignContactId   uniqueidentifier NOT NULL,
+                    TenantId            uniqueidentifier NOT NULL,
+                    AttemptNumber       int NOT NULL DEFAULT 1,
+                    PromptSnapshot      nvarchar(MAX) NULL,
+                    ContactDataSnapshot nvarchar(MAX) NULL,
+                    GeneratedMessage    nvarchar(MAX) NULL,
+                    PhoneNumber         nvarchar(20) NOT NULL,
+                    UltraMsgResponse    nvarchar(MAX) NULL,
+                    ExternalMessageId   nvarchar(200) NULL,
+                    Status              nvarchar(20) NOT NULL,
+                    ErrorDetail         nvarchar(2000) NULL,
+                    DurationMs          int NOT NULL DEFAULT 0,
+                    OccurredAt          datetime2 NOT NULL DEFAULT GETUTCDATE()
+                );
+                CREATE INDEX IX_CampaignDispatchLogs_Campaign ON CampaignDispatchLogs (CampaignId, OccurredAt);
+                CREATE INDEX IX_CampaignDispatchLogs_Contact  ON CampaignDispatchLogs (CampaignContactId);
             END");
     }
-    catch { /* Tabla aún no existe o columna ya creada */ }
+    catch { }
 
     if (!db.SuperAdmins.Any())
     {

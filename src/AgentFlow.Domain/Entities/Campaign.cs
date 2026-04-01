@@ -2,6 +2,7 @@ using AgentFlow.Domain.Enums;
 
 namespace AgentFlow.Domain.Entities;
 
+
 /// <summary>
 /// Campaña de comunicación. Puede iniciarse por archivo cargado
 /// o por evento automático (póliza vencida, morosidad detectada).
@@ -36,6 +37,11 @@ public class Campaign
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public string CreatedByUserId { get; set; } = string.Empty;
+
+    // Lanzamiento
+    public CampaignStatus Status { get; set; } = CampaignStatus.Pending;
+    public DateTime? LaunchedAt { get; set; }
+    public string? LaunchedByUserId { get; set; }
 
     public ICollection<CampaignContact> Contacts { get; set; } = [];
 }

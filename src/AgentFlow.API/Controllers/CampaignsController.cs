@@ -7,6 +7,10 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.ComponentModel.DataAnnotations;
+using System.Text.Json;
+using AgentFlow.Domain.Enums;
+using AgentFlow.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
@@ -30,7 +34,10 @@ public class CampaignsController(
     IExcelFileProcessor excelProcessor,
     IFixedFormatCampaignService fixedFormatService,
     IBlobStorageService blobStorage,
-    ICampaignRepository campaignRepo) : ControllerBase
+    ICampaignRepository campaignRepo,
+    AgentFlowDbContext db,
+    IConfiguration cfg,
+    IHttpClientFactory httpClientFactory) : ControllerBase
 {
     /// <summary>
     /// Lista todas las campañas del tenant autenticado.
@@ -375,6 +382,91 @@ public class CampaignsController(
             totalRowsRead = parsed.TotalRowsRead,
             extraColumns = parsed.ExtraColumns,
             warnings = parsed.Warnings
+        });
+    }
+
+    /// <summary>
+    /// Lanza una campaña creada: valida los requisitos, marca el estado
+    /// y dispara el webhook de n8n para iniciar el procesamiento.
+    /// </summary>
+    [HttpPost("{id:guid}/launch")]
+    public async Task<IActionResult> Launch(Guid id, CancellationToken ct)
+    {
+        var campaign = await db.Campaigns
+            .Include(c => c.CampaignTemplate)
+            .Include(c => c.Tenant)
+            .FirstOrDefaultAsync(c => c.Id == id && c.TenantId == tenantCtx.TenantId, ct);
+
+        if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
+        if (campaign.Status == CampaignStatus.Running)
+            return Conflict(new { error = "La campaña ya está en ejecución." });
+        if (campaign.Status == CampaignStatus.Completed)
+            return Conflict(new { error = "La campaña ya fue completada." });
+
+        // Validar contactos válidos pendientes
+        var pendingCount = await db.CampaignContacts
+            .CountAsync(c => c.CampaignId == id
+                          && c.IsPhoneValid
+                          && c.DispatchStatus == DispatchStatus.Pending, ct);
+        if (pendingCount == 0)
+            return BadRequest(new { error = "La campaña no tiene contactos válidos pendientes." });
+
+        // Validar maestro con prompt vinculado
+        if (campaign.CampaignTemplate is null)
+            return BadRequest(new { error = "La campaña no tiene un maestro de campaña asociado." });
+        if (campaign.CampaignTemplate.PromptTemplateIds is null ||
+            campaign.CampaignTemplate.PromptTemplateIds.Count == 0)
+            return BadRequest(new { error = "El maestro de campaña no tiene un prompt vinculado." });
+
+        // Validar WhatsApp del tenant
+        if (string.IsNullOrEmpty(campaign.Tenant.WhatsAppInstanceId) ||
+            string.IsNullOrEmpty(campaign.Tenant.WhatsAppApiToken))
+            return BadRequest(new { error = "El tenant no tiene WhatsApp configurado (instanceId/token)." });
+
+        // Marcar como Launching
+        campaign.Status          = CampaignStatus.Launching;
+        campaign.LaunchedAt      = DateTime.UtcNow;
+        campaign.LaunchedByUserId = User.Identity?.Name ?? "system";
+        await db.SaveChangesAsync(ct);
+
+        // Disparar webhook n8n
+        var webhookUrl = cfg["N8n:CampaignWebhookUrl"];
+        if (!string.IsNullOrEmpty(webhookUrl))
+        {
+            try
+            {
+                var httpClient = httpClientFactory.CreateClient();
+                var payload = JsonSerializer.Serialize(new
+                {
+                    campaignId    = campaign.Id,
+                    tenantId      = campaign.TenantId,
+                    totalContacts = pendingCount,
+                    apiBaseUrl    = cfg["App:Url"] ?? "",
+                    apiKey        = cfg["N8n:ApiKey"] ?? "",
+                });
+                await httpClient.PostAsync(webhookUrl,
+                    new StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);
+                campaign.Status = CampaignStatus.Running;
+            }
+            catch (Exception ex)
+            {
+                campaign.Status = CampaignStatus.Failed;
+                await db.SaveChangesAsync(ct);
+                return StatusCode(502, new { error = $"No se pudo disparar n8n: {ex.Message}" });
+            }
+        }
+        else
+        {
+            campaign.Status = CampaignStatus.Running; // dev: sin n8n configurado
+        }
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new
+        {
+            campaignId      = campaign.Id,
+            status          = campaign.Status.ToString(),
+            pendingContacts = pendingCount,
+            launchedAt      = campaign.LaunchedAt,
         });
     }
 

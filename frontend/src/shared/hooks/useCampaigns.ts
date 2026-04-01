@@ -97,3 +97,12 @@ export function useUploadFixedFormat() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
   })
 }
+
+export function useLaunchCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (campaignId: string) =>
+      api.post<{ success: boolean; message: string }>(`/campaigns/${campaignId}/launch`).then((r) => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  })
+}
