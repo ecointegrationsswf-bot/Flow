@@ -30,6 +30,7 @@ public class StartCampaignCommandHandler(ICampaignRepository campaigns) : IReque
             TenantId = cmd.TenantId,
             Name = cmd.Name,
             AgentDefinitionId = cmd.AgentDefinitionId,
+            CampaignTemplateId = cmd.CampaignTemplateId,
             Channel = cmd.Channel,
             Trigger = cmd.Trigger,
             IsActive = true,

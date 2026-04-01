@@ -12,7 +12,8 @@ public record StartCampaignCommand(
     CampaignTrigger Trigger,
     List<ContactRow> Contacts,
     string CreatedByUserId,
-    DateTime? ScheduledAt = null
+    DateTime? ScheduledAt = null,
+    Guid? CampaignTemplateId = null
 ) : IRequest<Guid>;
 
 public record ContactRow(

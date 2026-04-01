@@ -15,7 +15,7 @@ using Microsoft.EntityFrameworkCore;
 namespace AgentFlow.API.Controllers;
 
 public record CampaignUploadRequest(string Name, Guid AgentId, DateTime? ScheduledAt);
-public record UploadFixedFormatRequest([Required] string Name, [Required] Guid AgentId, DateTime? ScheduledAt);
+public record UploadFixedFormatRequest([Required] string Name, [Required] Guid AgentId, DateTime? ScheduledAt, Guid? CampaignTemplateId = null);
 
 public record CreateCampaignFromFileRequest(
     string Name,
@@ -374,7 +374,8 @@ public class CampaignsController(
             CampaignTrigger.FileUpload,
             parsed.Contacts,
             User.Identity?.Name ?? "system",
-            req.ScheduledAt
+            req.ScheduledAt,
+            req.CampaignTemplateId
         ), ct);
 
         return Ok(new
@@ -480,8 +481,17 @@ public class CampaignsController(
                     },
                     contacts,
                 });
-                await httpClient.PostAsync(webhookUrl,
+                var n8nResponse = await httpClient.PostAsync(webhookUrl,
                     new StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);
+
+                if (!n8nResponse.IsSuccessStatusCode)
+                {
+                    var body = await n8nResponse.Content.ReadAsStringAsync(ct);
+                    campaign.Status = CampaignStatus.Failed;
+                    await db.SaveChangesAsync(ct);
+                    return StatusCode(502, new { error = $"n8n rechazó la solicitud ({(int)n8nResponse.StatusCode}). ¿El workflow está activado? Detalle: {body[..Math.Min(200, body.Length)]}" });
+                }
+
                 campaign.Status = CampaignStatus.Running;
             }
             catch (Exception ex)

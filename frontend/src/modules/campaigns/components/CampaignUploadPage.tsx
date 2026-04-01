@@ -88,6 +88,7 @@ export function CampaignUploadPage() {
     formData.append('file', file)
     formData.append('Name', selectedTemplate.name)
     formData.append('AgentId', selectedTemplate.agentDefinitionId)
+    formData.append('CampaignTemplateId', selectedTemplate.id)
     if (startDate) formData.append('ScheduledAt', new Date(startDate).toISOString())
 
     createMutation.mutate(formData, {
