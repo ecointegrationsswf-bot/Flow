@@ -420,10 +420,23 @@ public class CampaignsController(
             campaign.CampaignTemplate.PromptTemplateIds.Count == 0)
             return BadRequest(new { error = "El maestro de campaña no tiene un prompt vinculado." });
 
-        // Validar WhatsApp del tenant
-        if (string.IsNullOrEmpty(campaign.Tenant.WhatsAppInstanceId) ||
-            string.IsNullOrEmpty(campaign.Tenant.WhatsAppApiToken))
-            return BadRequest(new { error = "El tenant no tiene WhatsApp configurado (instanceId/token)." });
+        // Resolver credenciales WhatsApp: primero Tenant fields, si vacíos buscar en WhatsAppLines
+        var instanceId = campaign.Tenant.WhatsAppInstanceId;
+        var apiToken   = campaign.Tenant.WhatsAppApiToken;
+
+        if (string.IsNullOrEmpty(instanceId) || string.IsNullOrEmpty(apiToken))
+        {
+            var activeLine = await db.WhatsAppLines
+                .Where(l => l.TenantId == campaign.TenantId && l.IsActive)
+                .OrderByDescending(l => l.CreatedAt)
+                .FirstOrDefaultAsync(ct);
+
+            if (activeLine is null)
+                return BadRequest(new { error = "El tenant no tiene WhatsApp configurado. Ve a Configuración → WhatsApp y agrega una línea." });
+
+            instanceId = activeLine.InstanceId;
+            apiToken   = activeLine.ApiToken;
+        }
 
         // Marcar como Launching
         campaign.Status          = CampaignStatus.Launching;
@@ -461,9 +474,9 @@ public class CampaignsController(
                     warmupDay     = 0,
                     tenantConfig  = new
                     {
-                        tenantId             = campaign.TenantId,
-                        ultraMsgInstanceId   = campaign.Tenant.WhatsAppInstanceId,
-                        ultraMsgToken        = campaign.Tenant.WhatsAppApiToken,
+                        tenantId           = campaign.TenantId,
+                        ultraMsgInstanceId = instanceId,
+                        ultraMsgToken      = apiToken,
                     },
                     contacts,
                 });
