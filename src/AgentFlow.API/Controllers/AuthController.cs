@@ -66,21 +66,16 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 return Ok(new { requiresPasswordChange = true, tempToken });
             }
 
-            // Paso 2: Retornar token JWT directamente (2FA opcional, no obligatorio)
+            // Paso 2: Enviar código 2FA
+            var code = GenerateOtpCode();
+            user.TwoFactorCode = code;
+            user.TwoFactorExpiry = DateTime.UtcNow.AddMinutes(5);
             await db.SaveChangesAsync(ct);
 
-            var token = GenerateJwt(user);
-            return Ok(new LoginResponse(
-                Token: token,
-                TenantId: user.TenantId.ToString(),
-                User: new UserInfo(
-                    Id: user.Id.ToString(),
-                    FullName: user.FullName,
-                    Email: user.Email,
-                    Role: user.Role.ToString(),
-                    AvatarUrl: user.AvatarUrl
-                )
-            ));
+            _ = emailService.SendTwoFactorCodeAsync(user.Email, user.FullName, code, ct);
+
+            var twoFaToken = GenerateTempToken(user.Id.ToString(), "2fa");
+            return Ok(new { requires2FA = true, tempToken = twoFaToken, email = MaskEmail(user.Email) });
         }
         catch (Exception ex)
         {
