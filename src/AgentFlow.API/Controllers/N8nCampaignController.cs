@@ -244,7 +244,9 @@ public class N8nCampaignController(
 
             var jsonPayload = JsonSerializer.Serialize(payload);
             var content     = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
-            var url         = $"https://api.ultramsg.com/{instanceId}/messages/chat";
+            var normalizedInstanceId = instanceId.StartsWith("instance", StringComparison.OrdinalIgnoreCase)
+                ? instanceId : $"instance{instanceId}";
+            var url         = $"https://api.ultramsg.com/{normalizedInstanceId}/messages/chat";
 
             var httpResp = await httpClient.PostAsync(url, content, ct);
             ultraMsgResponse = await httpResp.Content.ReadAsStringAsync(ct);

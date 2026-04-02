@@ -48,6 +48,8 @@ public class CampaignRepository(AgentFlowDbContext db) : ICampaignRepository
                 CreatedAt = c.CreatedAt,
                 CreatedByUserId = c.CreatedByUserId,
                 SourceFileName = c.SourceFileName,
+                Status = c.Status,
+                LaunchedAt = c.LaunchedAt,
             })
             .ToListAsync(ct);
     }

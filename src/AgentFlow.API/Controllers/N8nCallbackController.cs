@@ -158,9 +158,10 @@ public class N8nCallbackController(
 
         var sw = Stopwatch.StartNew();
 
-        // ── Cargar campaña y prompt ──────────────────────────────────────────
+        // ── Cargar campaña, tenant y prompt ─────────────────────────────────
         var campaign = await db.Campaigns
             .Include(c => c.CampaignTemplate)
+            .Include(c => c.Tenant)
             .FirstOrDefaultAsync(c => c.Id == req.CampaignId, ct);
 
         if (campaign is null)
@@ -191,9 +192,10 @@ public class N8nCallbackController(
             var resolvedPrompt = CallbackHelpers.ResolveVariables(promptText, context);
             var userMsg        = CallbackHelpers.BuildUserMessage(req.ContactDataJson, context);
 
-            var apiKey = cfg["Anthropic:ApiKey"];
-            if (string.IsNullOrEmpty(apiKey) || apiKey == "YOUR_ANTHROPIC_API_KEY")
-                return StatusCode(503, new { error = "Anthropic API key no configurada.", success = false });
+            // La API key de Anthropic se almacena por tenant (Tenant.LlmApiKey)
+            var apiKey = campaign.Tenant?.LlmApiKey;
+            if (string.IsNullOrEmpty(apiKey))
+                return StatusCode(503, new { error = "El tenant no tiene Anthropic API key configurada (LlmApiKey).", success = false });
 
             var client   = new AnthropicClient(apiKey);
             var messages = new List<Anthropic.SDK.Messaging.Message>
@@ -235,17 +237,20 @@ public class N8nCallbackController(
         try
         {
             var httpClient = httpClientFactory.CreateClient();
-            var payload    = JsonSerializer.Serialize(new
+            // UltraMsg requiere form-encoded, no JSON (igual que UltraMsgProvider.SendTextAsync)
+            // El instanceId en BD puede venir como "140984" o "instance140984" — normalizar
+            var normalizedInstanceId = instanceId.StartsWith("instance", StringComparison.OrdinalIgnoreCase)
+                ? instanceId : $"instance{instanceId}";
+            var formData = new FormUrlEncodedContent(new Dictionary<string, string>
             {
-                token,
-                to      = req.Phone,
-                body    = generatedMessage,
-                priority = 1,
+                ["token"] = token,
+                ["to"]    = req.Phone,
+                ["body"]  = generatedMessage,
             });
 
             var httpResp = await httpClient.PostAsync(
-                $"https://api.ultramsg.com/{instanceId}/messages/chat",
-                new StringContent(payload, System.Text.Encoding.UTF8, "application/json"),
+                $"https://api.ultramsg.com/{normalizedInstanceId}/messages/chat",
+                formData,
                 ct);
 
             var responseBody = await httpResp.Content.ReadAsStringAsync(ct);
@@ -434,7 +439,7 @@ public record ScheduleDeferredRequest(
 
 public record CampaignSendRequest(
     Guid CampaignId,
-    Guid AgentId,
+    Guid? AgentId,
     string Phone,
     string? ClientName,
     string? PolicyNumber,

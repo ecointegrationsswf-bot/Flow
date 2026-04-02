@@ -1,5 +1,6 @@
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Rocket } from 'lucide-react'
+import { Megaphone, Plus, Rocket, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
@@ -23,9 +24,28 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   Failed:     { label: 'Error',      className: 'bg-red-100 text-red-700' },
 }
 
+// Estados que permiten lanzar
+const LAUNCHABLE = new Set(['Pending', 'Failed'])
+
 export function CampaignsPage() {
   const { data: campaigns, isLoading, isError } = useCampaigns()
   const launchMut = useLaunchCampaign()
+  const [launchingId, setLaunchingId] = useState<string | null>(null)
+  const [launchError, setLaunchError] = useState<string | null>(null)
+
+  const handleLaunch = (id: string) => {
+    setLaunchingId(id)
+    setLaunchError(null)
+    launchMut.mutate(id, {
+      onError: (err: unknown) => {
+        const msg =
+          (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+          ?? 'Error al lanzar la campaña.'
+        setLaunchError(msg)
+      },
+      onSettled: () => setLaunchingId(null),
+    })
+  }
 
   if (isLoading) return <LoadingSpinner />
 
@@ -43,6 +63,13 @@ export function CampaignsPage() {
           </Link>
         }
       />
+
+      {launchError && (
+        <div className="mb-4 flex items-center justify-between rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">
+          <span>{launchError}</span>
+          <button onClick={() => setLaunchError(null)} className="ml-3 text-red-400 hover:text-red-600">✕</button>
+        </div>
+      )}
 
       {isError || !campaigns || campaigns.length === 0 ? (
         <EmptyState
@@ -75,6 +102,12 @@ export function CampaignsPage() {
             <tbody className="divide-y divide-gray-200">
               {campaigns.map((c) => {
                 const pct = c.totalContacts > 0 ? Math.round((c.processedContacts / c.totalContacts) * 100) : 0
+                const status = c.status ?? (c.completedAt ? 'Completed' : c.isActive ? 'Running' : 'Pending')
+                const stCfg = statusConfig[status] ?? statusConfig.Pending
+                const isRunning = status === 'Running' || status === 'Launching'
+                const canLaunch = LAUNCHABLE.has(status)
+                const isThisLaunching = launchingId === c.id
+
                 return (
                   <tr key={c.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3">
@@ -90,30 +123,34 @@ export function CampaignsPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2">
                         <div className="h-2 w-24 overflow-hidden rounded-full bg-gray-200">
-                          <div className="h-full rounded-full bg-blue-600" style={{ width: `${pct}%` }} />
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${isRunning ? 'bg-green-500' : 'bg-blue-600'}`}
+                            style={{ width: `${pct}%` }}
+                          />
                         </div>
                         <span className="text-xs text-gray-500">{c.processedContacts}/{c.totalContacts}</span>
                       </div>
                     </td>
                     <td className="px-4 py-3">
-                      {(() => {
-                        const st = c.status ?? (c.completedAt ? 'Completed' : c.isActive ? 'Running' : 'Pending')
-                        const cfg = statusConfig[st] ?? statusConfig.Pending
-                        return <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${cfg.className}`}>{cfg.label}</span>
-                      })()}
+                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${stCfg.className}`}>
+                        {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
+                        {stCfg.label}
+                      </span>
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">
                       {format(new Date(c.createdAt), 'dd/MM/yyyy')}
                     </td>
                     <td className="px-4 py-3">
-                      {(!c.status || c.status === 'Pending') && (
+                      {canLaunch && (
                         <button
-                          onClick={() => launchMut.mutate(c.id)}
-                          disabled={launchMut.isPending}
+                          onClick={() => handleLaunch(c.id)}
+                          disabled={isThisLaunching || launchingId !== null}
                           className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
                         >
-                          <Rocket className="h-3.5 w-3.5" />
-                          {launchMut.isPending ? 'Lanzando...' : 'Lanzar'}
+                          {isThisLaunching
+                            ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            : <Rocket className="h-3.5 w-3.5" />}
+                          {isThisLaunching ? 'Lanzando...' : 'Lanzar'}
                         </button>
                       )}
                     </td>

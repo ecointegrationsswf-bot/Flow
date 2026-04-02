@@ -34,7 +34,7 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
             ["body"]  = req.Body
         });
         var response = await http.PostAsync(
-            $"https://api.ultramsg.com/{options.InstanceId}/messages/chat", payload, ct);
+            $"https://api.ultramsg.com/{NormalizeInstanceId(options.InstanceId)}/messages/chat", payload, ct);
 
         if (!response.IsSuccessStatusCode)
             return new SendResult(false, null, $"UltraMsg HTTP {response.StatusCode}");
@@ -55,7 +55,7 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
             ["caption"] = req.Body
         };
         var response = await http.PostAsync(
-            $"https://api.ultramsg.com/{options.InstanceId}/messages/image",
+            $"https://api.ultramsg.com/{NormalizeInstanceId(options.InstanceId)}/messages/image",
             new FormUrlEncodedContent(fields), ct);
 
         if (!response.IsSuccessStatusCode)
@@ -78,7 +78,7 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
             ["caption"]  = req.Body
         };
         var response = await http.PostAsync(
-            $"https://api.ultramsg.com/{options.InstanceId}/messages/document",
+            $"https://api.ultramsg.com/{NormalizeInstanceId(options.InstanceId)}/messages/document",
             new FormUrlEncodedContent(fields), ct);
 
         if (!response.IsSuccessStatusCode)
@@ -98,6 +98,11 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
         // UltraMsg envía token en el body; validación básica
         return payload.Contains(options.Token);
     }
+
+    // UltraMsg usa el prefijo "instance" en la URL (ej: instance140984)
+    // pero a veces se almacena solo el número (140984) — normalizar
+    private static string NormalizeInstanceId(string id)
+        => id.StartsWith("instance", StringComparison.OrdinalIgnoreCase) ? id : $"instance{id}";
 }
 
 public record UltraMsgOptions(string InstanceId, string Token);

@@ -23,6 +23,8 @@ export function useCampaigns() {
   return useQuery({
     queryKey: ['campaigns'],
     queryFn: () => api.get<Campaign[]>('/campaigns').then((r) => r.data),
+    // Refresca cada 8 segundos para mostrar progreso en tiempo real
+    refetchInterval: 8000,
   })
 }
 
@@ -103,6 +105,7 @@ export function useLaunchCampaign() {
   return useMutation({
     mutationFn: (campaignId: string) =>
       api.post<{ success: boolean; message: string }>(`/campaigns/${campaignId}/launch`).then((r) => r.data),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+    // Refrescar siempre — tanto en éxito como en error (ej: 409 ya en ejecución)
+    onSettled: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
   })
 }
