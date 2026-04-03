@@ -81,6 +81,26 @@ public class AnthropicAgentRunner(
         sb.AppendLine("[INTENT:cobros] | [INTENT:reclamos] | [INTENT:renovaciones] | [INTENT:humano] | [INTENT:cierre]");
         sb.AppendLine();
 
+        // Inyectar fecha/hora actual en zona horaria de Panamá para que el agente
+        // pueda resolver correctamente expresiones relativas del cliente
+        // ("mañana", "pasado mañana", "el próximo lunes", etc.)
+        var panamaZone = TimeZoneInfo.FindSystemTimeZoneById(
+            OperatingSystem.IsWindows() ? "SA Pacific Standard Time" : "America/Panama");
+        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, panamaZone);
+
+        var culture = new System.Globalization.CultureInfo("es-PA");
+        sb.AppendLine("## Contexto temporal");
+        sb.AppendLine($"- Fecha y hora actual (Panamá): {now.ToString("dddd d 'de' MMMM 'de' yyyy, HH:mm", culture)}");
+        sb.AppendLine($"- Mañana: {now.AddDays(1).ToString("dddd d/MM/yyyy", culture)}");
+        sb.AppendLine($"- Pasado mañana: {now.AddDays(2).ToString("dddd d/MM/yyyy", culture)}");
+        sb.AppendLine($"- Próximo lunes: {NextWeekday(now, DayOfWeek.Monday):dd/MM/yyyy}");
+        sb.AppendLine($"- Próximo viernes: {NextWeekday(now, DayOfWeek.Friday):dd/MM/yyyy}");
+        sb.AppendLine("Cuando el cliente indique una fecha relativa (mañana, pasado mañana, el lunes,");
+        sb.AppendLine("la próxima semana, a fin de mes, etc.), calcula la fecha exacta y confírmala");
+        sb.AppendLine("al cliente en formato legible (ej: lunes 7 de abril). Nunca confirmes");
+        sb.AppendLine("un compromiso usando solo la expresión relativa del cliente.");
+        sb.AppendLine();
+
         if (req.ClientContext?.Count > 0)
         {
             sb.AppendLine("## Contexto del cliente");
@@ -89,6 +109,14 @@ public class AnthropicAgentRunner(
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>Calcula la fecha del próximo día de la semana indicado (nunca el día actual).</summary>
+    private static DateTime NextWeekday(DateTime from, DayOfWeek target)
+    {
+        var daysUntil = ((int)target - (int)from.DayOfWeek + 7) % 7;
+        if (daysUntil == 0) daysUntil = 7; // si hoy es ese día, ir a la próxima semana
+        return from.AddDays(daysUntil).Date;
     }
 
     private async Task<List<Anthropic.SDK.Messaging.Message>> BuildMessagesAsync(
