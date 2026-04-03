@@ -487,7 +487,39 @@ public class N8nCallbackController(
             await db.SaveChangesAsync(ct);
         }
 
-        return Ok(new { updated = contact is not null });
+        // Incrementar contador de forma atómica (igual que contact-sent)
+        // para que la campaña pueda auto-completar aunque haya fallas.
+        await db.Campaigns
+            .Where(c => c.Id == campaignId)
+            .ExecuteUpdateAsync(s => s.SetProperty(
+                c => c.ProcessedContacts, c => c.ProcessedContacts + 1), ct);
+
+        bool autoCompleted = false;
+        var freshCampaign = await db.Campaigns
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == campaignId, ct);
+
+        if (freshCampaign is not null
+            && freshCampaign.ProcessedContacts >= freshCampaign.TotalContacts
+            && freshCampaign.TotalContacts > 0
+            && freshCampaign.Status != CampaignStatus.Completed
+            && freshCampaign.Status != CampaignStatus.Failed)
+        {
+            var campaignToComplete = await db.Campaigns
+                .FirstOrDefaultAsync(c => c.Id == campaignId, ct);
+
+            if (campaignToComplete is not null
+                && campaignToComplete.Status != CampaignStatus.Completed
+                && campaignToComplete.Status != CampaignStatus.Failed)
+            {
+                campaignToComplete.Status = CampaignStatus.Completed;
+                campaignToComplete.CompletedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+                autoCompleted = true;
+            }
+        }
+
+        return Ok(new { updated = contact is not null, autoCompleted });
     }
 
     // ── 7. Marcar campaña como completada ─────────────────────────────────────
