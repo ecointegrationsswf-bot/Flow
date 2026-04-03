@@ -17,6 +17,7 @@ public record LoginRequest(string Email, string Password);
 public record UpdateSendGridRequest(string? SendGridApiKey, string? SenderEmail);
 public record UpdateLlmConfigRequest(string LlmProvider, string? LlmApiKey, string LlmModel);
 public record UpdateTimezoneRequest(string TimeZone);
+public record UpdateCampaignDelayRequest(int DelaySeconds);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
 public record Verify2FARequest(string TempToken, string Code);
@@ -214,7 +215,8 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 LlmApiKey = string.IsNullOrEmpty(t.LlmApiKey) ? null : "***" + t.LlmApiKey.Substring(Math.Max(0, t.LlmApiKey.Length - 4)),
                 t.LlmModel,
                 SendGridApiKey = string.IsNullOrEmpty(t.SendGridApiKey) ? null : "***" + t.SendGridApiKey.Substring(Math.Max(0, t.SendGridApiKey.Length - 4)),
-                t.SenderEmail
+                t.SenderEmail,
+                t.CampaignMessageDelaySeconds
             })
             .FirstOrDefaultAsync(ct);
 
@@ -279,6 +281,26 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
 
         await db.SaveChangesAsync(ct);
         return Ok(new { message = "Configuracion de LLM actualizada." });
+    }
+
+    [HttpPut("tenant/campaign-delay")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateCampaignDelay([FromBody] UpdateCampaignDelayRequest req, CancellationToken ct)
+    {
+        if (req.DelaySeconds < 3 || req.DelaySeconds > 120)
+            return BadRequest(new { error = "El delay debe estar entre 3 y 120 segundos." });
+
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        tenant.CampaignMessageDelaySeconds = req.DelaySeconds;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { delaySeconds = tenant.CampaignMessageDelaySeconds });
     }
 
     [HttpPost("forgot-password")]

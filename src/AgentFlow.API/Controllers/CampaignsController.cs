@@ -480,10 +480,11 @@ public class CampaignsController(
                 var httpClient = httpClientFactory.CreateClient();
                 var payload = JsonSerializer.Serialize(new
                 {
-                    campaignId    = campaign.Id,
-                    agentId       = campaign.AgentDefinitionId,
-                    warmupDay     = 0,
-                    tenantConfig  = new
+                    campaignId          = campaign.Id,
+                    agentId             = campaign.AgentDefinitionId,
+                    warmupDay           = 0,
+                    messageDelaySeconds = campaign.Tenant.CampaignMessageDelaySeconds,
+                    tenantConfig        = new
                     {
                         tenantId           = campaign.TenantId,
                         ultraMsgInstanceId = instanceId,

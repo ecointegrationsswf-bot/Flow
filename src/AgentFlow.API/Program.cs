@@ -358,6 +358,9 @@ if (isDev)
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LaunchedByUserId')
             BEGIN ALTER TABLE Campaigns ADD LaunchedByUserId nvarchar(100) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'CampaignMessageDelaySeconds')
+            BEGIN ALTER TABLE Tenants ADD CampaignMessageDelaySeconds int NOT NULL DEFAULT 10; END");
     }
     catch { }
 

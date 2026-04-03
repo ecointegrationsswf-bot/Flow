@@ -23,6 +23,7 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         b.Property(t => t.LlmModel).HasMaxLength(100);
         b.Property(t => t.SendGridApiKey).HasMaxLength(500);
         b.Property(t => t.SenderEmail).HasMaxLength(200);
+        b.Property(t => t.CampaignMessageDelaySeconds).HasDefaultValue(10);
         b.HasMany(t => t.Agents).WithOne(a => a.Tenant).HasForeignKey(a => a.TenantId);
         b.HasMany(t => t.Campaigns).WithOne(c => c.Tenant).HasForeignKey(c => c.TenantId);
     }

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Save, Mail, Brain, Clock } from 'lucide-react'
-import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone } from '@/shared/hooks/useTenant'
+import { Loader2, Save, Mail, Brain, Clock, MessageSquare } from 'lucide-react'
+import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone, useUpdateCampaignDelay } from '@/shared/hooks/useTenant'
 
 const TIMEZONES = [
   { value: 'America/Panama',      label: 'America/Panama (UTC-5)' },
@@ -47,6 +47,7 @@ export function TenantSettingsTab() {
   const updateSendGrid = useUpdateTenantSendGrid()
   const updateLlm = useUpdateTenantLlm()
   const updateTimezone = useUpdateTenantTimezone()
+  const updateDelay = useUpdateCampaignDelay()
 
   const [sendGridApiKey, setSendGridApiKey] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
@@ -58,6 +59,9 @@ export function TenantSettingsTab() {
   const [timeZone, setTimeZone] = useState('America/Panama')
   const [timezoneSaved, setTimezoneSaved] = useState(false)
 
+  const [campaignDelay, setCampaignDelay] = useState(10)
+  const [delaySaved, setDelaySaved] = useState(false)
+
   useEffect(() => {
     if (tenant) {
       setSendGridApiKey('')
@@ -66,6 +70,7 @@ export function TenantSettingsTab() {
       setLlmApiKey('')
       setLlmModel(tenant.llmModel ?? 'claude-sonnet-4-6')
       setTimeZone(tenant.timeZone ?? 'America/Panama')
+      setCampaignDelay(tenant.campaignMessageDelaySeconds ?? 10)
     }
   }, [tenant])
 
@@ -73,6 +78,12 @@ export function TenantSettingsTab() {
     await updateTimezone.mutateAsync(timeZone)
     setTimezoneSaved(true)
     setTimeout(() => setTimezoneSaved(false), 2500)
+  }
+
+  const handleSaveDelay = async () => {
+    await updateDelay.mutateAsync(campaignDelay)
+    setDelaySaved(true)
+    setTimeout(() => setDelaySaved(false), 2500)
   }
 
   const handleSaveSendGrid = () => {
@@ -250,6 +261,59 @@ export function TenantSettingsTab() {
           {updateLlm.isError && (
             <p className="mt-2 text-sm text-red-600">Error al actualizar la configuracion de LLM.</p>
           )}
+        </div>
+      </div>
+
+      {/* Delay entre mensajes de campaña */}
+      <div className="rounded-lg bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-green-600" />
+          <h3 className="text-sm font-semibold text-gray-900">Delay entre mensajes de campaña</h3>
+        </div>
+        <p className="mb-5 text-xs text-gray-500">
+          Tiempo de espera entre cada mensaje enviado al lanzar una campaña. Valores bajos pueden causar bloqueos de WhatsApp. Recomendado: 8–15 segundos.
+        </p>
+        <div className="space-y-3">
+          <div className="flex items-center gap-4">
+            <input
+              type="range"
+              min={3}
+              max={120}
+              step={1}
+              value={campaignDelay}
+              onChange={e => setCampaignDelay(Number(e.target.value))}
+              className="flex-1 accent-green-600"
+            />
+            <div className="flex w-24 items-center gap-1">
+              <input
+                type="number"
+                min={3}
+                max={120}
+                value={campaignDelay}
+                onChange={e => setCampaignDelay(Math.min(120, Math.max(3, Number(e.target.value))))}
+                className="w-16 rounded-md border border-gray-300 px-2 py-1.5 text-center text-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+              />
+              <span className="text-xs text-gray-500">seg</span>
+            </div>
+          </div>
+          <div className="flex justify-between text-xs text-gray-400">
+            <span>3 seg (mínimo)</span>
+            <span className={`font-medium ${campaignDelay <= 5 ? 'text-red-500' : campaignDelay <= 10 ? 'text-yellow-600' : 'text-green-600'}`}>
+              {campaignDelay <= 5 ? 'Riesgo de bloqueo' : campaignDelay <= 10 ? 'Aceptable' : 'Seguro'}
+            </span>
+            <span>120 seg (máximo)</span>
+          </div>
+        </div>
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={handleSaveDelay}
+            disabled={updateDelay.isPending}
+            className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            {updateDelay.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {delaySaved ? '¡Guardado!' : updateDelay.isPending ? 'Guardando...' : 'Guardar delay'}
+          </button>
         </div>
       </div>
 

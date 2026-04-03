@@ -18,6 +18,7 @@ export interface TenantInfo {
   llmModel: string
   sendGridApiKey: string | null
   senderEmail: string | null
+  campaignMessageDelaySeconds: number
 }
 
 export function useTenant() {
@@ -53,6 +54,15 @@ export function useUpdateTenantTimezone() {
   return useMutation({
     mutationFn: (timeZone: string) =>
       api.put('/auth/tenant/timezone', { timeZone }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateCampaignDelay() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (delaySeconds: number) =>
+      api.put('/auth/tenant/campaign-delay', { delaySeconds }).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
   })
 }

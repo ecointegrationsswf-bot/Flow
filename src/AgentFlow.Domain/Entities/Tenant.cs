@@ -38,6 +38,10 @@ public class Tenant
     public string? SendGridApiKey { get; set; }
     public string? SenderEmail { get; set; }
 
+    // Throttling de campañas — segundos de espera entre cada mensaje enviado
+    // Valor mínimo: 3. Valor máximo: 120. Default: 10 (seguro para WhatsApp).
+    public int CampaignMessageDelaySeconds { get; set; } = 10;
+
     public ICollection<AgentDefinition> Agents { get; set; } = [];
     public ICollection<Campaign> Campaigns { get; set; } = [];
     public ICollection<AppUser> Users { get; set; } = [];
