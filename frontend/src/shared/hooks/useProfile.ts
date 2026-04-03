@@ -8,6 +8,7 @@ interface Profile {
   role: string
   avatarUrl?: string | null
   createdAt?: string | null
+  notifyPhone?: string | null
 }
 
 export function useProfile() {
@@ -20,7 +21,7 @@ export function useProfile() {
 export function useUpdateProfile() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (data: { fullName: string }) =>
+    mutationFn: (data: { fullName: string; notifyPhone?: string | null }) =>
       api.put<Profile>('/profile', data).then((r) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['profile'] })

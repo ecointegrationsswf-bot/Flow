@@ -48,7 +48,8 @@ public class ProcessIncomingMessageHandler(
     IAgentRepository agents,
     IChannelProviderFactory channelFactory,
     ISessionStore sessions,
-    IConversationNotifier notifier
+    IConversationNotifier notifier,
+    ITransferChatService transferChat
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
     public async Task<ProcessIncomingMessageResult> Handle(
@@ -275,6 +276,17 @@ public class ProcessIncomingMessageHandler(
                 if (agentResponse.ShouldEscalate)
                 {
                     conversation.Status = ConversationStatus.EscalatedToHuman;
+
+                    // TRANSFER_CHAT: notificar al ejecutivo que lanzó la campaña
+                    try
+                    {
+                        await transferChat.ExecuteIfApplicableAsync(conversation, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[TransferChat] Error: {ex.Message}");
+                    }
+
                     try
                     {
                         await notifier.NotifyEscalationAsync(

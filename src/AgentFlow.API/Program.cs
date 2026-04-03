@@ -103,6 +103,8 @@ catch (Exception ex)
 // ── Campaign Dispatcher (envío de campañas con rate limiting) ────────
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ITransferChatService,
+    AgentFlow.Infrastructure.Campaigns.TransferChatService>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
 var jwtSecret = cfg["Jwt:Secret"] ?? "AgentFlow_Dev_Secret_Key_Min32Chars!!";

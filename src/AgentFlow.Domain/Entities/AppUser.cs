@@ -26,6 +26,12 @@ public class AppUser
 
     public string? AvatarUrl { get; set; }
 
+    /// <summary>
+    /// Número de WhatsApp del ejecutivo en formato E.164 (ej: +50768001234).
+    /// Se usa para enviarle notificaciones cuando un cliente solicita atención humana.
+    /// </summary>
+    public string? NotifyPhone { get; set; }
+
     // Seguridad
     public bool MustChangePassword { get; set; } = true;
     public string? TwoFactorCode { get; set; }

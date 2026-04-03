@@ -449,10 +449,20 @@ public class CampaignsController(
             apiToken   = activeLine.ApiToken;
         }
 
-        // Marcar como Launching
-        campaign.Status          = CampaignStatus.Launching;
-        campaign.LaunchedAt      = DateTime.UtcNow;
+        // Marcar como Launching — copiar teléfono de notificación del ejecutivo
+        campaign.Status           = CampaignStatus.Launching;
+        campaign.LaunchedAt       = DateTime.UtcNow;
         campaign.LaunchedByUserId = CurrentUser;
+
+        var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
+                     ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        if (Guid.TryParse(userIdStr, out var launcherId))
+        {
+            var launcher = await db.AppUsers.FindAsync([launcherId], ct);
+            if (!string.IsNullOrEmpty(launcher?.NotifyPhone))
+                campaign.LaunchedByUserPhone = launcher.NotifyPhone;
+        }
+
         await db.SaveChangesAsync(ct);
 
         // Disparar webhook n8n

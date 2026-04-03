@@ -43,5 +43,12 @@ public class Campaign
     public DateTime? LaunchedAt { get; set; }
     public string? LaunchedByUserId { get; set; }
 
+    /// <summary>
+    /// Teléfono WhatsApp del ejecutivo que lanzó la campaña (copiado desde AppUser.NotifyPhone
+    /// al momento del lanzamiento). Se usa para el TRANSFER_CHAT — notificar al ejecutivo
+    /// cuando un cliente solicita atención humana.
+    /// </summary>
+    public string? LaunchedByUserPhone { get; set; }
+
     public ICollection<CampaignContact> Contacts { get; set; } = [];
 }
