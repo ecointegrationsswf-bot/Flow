@@ -61,6 +61,7 @@ export interface Campaign {
   completedAt: string | null
   createdAt: string
   createdByUserId: string
+  launchedByUserId?: string | null
   status?: string
   launchedAt?: string | null
 }

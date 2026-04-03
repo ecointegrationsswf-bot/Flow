@@ -63,6 +63,8 @@ public class CampaignsController(
             c.SourceFileName,
             Status = c.Status.ToString(),
             c.LaunchedAt,
+            c.CreatedByUserId,
+            c.LaunchedByUserId,
             // Progreso en porcentaje
             Progress = c.TotalContacts > 0
                 ? Math.Round((double)c.ProcessedContacts / c.TotalContacts * 100, 1)

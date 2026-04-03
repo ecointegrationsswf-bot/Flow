@@ -96,6 +96,7 @@ export function CampaignsPage() {
                 <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Progreso</th>
                 <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Estado</th>
                 <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Fecha</th>
+                <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Creada por</th>
                 <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Acciones</th>
               </tr>
             </thead>
@@ -139,6 +140,9 @@ export function CampaignsPage() {
                     </td>
                     <td className="px-4 py-3 text-xs text-gray-500">
                       {format(new Date(c.createdAt), 'dd/MM/yyyy')}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-600">
+                      {c.createdByUserId || '—'}
                     </td>
                     <td className="px-4 py-3">
                       {canLaunch && (
