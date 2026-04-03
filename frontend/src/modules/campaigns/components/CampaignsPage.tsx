@@ -35,7 +35,6 @@ export function CampaignsPage() {
   // Filtros
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
-  const [filterTrigger, setFilterTrigger] = useState('')
   const [filterChannel, setFilterChannel] = useState('')
 
   const handleLaunch = (id: string) => {
@@ -60,7 +59,6 @@ export function CampaignsPage() {
       const statusLabel = statusConfig[status]?.label ?? status
 
       if (filterStatus && status !== filterStatus) return false
-      if (filterTrigger && c.trigger !== filterTrigger) return false
       if (filterChannel && c.channel !== filterChannel) return false
 
       if (!q) return true
@@ -74,14 +72,13 @@ export function CampaignsPage() {
         format(new Date(c.createdAt), 'dd/MM/yyyy').includes(q)
       )
     })
-  }, [campaigns, search, filterStatus, filterTrigger, filterChannel])
+  }, [campaigns, search, filterStatus, filterChannel])
 
-  const hasFilters = search || filterStatus || filterTrigger || filterChannel
+  const hasFilters = search || filterStatus || filterChannel
 
   const clearFilters = () => {
     setSearch('')
     setFilterStatus('')
-    setFilterTrigger('')
     setFilterChannel('')
   }
 
@@ -147,18 +144,6 @@ export function CampaignsPage() {
             >
               <option value="">Todos los estados</option>
               {Object.entries(statusConfig).map(([key, { label }]) => (
-                <option key={key} value={key}>{label}</option>
-              ))}
-            </select>
-
-            {/* Filtro Tipo */}
-            <select
-              value={filterTrigger}
-              onChange={(e) => setFilterTrigger(e.target.value)}
-              className="rounded-lg border border-gray-300 py-2 px-3 text-sm text-gray-700 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              <option value="">Todos los tipos</option>
-              {Object.entries(triggerLabels).map(([key, label]) => (
                 <option key={key} value={key}>{label}</option>
               ))}
             </select>
