@@ -492,7 +492,12 @@ public class CampaignsController(
                     return StatusCode(502, new { error = $"n8n rechazó la solicitud ({(int)n8nResponse.StatusCode}). ¿El workflow está activado? Detalle: {body[..Math.Min(200, body.Length)]}" });
                 }
 
-                campaign.Status = CampaignStatus.Running;
+                // Recargar desde BD: n8n puede haber procesado todos los contactos y llamado
+                // contact-sent (auto-complete) ANTES de responder este webhook. Si ya está
+                // Completed/Failed, no sobreescribir con Running.
+                await db.Entry(campaign).ReloadAsync(ct);
+                if (campaign.Status == CampaignStatus.Launching)
+                    campaign.Status = CampaignStatus.Running;
             }
             catch (Exception ex)
             {

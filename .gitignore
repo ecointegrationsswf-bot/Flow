@@ -26,3 +26,4 @@ Thumbs.db
 .mcp.json
 publish/api/
 publish/frontend/
+.claude/settings.local.json
