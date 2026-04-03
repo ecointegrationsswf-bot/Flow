@@ -21,25 +21,18 @@ public class WhatsAppController(
     [HttpGet("status")]
     public async Task<IActionResult> GetStatus(CancellationToken ct)
     {
-        var tenant = await db.Tenants
-            .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == tenantCtx.TenantId, ct);
-
-        if (tenant is null)
-            return NotFound(new { error = "Tenant no encontrado" });
-
-        if (string.IsNullOrEmpty(tenant.WhatsAppInstanceId) || string.IsNullOrEmpty(tenant.WhatsAppApiToken))
-            return BadRequest(new { error = "Instancia UltraMsg no configurada para este tenant" });
+        var (instanceId, token, phone, error) = await ResolveCredentialsAsync(ct);
+        if (error is not null) return BadRequest(new { error });
 
         try
         {
-            var status = await ultraMsg.GetStatusAsync(tenant.WhatsAppInstanceId, tenant.WhatsAppApiToken, ct);
+            var status = await ultraMsg.GetStatusAsync(instanceId!, token!, ct);
             return Ok(new
             {
                 status = status.Status,
-                phone = tenant.WhatsAppPhoneNumber,
-                instanceId = tenant.WhatsAppInstanceId,
-                provider = tenant.WhatsAppProvider.ToString()
+                phone,
+                instanceId,
+                provider = "UltraMsg"
             });
         }
         catch (HttpRequestException)
@@ -54,19 +47,12 @@ public class WhatsAppController(
     [HttpGet("qr")]
     public async Task<IActionResult> GetQrCode(CancellationToken ct)
     {
-        var tenant = await db.Tenants
-            .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == tenantCtx.TenantId, ct);
-
-        if (tenant is null)
-            return NotFound(new { error = "Tenant no encontrado" });
-
-        if (string.IsNullOrEmpty(tenant.WhatsAppInstanceId) || string.IsNullOrEmpty(tenant.WhatsAppApiToken))
-            return BadRequest(new { error = "Instancia UltraMsg no configurada" });
+        var (instanceId, token, _, error) = await ResolveCredentialsAsync(ct);
+        if (error is not null) return BadRequest(new { error });
 
         try
         {
-            var qrBytes = await ultraMsg.GetQrCodeAsync(tenant.WhatsAppInstanceId, tenant.WhatsAppApiToken, ct);
+            var qrBytes = await ultraMsg.GetQrCodeAsync(instanceId!, token!, ct);
             return File(qrBytes, "image/png");
         }
         catch (HttpRequestException)
@@ -81,19 +67,12 @@ public class WhatsAppController(
     [HttpPost("restart")]
     public async Task<IActionResult> Restart(CancellationToken ct)
     {
-        var tenant = await db.Tenants
-            .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == tenantCtx.TenantId, ct);
-
-        if (tenant is null)
-            return NotFound(new { error = "Tenant no encontrado" });
-
-        if (string.IsNullOrEmpty(tenant.WhatsAppInstanceId) || string.IsNullOrEmpty(tenant.WhatsAppApiToken))
-            return BadRequest(new { error = "Instancia UltraMsg no configurada" });
+        var (instanceId, token, _, error) = await ResolveCredentialsAsync(ct);
+        if (error is not null) return BadRequest(new { error });
 
         try
         {
-            var success = await ultraMsg.RestartAsync(tenant.WhatsAppInstanceId, tenant.WhatsAppApiToken, ct);
+            var success = await ultraMsg.RestartAsync(instanceId!, token!, ct);
             return success
                 ? Ok(new { message = "Instancia reiniciada correctamente" })
                 : StatusCode(502, new { error = "No se pudo reiniciar la instancia" });
@@ -110,19 +89,12 @@ public class WhatsAppController(
     [HttpPost("logout")]
     public async Task<IActionResult> Logout(CancellationToken ct)
     {
-        var tenant = await db.Tenants
-            .AsNoTracking()
-            .FirstOrDefaultAsync(t => t.Id == tenantCtx.TenantId, ct);
-
-        if (tenant is null)
-            return NotFound(new { error = "Tenant no encontrado" });
-
-        if (string.IsNullOrEmpty(tenant.WhatsAppInstanceId) || string.IsNullOrEmpty(tenant.WhatsAppApiToken))
-            return BadRequest(new { error = "Instancia UltraMsg no configurada" });
+        var (instanceId, token, _, error) = await ResolveCredentialsAsync(ct);
+        if (error is not null) return BadRequest(new { error });
 
         try
         {
-            var success = await ultraMsg.LogoutAsync(tenant.WhatsAppInstanceId, tenant.WhatsAppApiToken, ct);
+            var success = await ultraMsg.LogoutAsync(instanceId!, token!, ct);
             return success
                 ? Ok(new { message = "Sesion cerrada. Escanea el nuevo QR para reconectar." })
                 : StatusCode(502, new { error = "No se pudo cerrar la sesion" });
@@ -131,5 +103,37 @@ public class WhatsAppController(
         {
             return StatusCode(502, new { error = "Error al cerrar sesion." });
         }
+    }
+
+    // Resuelve instanceId y token: primero Tenant fields, si vacíos busca en WhatsAppLines
+    private async Task<(string? InstanceId, string? Token, string? Phone, string? Error)> ResolveCredentialsAsync(CancellationToken ct)
+    {
+        var tenant = await db.Tenants
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == tenantCtx.TenantId, ct);
+
+        if (tenant is null)
+            return (null, null, null, "Tenant no encontrado");
+
+        var instanceId = tenant.WhatsAppInstanceId;
+        var token      = tenant.WhatsAppApiToken;
+        var phone      = tenant.WhatsAppPhoneNumber;
+
+        if (string.IsNullOrEmpty(instanceId) || string.IsNullOrEmpty(token))
+        {
+            var line = await db.WhatsAppLines
+                .Where(l => l.TenantId == tenantCtx.TenantId && l.IsActive)
+                .OrderByDescending(l => l.CreatedAt)
+                .FirstOrDefaultAsync(ct);
+
+            if (line is null)
+                return (null, null, null, "No hay una línea WhatsApp activa configurada para este tenant");
+
+            instanceId = line.InstanceId;
+            token      = line.ApiToken;
+            phone      = line.PhoneNumber;
+        }
+
+        return (instanceId, token, phone, null);
     }
 }

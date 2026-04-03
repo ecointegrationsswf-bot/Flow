@@ -530,6 +530,10 @@ public class CampaignsController(
         for (var col = 1; col <= lastCol; col++)
             headers.Add(ws.Cell(1, col).GetString().Trim());
 
+        // Si no viene mapping explícito, detectar automáticamente por nombre de columna
+        if (mapping is null || mapping.Count == 0)
+            mapping = AutoDetectMapping(headers);
+
         var contacts = new List<ContactRow>();
         for (var row = 2; row <= lastRow; row++)
         {
@@ -546,12 +550,17 @@ public class CampaignsController(
             if (string.IsNullOrWhiteSpace(phone)) continue;
 
             var mappedSourceCols = mapping.Keys.ToHashSet();
+            // Todo lo que no fue mapeado a un campo conocido va a ContactDataJson
             var extra = rowData
                 .Where(kv => !mappedSourceCols.Contains(kv.Key) && !string.IsNullOrEmpty(kv.Value))
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
 
             var pendingStr = GetMapped("pendingAmount");
-            decimal? pendingAmount = decimal.TryParse(pendingStr, out var pa) ? pa : null;
+            decimal? pendingAmount = decimal.TryParse(
+                pendingStr?.Replace(",", "."),
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var pa) ? pa : null;
 
             contacts.Add(new ContactRow(
                 PhoneNumber: phone,
@@ -565,5 +574,84 @@ public class CampaignsController(
         }
 
         return contacts;
+    }
+
+    /// <summary>
+    /// Detecta automáticamente qué columna del Excel corresponde a cada campo interno.
+    /// Soporta nombres en español e inglés, con y sin tildes.
+    /// El campo detectado es el nombre de la columna en el Excel; el valor es el campo interno.
+    /// </summary>
+    private static Dictionary<string, string> AutoDetectMapping(List<string> headers)
+    {
+        var mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Alias por campo interno — orden de prioridad: primero el más específico
+        var aliases = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["phone"] =
+            [
+                "celular", "telefono", "teléfono", "phone", "tel", "movil", "móvil",
+                "whatsapp", "numero", "número", "cel", "numerodecell", "numerodecelular",
+                "numerodecliente", "numerocliente"
+            ],
+            ["clientName"] =
+            [
+                "nombrecliente", "nombre_cliente", "nombre", "cliente", "name",
+                "clientname", "razonsocial", "razón social", "nombredel cliente",
+                "nombrecompleto", "nombresapellidos"
+            ],
+            ["email"] =
+            [
+                "email", "correo", "correoelectronico", "correo electronico",
+                "correo_electronico", "e-mail", "emailcliente"
+            ],
+            ["policyNumber"] =
+            [
+                "poliza", "póliza", "numeropoliza", "númeropoliza", "numerodepoliza",
+                "nopoliza", "policy", "policynumber", "numpoliza", "npoliza"
+            ],
+            ["insuranceCompany"] =
+            [
+                "aseguradora", "seguro", "compania", "compañia", "compañía",
+                "insurance", "insurancecompany", "asegurado", "aseguradoracompania"
+            ],
+            ["pendingAmount"] =
+            [
+                "monto", "montodeuda", "deuda", "saldo", "balance", "amount",
+                "pendingamount", "montoavencer", "montopendiente", "prima",
+                "totaldeuda", "totalapagar"
+            ],
+        };
+
+        foreach (var header in headers)
+        {
+            var normalized = header.ToLowerInvariant()
+                .Replace(" ", "").Replace("_", "").Replace("-", "")
+                .Replace("á","a").Replace("é","e").Replace("í","i")
+                .Replace("ó","o").Replace("ú","u").Replace("ñ","n");
+
+            foreach (var (field, aliasList) in aliases)
+            {
+                // Ya mapeamos este campo — no sobreescribir
+                if (mapping.ContainsValue(field)) continue;
+
+                var matched = aliasList.Any(alias =>
+                {
+                    var normAlias = alias.ToLowerInvariant()
+                        .Replace(" ", "").Replace("_", "").Replace("-", "")
+                        .Replace("á","a").Replace("é","e").Replace("í","i")
+                        .Replace("ó","o").Replace("ú","u").Replace("ñ","n");
+                    return normalized == normAlias || normalized.Contains(normAlias) || normAlias.Contains(normalized);
+                });
+
+                if (matched)
+                {
+                    mapping[header] = field;
+                    break;
+                }
+            }
+        }
+
+        return mapping;
     }
 }

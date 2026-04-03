@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
+using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Persistence;
 using Anthropic.SDK;
 using Anthropic.SDK.Messaging;
@@ -28,7 +30,8 @@ namespace AgentFlow.API.Controllers;
 public class N8nCallbackController(
     AgentFlowDbContext db,
     IConfiguration cfg,
-    IHttpClientFactory httpClientFactory) : ControllerBase
+    IHttpClientFactory httpClientFactory,
+    IConversationNotifier notifier) : ControllerBase
 {
     // ── Autenticación por API key ─────────────────────────────────────────────
 
@@ -101,10 +104,29 @@ public class N8nCallbackController(
             Request.Headers.TryGetValue("X-Tenant-Id", out var tenantHeader);
             if (Guid.TryParse(tenantHeader, out var tenantId))
             {
+                // Parsear campaignId si viene en el request (para excluir la campaña actual)
+                Guid? currentCampaignId = null;
+                if (!string.IsNullOrEmpty(req.CampaignId))
+                {
+                    var rawCampaignId = req.CampaignId.TrimStart('=').Trim();
+                    if (Guid.TryParse(rawCampaignId, out var parsedId))
+                        currentCampaignId = parsedId;
+                }
+
+                // Obtener IDs de campañas completadas para no filtrar sus contactos
+                // Un contacto que está en una campaña completada puede recibir una nueva campaña
+                var completedCampaignIds = await db.Campaigns
+                    .Where(c => c.TenantId == tenantId && c.Status == CampaignStatus.Completed)
+                    .Select(c => c.Id)
+                    .ToListAsync(ct);
+
                 activeSessions = await db.Conversations
                     .Where(c => c.TenantId == tenantId
                              && req.Phones.Contains(c.ClientPhone)
-                             && c.Status == ConversationStatus.Active)
+                             && c.Status == ConversationStatus.Active
+                             // Excluir conversaciones de la campaña actual o de campañas ya completadas
+                             && (currentCampaignId == null || c.CampaignId != currentCampaignId)
+                             && (c.CampaignId == null || !completedCampaignIds.Contains(c.CampaignId.Value)))
                     .Select(c => c.ClientPhone)
                     .ToListAsync(ct);
             }
@@ -176,7 +198,7 @@ public class N8nCallbackController(
         }
 
         if (string.IsNullOrWhiteSpace(promptText))
-            return BadRequest(new { error = "La campaña no tiene prompt configurado.", success = false });
+            return BadRequest(new { error = "La campaña no tiene prompt configurado.", success = false, campaignId = req.CampaignId, phone = req.Phone });
 
         // ── Generar mensaje con Claude ───────────────────────────────────────
         string generatedMessage;
@@ -195,7 +217,7 @@ public class N8nCallbackController(
             // La API key de Anthropic se almacena por tenant (Tenant.LlmApiKey)
             var apiKey = campaign.Tenant?.LlmApiKey;
             if (string.IsNullOrEmpty(apiKey))
-                return StatusCode(503, new { error = "El tenant no tiene Anthropic API key configurada (LlmApiKey).", success = false });
+                return StatusCode(503, new { error = "El tenant no tiene Anthropic API key configurada (LlmApiKey).", success = false, campaignId = req.CampaignId, phone = req.Phone });
 
             var client   = new AnthropicClient(apiKey);
             var messages = new List<Anthropic.SDK.Messaging.Message>
@@ -221,8 +243,10 @@ public class N8nCallbackController(
         {
             return StatusCode(500, new
             {
-                success = false,
-                error   = $"Error generando mensaje con Claude: {ex.Message}",
+                success    = false,
+                error      = $"Error generando mensaje con Claude: {ex.Message}",
+                campaignId = req.CampaignId,
+                phone      = req.Phone,
             });
         }
 
@@ -231,7 +255,7 @@ public class N8nCallbackController(
         var token      = req.TenantConfig?.UltraMsgToken;
 
         if (string.IsNullOrEmpty(instanceId) || string.IsNullOrEmpty(token))
-            return BadRequest(new { error = "Faltan credenciales UltraMsg en tenantConfig.", success = false });
+            return BadRequest(new { error = "Faltan credenciales UltraMsg en tenantConfig.", success = false, campaignId = req.CampaignId, phone = req.Phone });
 
         string? externalMessageId = null;
         try
@@ -262,6 +286,8 @@ public class N8nCallbackController(
                     success    = false,
                     error      = $"UltraMsg {(int)httpResp.StatusCode}: {responseBody}",
                     durationMs = sw.ElapsedMilliseconds,
+                    campaignId = req.CampaignId,
+                    phone      = req.Phone,
                 });
 
             try
@@ -274,16 +300,92 @@ public class N8nCallbackController(
         catch (Exception ex)
         {
             sw.Stop();
-            return Ok(new { success = false, error = ex.Message, durationMs = sw.ElapsedMilliseconds });
+            return Ok(new { success = false, error = ex.Message, durationMs = sw.ElapsedMilliseconds, campaignId = req.CampaignId, phone = req.Phone });
+        }
+
+        // ── Crear o recuperar conversación en el monitor ─────────────────────
+        // La conversación se crea inmediatamente al enviar para que el ejecutivo
+        // pueda verla en el monitor antes de que el cliente responda.
+        Guid conversationId;
+        try
+        {
+            var tenantId = campaign.TenantId;
+
+            // Reusar conversación abierta si ya existe para este teléfono
+            var existing = await db.Conversations
+                .FirstOrDefaultAsync(c => c.TenantId == tenantId
+                                       && c.ClientPhone == req.Phone
+                                       && c.Status != ConversationStatus.Closed, ct);
+
+            if (existing is not null)
+            {
+                conversationId = existing.Id;
+                existing.LastActivityAt = DateTime.UtcNow;
+            }
+            else
+            {
+                var conversation = new Conversation
+                {
+                    Id             = Guid.NewGuid(),
+                    TenantId       = tenantId,
+                    ClientPhone    = req.Phone,
+                    ClientName     = req.ClientName,
+                    PolicyNumber   = req.PolicyNumber,
+                    Channel        = ChannelType.WhatsApp,
+                    ActiveAgentId  = req.AgentId,
+                    CampaignId     = req.CampaignId,
+                    Status         = ConversationStatus.WaitingClient,
+                    StartedAt      = DateTime.UtcNow,
+                    LastActivityAt = DateTime.UtcNow,
+                };
+                db.Conversations.Add(conversation);
+                conversationId = conversation.Id;
+            }
+
+            // Registrar el mensaje saliente
+            var outboundMsg = new AgentFlow.Domain.Entities.Message
+            {
+                Id                = Guid.NewGuid(),
+                ConversationId    = conversationId,
+                Direction         = MessageDirection.Outbound,
+                Status            = MessageStatus.Sent,
+                Content           = generatedMessage,
+                ExternalMessageId = externalMessageId,
+                IsFromAgent       = true,
+                AgentName         = campaign.CampaignTemplate?.Name ?? "Agente campaña",
+                SentAt            = DateTime.UtcNow,
+            };
+            db.Messages.Add(outboundMsg);
+            await db.SaveChangesAsync(ct);
+
+            // Notificar monitor en tiempo real vía SignalR
+            await notifier.NotifyMessageAsync(tenantId.ToString(), new
+            {
+                conversationId  = conversationId,
+                phone           = req.Phone,
+                clientName      = req.ClientName,
+                message         = generatedMessage,
+                direction       = "Outbound",
+                isFromAgent     = true,
+                sentAt          = DateTime.UtcNow,
+                status          = ConversationStatus.WaitingClient.ToString(),
+            });
+        }
+        catch
+        {
+            // Si falla la creación de conversación no bloqueamos el flujo principal
+            conversationId = Guid.Empty;
         }
 
         return Ok(new
         {
             success           = true,
             externalMessageId,
-            conversationId    = (string?)null, // las campañas push no crean conversación hasta respuesta
+            conversationId,
             generatedMessage,
             durationMs        = sw.ElapsedMilliseconds,
+            campaignId        = req.CampaignId,
+            phone             = req.Phone,
         });
     }
 
@@ -296,23 +398,64 @@ public class N8nCallbackController(
     {
         if (!IsAuthorized()) return Unauthorized(new { error = "X-N8N-Key inválida." });
 
+        // n8n puede enviar el Guid con prefijo '=' — limpiar y parsear
+        var rawId = req.CampaignId?.TrimStart('=').Trim();
+        if (!Guid.TryParse(rawId, out var campaignId))
+            return BadRequest(new { error = $"campaignId inválido: '{req.CampaignId}'" });
+
+        var phone = req.Phone?.TrimStart('=').Trim();
+
         var contact = await db.CampaignContacts
-            .FirstOrDefaultAsync(c => c.CampaignId == req.CampaignId
-                                   && c.PhoneNumber == req.Phone, ct);
+            .FirstOrDefaultAsync(c => c.CampaignId == campaignId
+                                   && c.PhoneNumber == phone, ct);
 
         if (contact is not null)
         {
             contact.DispatchStatus    = DispatchStatus.Sent;
             contact.SentAt            = DateTime.UtcNow;
             contact.ExternalMessageId = req.ExternalMessageId;
+            await db.SaveChangesAsync(ct);
         }
 
-        // Incrementar contador de la campaña
-        var campaign = await db.Campaigns.FindAsync([req.CampaignId], ct);
-        if (campaign is not null) campaign.ProcessedContacts++;
+        // Incrementar contador de forma atómica para evitar condición de carrera
+        // cuando múltiples contactos se marcan como enviados simultáneamente
+        await db.Campaigns
+            .Where(c => c.Id == campaignId)
+            .ExecuteUpdateAsync(s => s.SetProperty(
+                c => c.ProcessedContacts, c => c.ProcessedContacts + 1), ct);
 
-        await db.SaveChangesAsync(ct);
-        return Ok(new { updated = contact is not null });
+        // Auto-completar la campaña si ProcessedContacts >= TotalContacts.
+        // IMPORTANTE: usar el change tracker (SaveChangesAsync) en lugar de ExecuteUpdateAsync
+        // para que la conversión HasConversion<string>() se aplique correctamente.
+        // ExecuteUpdateAsync no aplica el value converter y genera SQL con el entero del enum,
+        // lo que produce 0 filas actualizadas cuando la columna almacena strings.
+        bool autoCompleted = false;
+        var freshCampaign = await db.Campaigns
+            .AsNoTracking()
+            .FirstOrDefaultAsync(c => c.Id == campaignId, ct);
+
+        if (freshCampaign is not null
+            && freshCampaign.ProcessedContacts >= freshCampaign.TotalContacts
+            && freshCampaign.TotalContacts > 0
+            && freshCampaign.Status != CampaignStatus.Completed
+            && freshCampaign.Status != CampaignStatus.Failed)
+        {
+            // Cargar con tracking para que SaveChangesAsync aplique el converter correctamente
+            var campaignToComplete = await db.Campaigns
+                .FirstOrDefaultAsync(c => c.Id == campaignId, ct);
+
+            if (campaignToComplete is not null
+                && campaignToComplete.Status != CampaignStatus.Completed
+                && campaignToComplete.Status != CampaignStatus.Failed)
+            {
+                campaignToComplete.Status = CampaignStatus.Completed;
+                campaignToComplete.CompletedAt = DateTime.UtcNow;
+                await db.SaveChangesAsync(ct);
+                autoCompleted = true;
+            }
+        }
+
+        return Ok(new { updated = contact is not null, campaignId = rawId, phone, autoCompleted });
     }
 
     // ── 6. Registrar fallo de envío ───────────────────────────────────────────
@@ -324,9 +467,15 @@ public class N8nCallbackController(
     {
         if (!IsAuthorized()) return Unauthorized(new { error = "X-N8N-Key inválida." });
 
+        var rawId = req.CampaignId?.TrimStart('=').Trim();
+        if (!Guid.TryParse(rawId, out var campaignId))
+            return BadRequest(new { error = $"campaignId inválido: '{req.CampaignId}'" });
+
+        var phone = req.Phone?.TrimStart('=').Trim();
+
         var contact = await db.CampaignContacts
-            .FirstOrDefaultAsync(c => c.CampaignId == req.CampaignId
-                                   && c.PhoneNumber == req.Phone, ct);
+            .FirstOrDefaultAsync(c => c.CampaignId == campaignId
+                                   && c.PhoneNumber == phone, ct);
 
         if (contact is not null)
         {
@@ -350,7 +499,11 @@ public class N8nCallbackController(
     {
         if (!IsAuthorized()) return Unauthorized(new { error = "X-N8N-Key inválida." });
 
-        var campaign = await db.Campaigns.FindAsync([req.CampaignId], ct);
+        var rawId = req.CampaignId?.TrimStart('=').Trim();
+        if (!Guid.TryParse(rawId, out var campaignId))
+            return BadRequest(new { error = $"campaignId inválido: '{req.CampaignId}'" });
+
+        var campaign = await db.Campaigns.FindAsync([campaignId], ct);
         if (campaign is not null)
         {
             campaign.Status      = CampaignStatus.Completed;
@@ -428,7 +581,7 @@ internal static class CallbackHelpers
 public record MarkInvalidRequest(List<InvalidContactDto>? InvalidContacts);
 public record InvalidContactDto(string Phone, string? Reason);
 
-public record CheckDuplicatesRequest(List<string>? Phones);
+public record CheckDuplicatesRequest(List<string>? Phones, string? CampaignId = null);
 
 public record ScheduleDeferredRequest(
     Guid CampaignId,
@@ -454,18 +607,18 @@ public record TenantConfigDto(
     string? TenantId);
 
 public record ContactSentRequest(
-    Guid CampaignId,
-    string Phone,
+    string? CampaignId,
+    string? Phone,
     string? ExternalMessageId,
     string? ConversationId);
 
 public record ContactFailedRequest(
-    Guid CampaignId,
-    string Phone,
+    string? CampaignId,
+    string? Phone,
     string? Error);
 
 public record CampaignCompletedRequest(
-    Guid CampaignId,
+    string? CampaignId,
     int TotalSent,
     int TotalDeferred,
     int TotalDuplicates);

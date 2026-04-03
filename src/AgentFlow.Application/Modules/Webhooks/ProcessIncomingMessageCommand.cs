@@ -64,10 +64,11 @@ public class ProcessIncomingMessageHandler(
         {
             conversation = (await conversations.GetByIdAsync(dispatch.ExistingConversationId.Value, ct))!;
 
-            // Si la conversación estaba cerrada o sin respuesta, reabrirla
-            // para mantener un único hilo por contacto (sin duplicados en el monitor)
+            // Si la conversación estaba cerrada, sin respuesta o esperando al cliente,
+            // reabrirla — el cliente acaba de responder, por lo tanto está activo.
             if (conversation.Status == ConversationStatus.Closed ||
-                conversation.Status == ConversationStatus.Unresponsive)
+                conversation.Status == ConversationStatus.Unresponsive ||
+                conversation.Status == ConversationStatus.WaitingClient)
             {
                 conversation.Status = ConversationStatus.Active;
                 conversation.IsHumanHandled = false;
