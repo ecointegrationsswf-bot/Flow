@@ -7,8 +7,8 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.ComponentModel.DataAnnotations;
+using System.IdentityModel.Tokens.Jwt;
 using System.Text.Json;
-using AgentFlow.Domain.Enums;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 
@@ -39,6 +39,14 @@ public class CampaignsController(
     IConfiguration cfg,
     IHttpClientFactory httpClientFactory) : ControllerBase
 {
+    // Devuelve el nombre completo del usuario autenticado (claim full_name),
+    // con fallback a email y luego a "system".
+    private string CurrentUser =>
+        User.FindFirst("full_name")?.Value
+        ?? User.FindFirst(JwtRegisteredClaimNames.Email)?.Value
+        ?? User.Identity?.Name
+        ?? "system";
+
     /// <summary>
     /// Lista todas las campañas del tenant autenticado.
     /// Muestra: nombre, estado, total contactos, fecha creación, etc.
@@ -229,7 +237,7 @@ public class CampaignsController(
             ChannelType.WhatsApp,
             CampaignTrigger.FileUpload,
             contactRows,
-            User.Identity?.Name ?? "system",
+            CurrentUser,
             req.ScheduledAt
         ), ct);
 
@@ -253,7 +261,7 @@ public class CampaignsController(
             ChannelType.WhatsApp,
             CampaignTrigger.FileUpload,
             contacts,
-            User.Identity?.Name ?? "system",
+            CurrentUser,
             req.ScheduledAt
         ), ct);
 
@@ -375,7 +383,7 @@ public class CampaignsController(
             ChannelType.WhatsApp,
             CampaignTrigger.FileUpload,
             parsed.Contacts,
-            User.Identity?.Name ?? "system",
+            CurrentUser,
             req.ScheduledAt,
             req.CampaignTemplateId
         ), ct);
@@ -444,7 +452,7 @@ public class CampaignsController(
         // Marcar como Launching
         campaign.Status          = CampaignStatus.Launching;
         campaign.LaunchedAt      = DateTime.UtcNow;
-        campaign.LaunchedByUserId = User.Identity?.Name ?? "system";
+        campaign.LaunchedByUserId = CurrentUser;
         await db.SaveChangesAsync(ct);
 
         // Disparar webhook n8n
