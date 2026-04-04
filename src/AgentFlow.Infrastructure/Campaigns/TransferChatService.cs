@@ -30,20 +30,36 @@ public class TransferChatService(
 
         if (campaign is null) return;
 
-        // Obtener teléfono de notificación: primero el guardado en la campaña,
-        // si está vacío buscar el actual en el perfil del ejecutivo por email (fallback
-        // para campañas lanzadas antes de que el ejecutivo configurara su número).
+        // Obtener teléfono de notificación:
+        // 1) Usar el teléfono guardado en la campaña al momento de lanzarla
+        // 2) Si vacío, buscar el ejecutivo por email/nombre (campañas lanzadas antes de configurar el número)
+        // 3) Si launcher es "system" o no se encuentra, usar cualquier usuario del tenant con NotifyPhone
         var notifyPhone = campaign.LaunchedByUserPhone;
-        if (string.IsNullOrEmpty(notifyPhone) && !string.IsNullOrEmpty(campaign.LaunchedByUserId))
+
+        if (string.IsNullOrEmpty(notifyPhone))
         {
-            var launcher = await db.AppUsers
+            AppUser? launcher = null;
+
+            // Intentar por LaunchedByUserId (email o nombre)
+            if (!string.IsNullOrEmpty(campaign.LaunchedByUserId)
+                && campaign.LaunchedByUserId != "system")
+            {
+                launcher = await db.AppUsers
+                    .Where(u => u.TenantId == conversation.TenantId
+                             && (u.Email == campaign.LaunchedByUserId
+                              || u.FullName == campaign.LaunchedByUserId))
+                    .FirstOrDefaultAsync(ct);
+            }
+
+            // Fallback: cualquier usuario del tenant con NotifyPhone configurado
+            launcher ??= await db.AppUsers
                 .Where(u => u.TenantId == conversation.TenantId
-                         && (u.Email == campaign.LaunchedByUserId || u.FullName == campaign.LaunchedByUserId))
+                         && u.NotifyPhone != null && u.NotifyPhone != "")
                 .FirstOrDefaultAsync(ct);
 
             notifyPhone = launcher?.NotifyPhone;
 
-            // Actualizar la campaña para que próximas escalaciones no necesiten hacer el lookup
+            // Guardar en campaña para evitar el lookup en próximas escalaciones
             if (!string.IsNullOrEmpty(notifyPhone))
             {
                 campaign.LaunchedByUserPhone = notifyPhone;
