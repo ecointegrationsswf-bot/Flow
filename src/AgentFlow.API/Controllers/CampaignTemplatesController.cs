@@ -71,6 +71,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 x.SystemPrompt, x.SendFrom, x.SendUntil,
                 x.MaxRetries, x.RetryIntervalHours, x.InactivityCloseHours,
                 x.CloseConditionKeyword, x.MaxTokens,
+                x.AttentionDays, x.AttentionStartTime, x.AttentionEndTime,
                 x.IsActive, x.CreatedAt, x.UpdatedAt
             })
             .FirstOrDefaultAsync(ct);
@@ -147,6 +148,11 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         template.AttentionStartTime = req.AttentionStartTime;
         template.AttentionEndTime = req.AttentionEndTime;
         template.UpdatedAt = DateTime.UtcNow;
+
+        // HasConversion en List<int> no tiene ValueComparer — marcar explícitamente como modificado
+        db.Entry(template).Property(t => t.AttentionDays).IsModified = true;
+        db.Entry(template).Property(t => t.AttentionStartTime).IsModified = true;
+        db.Entry(template).Property(t => t.AttentionEndTime).IsModified = true;
 
         await db.SaveChangesAsync(ct);
         return Ok(new { template.Id, template.Name });
