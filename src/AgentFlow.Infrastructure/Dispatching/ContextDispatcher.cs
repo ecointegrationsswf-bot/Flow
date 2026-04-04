@@ -89,7 +89,8 @@ public class ContextDispatcher(
                 SelectedAgentId: campaignContact.Campaign.AgentDefinitionId,
                 Intent: "cobros",  // campañas de cobros por defecto
                 IsExistingSession: existingConv is not null,
-                IsCampaignContact: true
+                IsCampaignContact: true,
+                CampaignId: campaignContact.CampaignId
             );
         }
 

@@ -30,8 +30,28 @@ public class TransferChatService(
 
         if (campaign is null) return;
 
-        // Verificar que tenga teléfono de notificación registrado
-        if (string.IsNullOrEmpty(campaign.LaunchedByUserPhone)) return;
+        // Obtener teléfono de notificación: primero el guardado en la campaña,
+        // si está vacío buscar el actual en el perfil del ejecutivo por email (fallback
+        // para campañas lanzadas antes de que el ejecutivo configurara su número).
+        var notifyPhone = campaign.LaunchedByUserPhone;
+        if (string.IsNullOrEmpty(notifyPhone) && !string.IsNullOrEmpty(campaign.LaunchedByUserId))
+        {
+            var launcher = await db.AppUsers
+                .Where(u => u.TenantId == conversation.TenantId
+                         && (u.Email == campaign.LaunchedByUserId || u.FullName == campaign.LaunchedByUserId))
+                .FirstOrDefaultAsync(ct);
+
+            notifyPhone = launcher?.NotifyPhone;
+
+            // Actualizar la campaña para que próximas escalaciones no necesiten hacer el lookup
+            if (!string.IsNullOrEmpty(notifyPhone))
+            {
+                campaign.LaunchedByUserPhone = notifyPhone;
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
+        if (string.IsNullOrEmpty(notifyPhone)) return;
 
         // Verificar que el maestro tenga vinculada la acción TRANSFER_CHAT
         if (campaign.CampaignTemplate is null || campaign.CampaignTemplate.ActionIds.Count == 0)
@@ -65,7 +85,7 @@ public class TransferChatService(
             }
 
             await provider.SendMessageAsync(
-                new SendMessageRequest(campaign.LaunchedByUserPhone, summary), ct);
+                new SendMessageRequest(notifyPhone, summary), ct);
 
             Console.WriteLine($"[TransferChat] Notificación enviada a {campaign.LaunchedByUserPhone} " +
                               $"— conversación {conversation.Id}");

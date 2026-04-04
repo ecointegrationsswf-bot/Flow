@@ -23,5 +23,6 @@ public record DispatchResult(
     Guid? SelectedAgentId,
     string Intent,             // cobros | reclamos | renovaciones | humano | new
     bool IsExistingSession,
-    bool IsCampaignContact
+    bool IsCampaignContact,
+    Guid? CampaignId = null    // ID de la campaña si el contacto pertenece a una
 );

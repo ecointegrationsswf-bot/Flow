@@ -88,7 +88,7 @@ public class ProcessIncomingMessageHandler(
                 ClientName = cmd.ClientName,
                 Channel = cmd.Channel,
                 ActiveAgentId = dispatch.SelectedAgentId,
-                CampaignId = null,
+                CampaignId = dispatch.CampaignId,   // enlazar a la campaña si viene de una
                 Status = ConversationStatus.Active,
                 StartedAt = DateTime.UtcNow,
                 LastActivityAt = DateTime.UtcNow
