@@ -53,14 +53,16 @@ public class TransferChatService(
 
         if (string.IsNullOrEmpty(notifyPhone)) return;
 
-        // Verificar que el maestro tenga vinculada la acción TRANSFER_CHAT
+        // Verificar que el maestro tenga vinculada la acción TRANSFER_CHAT.
+        // IMPORTANTE: ActionIds está almacenado como JSON — hay que materializar
+        // la lista en una variable local antes de usarla en una query EF Core,
+        // de lo contrario EF no puede traducirla a SQL.
         if (campaign.CampaignTemplate is null || campaign.CampaignTemplate.ActionIds.Count == 0)
             return;
 
+        var actionIds = campaign.CampaignTemplate.ActionIds.ToList();
         var hasTransferAction = await db.ActionDefinitions
-            .AnyAsync(a => campaign.CampaignTemplate.ActionIds.Contains(a.Id)
-                        && a.Name == ActionName
-                        && a.IsActive, ct);
+            .AnyAsync(a => actionIds.Contains(a.Id) && a.Name == ActionName && a.IsActive, ct);
 
         if (!hasTransferAction) return;
 
