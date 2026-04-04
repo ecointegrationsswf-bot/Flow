@@ -45,7 +45,6 @@ export function ProfilePage() {
 
   const [fullName, setFullName] = useState('')
   const [notifyPhone, setNotifyPhone] = useState('')
-  const [isEditingPhone, setIsEditingPhone] = useState(false)
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -82,8 +81,7 @@ export function ProfilePage() {
 
   const handleSavePhone = () => {
     updateProfile.mutate(
-      { fullName: profile?.fullName ?? fullName, notifyPhone: notifyPhone.trim() || null },
-      { onSuccess: () => setIsEditingPhone(false) }
+      { fullName: profile?.fullName ?? fullName, notifyPhone: notifyPhone.trim() || null }
     )
   }
 
@@ -283,41 +281,36 @@ export function ProfilePage() {
                 </div>
 
                 {/* Teléfono de notificación WhatsApp */}
-                <div className="flex items-start gap-4 rounded-xl bg-gray-50 p-5">
-                  <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl bg-green-100">
-                    <Phone className="h-6 w-6 text-green-600" />
+                <div className="rounded-xl bg-gray-50 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-green-100">
+                      <Phone className="h-5 w-5 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">WhatsApp de notificaciones</p>
+                      <p className="text-xs text-gray-400">Número que recibe alertas cuando un cliente solicita atención humana (Transfer Chat).</p>
+                    </div>
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-500">WhatsApp de notificaciones</p>
-                    <p className="mt-0.5 text-xs text-gray-400">Se usa para recibir alertas de Transfer Chat cuando un cliente solicita atención humana.</p>
-                    {isEditingPhone ? (
-                      <div className="mt-2 flex items-center gap-2">
-                        <input
-                          type="tel"
-                          value={notifyPhone}
-                          onChange={(e) => setNotifyPhone(e.target.value)}
-                          autoFocus
-                          placeholder="+50768001234"
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleSavePhone()
-                            if (e.key === 'Escape') { setNotifyPhone(profile.notifyPhone ?? ''); setIsEditingPhone(false) }
-                          }}
-                          className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-semibold text-gray-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                        />
-                        <button onClick={handleSavePhone} disabled={updateProfile.isPending} className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors">
-                          {updateProfile.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Guardar'}
-                        </button>
-                        <button onClick={() => { setNotifyPhone(profile.notifyPhone ?? ''); setIsEditingPhone(false) }} className="rounded-lg border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-                          Cancelar
-                        </button>
-                      </div>
-                    ) : (
-                      <button onClick={() => setIsEditingPhone(true)} className="group mt-1 flex items-center gap-2">
-                        <p className="text-base font-semibold text-gray-900">{profile.notifyPhone || '—'}</p>
-                        <Pencil className="h-3.5 w-3.5 text-gray-400 opacity-0 transition-opacity group-hover:opacity-100" />
-                      </button>
-                    )}
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="tel"
+                      value={notifyPhone}
+                      onChange={(e) => setNotifyPhone(e.target.value)}
+                      placeholder="+50768001234"
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleSavePhone() }}
+                      className="flex-1 rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-colors focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20"
+                    />
+                    <button
+                      onClick={handleSavePhone}
+                      disabled={updateProfile.isPending || notifyPhone === (profile.notifyPhone ?? '')}
+                      className="flex items-center gap-1.5 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-40 transition-colors"
+                    >
+                      {updateProfile.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Guardar'}
+                    </button>
                   </div>
+                  {updateProfile.isSuccess && notifyPhone === (profile.notifyPhone ?? '') && (
+                    <p className="mt-2 text-xs text-green-600">Número guardado correctamente.</p>
+                  )}
                 </div>
               </div>
             </div>
