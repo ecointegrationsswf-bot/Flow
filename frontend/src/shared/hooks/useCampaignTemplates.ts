@@ -38,6 +38,9 @@ export interface CampaignTemplate {
   inactivityCloseHours: number
   closeConditionKeyword: string | null
   maxTokens: number
+  attentionDays: number[]
+  attentionStartTime: string
+  attentionEndTime: string
   isActive: boolean
   createdAt: string
   updatedAt: string
@@ -62,6 +65,9 @@ export interface CampaignTemplatePayload {
   inactivityCloseHours: number
   closeConditionKeyword?: string | null
   maxTokens: number
+  attentionDays?: number[]
+  attentionStartTime?: string
+  attentionEndTime?: string
 }
 
 export interface ActionConfig {

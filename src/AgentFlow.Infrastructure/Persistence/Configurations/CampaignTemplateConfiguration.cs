@@ -38,6 +38,14 @@ public class CampaignTemplateConfiguration : IEntityTypeConfiguration<CampaignTe
                 v => JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
             ).HasMaxLength(2000);
 
+        b.Property(t => t.AttentionDays)
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<int>>(v, (JsonSerializerOptions?)null) ?? new List<int> { 1, 2, 3, 4, 5 }
+            ).HasMaxLength(100).HasDefaultValue(new List<int> { 1, 2, 3, 4, 5 });
+        b.Property(t => t.AttentionStartTime).HasMaxLength(5).HasDefaultValue("08:00");
+        b.Property(t => t.AttentionEndTime).HasMaxLength(5).HasDefaultValue("17:00");
+
         b.Property(t => t.ActionConfigs).HasMaxLength(8000);
 
         b.HasOne(t => t.Tenant).WithMany().HasForeignKey(t => t.TenantId).OnDelete(DeleteBehavior.Cascade);

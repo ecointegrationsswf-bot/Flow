@@ -45,6 +45,15 @@ public class CampaignTemplate
     public bool SendEmail { get; set; }
     public string? EmailAddress { get; set; }
 
+    // ── Horario de atención de asesores ───────────────────────────────────
+    // Días de la semana en que los asesores atienden (0=Domingo … 6=Sábado)
+    // Ej: [1,2,3,4,5] = lunes a viernes
+    public List<int> AttentionDays { get; set; } = [1, 2, 3, 4, 5];
+
+    // Hora de inicio y fin de atención en formato "HH:mm" (hora de Panamá)
+    public string AttentionStartTime { get; set; } = "08:00";
+    public string AttentionEndTime { get; set; } = "17:00";
+
     // ── Prompt y comportamiento del agente para esta campaña ──────────────
     public string SystemPrompt { get; set; } = string.Empty;
     public string? SendFrom { get; set; }

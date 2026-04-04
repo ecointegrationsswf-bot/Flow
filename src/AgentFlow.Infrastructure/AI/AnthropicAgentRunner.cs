@@ -101,6 +101,40 @@ public class AnthropicAgentRunner(
         sb.AppendLine("un compromiso usando solo la expresión relativa del cliente.");
         sb.AppendLine();
 
+        // Inyectar horario de atención configurado en el maestro de campaña
+        if (req.AttentionDays?.Count > 0 && req.AttentionStartTime is not null && req.AttentionEndTime is not null)
+        {
+            var dayNames = new[] { "domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado" };
+            var days = req.AttentionDays.OrderBy(d => d).Select(d => dayNames[d % 7]);
+            var daysStr = string.Join(", ", days);
+            var nextAttention = NextAttentionDay(now, req.AttentionDays);
+
+            sb.AppendLine("## Horario de atención de asesores");
+            sb.AppendLine($"- Días de atención: {daysStr}");
+            sb.AppendLine($"- Horario: {req.AttentionStartTime} – {req.AttentionEndTime} (hora de Panamá)");
+
+            // Evaluar si actualmente está en horario de atención
+            var currentDay = (int)now.DayOfWeek;
+            var currentTime = now.ToString("HH:mm");
+            var inAttentionDay  = req.AttentionDays.Contains(currentDay);
+            var inAttentionHour = string.Compare(currentTime, req.AttentionStartTime) >= 0
+                               && string.Compare(currentTime, req.AttentionEndTime) < 0;
+
+            if (inAttentionDay && inAttentionHour)
+            {
+                sb.AppendLine("- Estado actual: DENTRO de horario de atención.");
+                sb.AppendLine("Si el cliente pide hablar con un asesor, puedes indicarle que un asesor lo atenderá en breve.");
+            }
+            else
+            {
+                sb.AppendLine("- Estado actual: FUERA de horario de atención.");
+                sb.AppendLine($"- Próxima atención disponible: {nextAttention.ToString("dddd d 'de' MMMM", culture)}, a partir de las {req.AttentionStartTime}.");
+                sb.AppendLine("Si el cliente pide hablar con un asesor, indícale que actualmente estamos fuera de horario");
+                sb.AppendLine($"y que un asesor lo contactará el {nextAttention.ToString("dddd d 'de' MMMM", culture)} a partir de las {req.AttentionStartTime}.");
+            }
+            sb.AppendLine();
+        }
+
         if (req.ClientContext?.Count > 0)
         {
             sb.AppendLine("## Contexto del cliente");
@@ -109,6 +143,18 @@ public class AnthropicAgentRunner(
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>Calcula la próxima fecha en que habrá atención (puede ser hoy si aún no ha pasado el horario).</summary>
+    private static DateTime NextAttentionDay(DateTime from, List<int> attentionDays)
+    {
+        for (var i = 0; i <= 7; i++)
+        {
+            var candidate = from.AddDays(i).Date;
+            if (attentionDays.Contains((int)candidate.DayOfWeek))
+                return candidate;
+        }
+        return from.Date;
     }
 
     /// <summary>Calcula la fecha del próximo día de la semana indicado (nunca el día actual).</summary>

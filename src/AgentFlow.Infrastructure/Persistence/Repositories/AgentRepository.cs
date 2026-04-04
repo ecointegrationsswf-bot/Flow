@@ -17,4 +17,7 @@ public class AgentRepository(AgentFlowDbContext db) : IAgentRepository
 
     public async Task<Tenant?> GetTenantByIdAsync(Guid tenantId, CancellationToken ct = default)
         => await db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId, ct);
+
+    public async Task<CampaignTemplate?> GetCampaignTemplateByIdAsync(Guid templateId, CancellationToken ct = default)
+        => await db.CampaignTemplates.FirstOrDefaultAsync(t => t.Id == templateId, ct);
 }

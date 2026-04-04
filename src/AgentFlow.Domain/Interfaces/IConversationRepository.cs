@@ -13,4 +13,5 @@ public interface IConversationRepository
     Task AddMessageAsync(Message message, CancellationToken ct = default);
     Task SaveChangesAsync(CancellationToken ct = default);
     Task<IEnumerable<Conversation>> GetByStatusAsync(Guid tenantId, ConversationStatus status, CancellationToken ct = default);
+    Task<Campaign?> GetCampaignAsync(Guid campaignId, CancellationToken ct = default);
 }

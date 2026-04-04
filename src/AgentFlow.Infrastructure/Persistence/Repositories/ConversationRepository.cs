@@ -59,4 +59,7 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
             .Where(c => c.TenantId == tenantId && c.Status == status)
             .OrderByDescending(c => c.LastActivityAt)
             .ToListAsync(ct);
+
+    public async Task<Campaign?> GetCampaignAsync(Guid campaignId, CancellationToken ct = default)
+        => await db.Campaigns.FirstOrDefaultAsync(c => c.Id == campaignId, ct);
 }

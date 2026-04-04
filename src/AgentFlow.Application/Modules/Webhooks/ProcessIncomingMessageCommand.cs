@@ -176,6 +176,25 @@ public class ProcessIncomingMessageHandler(
                 var tenant = await agents.GetTenantByIdAsync(cmd.TenantId, ct);
                 var tenantApiKey = tenant?.LlmApiKey;
 
+                // Cargar horario de atención desde el maestro de campaña (si aplica)
+                List<int>? attentionDays = null;
+                string? attentionStart = null;
+                string? attentionEnd = null;
+                if (conversation.CampaignId.HasValue)
+                {
+                    var campaign = await conversations.GetCampaignAsync(conversation.CampaignId.Value, ct);
+                    if (campaign?.CampaignTemplateId.HasValue == true)
+                    {
+                        var tmpl = await agents.GetCampaignTemplateByIdAsync(campaign.CampaignTemplateId.Value, ct);
+                        if (tmpl is not null)
+                        {
+                            attentionDays  = tmpl.AttentionDays;
+                            attentionStart = tmpl.AttentionStartTime;
+                            attentionEnd   = tmpl.AttentionEndTime;
+                        }
+                    }
+                }
+
                 // Construir contexto del cliente (datos de campaña si aplica)
                 var clientContext = new Dictionary<string, string>
                 {
@@ -202,7 +221,10 @@ public class ProcessIncomingMessageHandler(
                         // Pasar MediaUrl para imágenes Y documentos PDF
                         MediaUrl: (cmd.MediaType == "image" || cmd.MediaType == "document")
                             ? cmd.MediaUrl : null,
-                        MediaType: cmd.MediaType
+                        MediaType: cmd.MediaType,
+                        AttentionDays: attentionDays,
+                        AttentionStartTime: attentionStart,
+                        AttentionEndTime: attentionEnd
                     ), ct);
 
                     replyText = agentResponse.ReplyText;

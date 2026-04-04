@@ -19,7 +19,10 @@ public record AgentRunRequest(
     Dictionary<string, string>? ClientContext = null,   // saldo, póliza, etc.
     string? TenantLlmApiKey = null,                     // API key del tenant para el LLM
     string? MediaUrl = null,                            // URL de imagen para visión IA
-    string? MediaType = null                            // "image" | "document" | "audio"
+    string? MediaType = null,                           // "image" | "document" | "audio"
+    List<int>? AttentionDays = null,                    // días laborables (0=Dom…6=Sáb)
+    string? AttentionStartTime = null,                  // "HH:mm"
+    string? AttentionEndTime = null                     // "HH:mm"
 );
 
 public record AgentResponse(

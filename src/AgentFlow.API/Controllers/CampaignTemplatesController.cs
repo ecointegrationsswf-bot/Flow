@@ -19,7 +19,10 @@ public record CampaignTemplateRequest(
     string? SendFrom = null, string? SendUntil = null,
     int MaxRetries = 3, int RetryIntervalHours = 24,
     int InactivityCloseHours = 72, string? CloseConditionKeyword = null,
-    int MaxTokens = 1024
+    int MaxTokens = 1024,
+    List<int>? AttentionDays = null,
+    string AttentionStartTime = "08:00",
+    string AttentionEndTime = "17:00"
 );
 
 [ApiController]
@@ -44,6 +47,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 t.SystemPrompt, t.SendFrom, t.SendUntil,
                 t.MaxRetries, t.RetryIntervalHours, t.InactivityCloseHours,
                 t.CloseConditionKeyword, t.MaxTokens,
+                t.AttentionDays, t.AttentionStartTime, t.AttentionEndTime,
                 t.IsActive, t.CreatedAt, t.UpdatedAt
             })
             .ToListAsync(ct);
@@ -102,6 +106,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             InactivityCloseHours = req.InactivityCloseHours,
             CloseConditionKeyword = req.CloseConditionKeyword,
             MaxTokens = req.MaxTokens,
+            AttentionDays = req.AttentionDays ?? [1, 2, 3, 4, 5],
+            AttentionStartTime = req.AttentionStartTime,
+            AttentionEndTime = req.AttentionEndTime,
         };
 
         db.CampaignTemplates.Add(template);
@@ -136,6 +143,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         template.InactivityCloseHours = req.InactivityCloseHours;
         template.CloseConditionKeyword = req.CloseConditionKeyword;
         template.MaxTokens = req.MaxTokens;
+        template.AttentionDays = req.AttentionDays ?? [1, 2, 3, 4, 5];
+        template.AttentionStartTime = req.AttentionStartTime;
+        template.AttentionEndTime = req.AttentionEndTime;
         template.UpdatedAt = DateTime.UtcNow;
 
         await db.SaveChangesAsync(ct);

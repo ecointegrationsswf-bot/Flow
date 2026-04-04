@@ -65,6 +65,9 @@ export function CampaignTemplateFormPage() {
   )
   const [expandedActions, setExpandedActions] = useState<Set<string>>(new Set())
   const [configErrors, setConfigErrors] = useState<Record<string, Record<string, string>>>({})
+  const [attentionDays, setAttentionDays] = useState<number[]>(existing?.attentionDays ?? [1, 2, 3, 4, 5])
+  const [attentionStart, setAttentionStart] = useState(existing?.attentionStartTime ?? '08:00')
+  const [attentionEnd, setAttentionEnd] = useState(existing?.attentionEndTime ?? '17:00')
 
   // Sync when existing loads
   if (isEdit && existing && followUpHours.length === 0 && existing.followUpHours.length > 0) {
@@ -81,6 +84,11 @@ export function CampaignTemplateFormPage() {
   }
   if (isEdit && existing && existing.actionConfigs && Object.keys(actionConfigs).length === 0 && Object.keys(existing.actionConfigs).length > 0) {
     setActionConfigs(existing.actionConfigs as Record<string, ActionConfig>)
+  }
+  if (isEdit && existing && attentionDays.join(',') === '1,2,3,4,5' && existing.attentionDays?.join(',') !== '1,2,3,4,5') {
+    setAttentionDays(existing.attentionDays ?? [1, 2, 3, 4, 5])
+    setAttentionStart(existing.attentionStartTime ?? '08:00')
+    setAttentionEnd(existing.attentionEndTime ?? '17:00')
   }
 
   const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
@@ -197,6 +205,9 @@ export function CampaignTemplateFormPage() {
       promptTemplateIds: selectedPromptIds,
       sendFrom: data.sendFrom || null,
       sendUntil: data.sendUntil || null,
+      attentionDays,
+      attentionStartTime: attentionStart,
+      attentionEndTime: attentionEnd,
       systemPrompt: '',
       maxRetries: 3,
       retryIntervalHours: 24,
@@ -259,6 +270,68 @@ export function CampaignTemplateFormPage() {
             <div>
               <label className="block text-sm font-medium text-gray-700">Enviar hasta</label>
               <input type="time" {...register('sendUntil')} className={inputClass} />
+            </div>
+          </div>
+        </section>
+
+        {/* Seccion: Horario de atencion de asesores */}
+        <section className="rounded-lg bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <Clock className="h-4 w-4 text-blue-600" />
+            <h2 className="text-sm font-semibold text-gray-900">Horario de atencion de asesores</h2>
+          </div>
+          <p className="mb-4 text-xs text-gray-500">
+            El agente usara este horario para informar al cliente cuando puede hablar con un asesor humano.
+          </p>
+
+          {/* Dias de la semana */}
+          <div className="mb-4">
+            <label className="mb-2 block text-sm font-medium text-gray-700">Dias de atencion</label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { num: 1, label: 'Lun' }, { num: 2, label: 'Mar' }, { num: 3, label: 'Mie' },
+                { num: 4, label: 'Jue' }, { num: 5, label: 'Vie' }, { num: 6, label: 'Sab' }, { num: 0, label: 'Dom' },
+              ].map(({ num, label }) => {
+                const selected = attentionDays.includes(num)
+                return (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => setAttentionDays(prev =>
+                      prev.includes(num) ? prev.filter(d => d !== num) : [...prev, num].sort()
+                    )}
+                    className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      selected
+                        ? 'bg-blue-600 text-white'
+                        : 'border border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Hora inicio y fin */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Hora de inicio</label>
+              <input
+                type="time"
+                value={attentionStart}
+                onChange={e => setAttentionStart(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Hora de cierre</label>
+              <input
+                type="time"
+                value={attentionEnd}
+                onChange={e => setAttentionEnd(e.target.value)}
+                className={inputClass}
+              />
             </div>
           </div>
         </section>
