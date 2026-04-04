@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -69,27 +69,19 @@ export function CampaignTemplateFormPage() {
   const [attentionStart, setAttentionStart] = useState(existing?.attentionStartTime ?? '08:00')
   const [attentionEnd, setAttentionEnd] = useState(existing?.attentionEndTime ?? '17:00')
 
-  // Sync when existing loads
-  if (isEdit && existing && followUpHours.length === 0 && existing.followUpHours.length > 0) {
-    setFollowUpHours(existing.followUpHours)
-  }
-  if (isEdit && existing && selectedLabelIds.length === 0 && existing.labelIds.length > 0) {
-    setSelectedLabelIds(existing.labelIds)
-  }
-  if (isEdit && existing && selectedActionIds.length === 0 && existing.actionIds.length > 0) {
-    setSelectedActionIds(existing.actionIds)
-  }
-  if (isEdit && existing && selectedPromptIds.length === 0 && existing.promptTemplateIds.length > 0) {
-    setSelectedPromptIds(existing.promptTemplateIds)
-  }
-  if (isEdit && existing && existing.actionConfigs && Object.keys(actionConfigs).length === 0 && Object.keys(existing.actionConfigs).length > 0) {
-    setActionConfigs(existing.actionConfigs as Record<string, ActionConfig>)
-  }
-  if (isEdit && existing && attentionDays.join(',') === '1,2,3,4,5' && existing.attentionDays?.join(',') !== '1,2,3,4,5') {
+  // Sync all state when existing template loads (edit mode)
+  useEffect(() => {
+    if (!existing) return
+    if (existing.followUpHours.length > 0) setFollowUpHours(existing.followUpHours)
+    if (existing.labelIds.length > 0) setSelectedLabelIds(existing.labelIds)
+    if (existing.actionIds.length > 0) setSelectedActionIds(existing.actionIds)
+    if (existing.promptTemplateIds.length > 0) setSelectedPromptIds(existing.promptTemplateIds)
+    if (existing.actionConfigs && Object.keys(existing.actionConfigs).length > 0)
+      setActionConfigs(existing.actionConfigs as Record<string, ActionConfig>)
     setAttentionDays(existing.attentionDays ?? [1, 2, 3, 4, 5])
     setAttentionStart(existing.attentionStartTime ?? '08:00')
     setAttentionEnd(existing.attentionEndTime ?? '17:00')
-  }
+  }, [existing?.id])
 
   const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
