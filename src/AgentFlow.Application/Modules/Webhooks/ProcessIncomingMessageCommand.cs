@@ -49,7 +49,8 @@ public class ProcessIncomingMessageHandler(
     IChannelProviderFactory channelFactory,
     ISessionStore sessions,
     IConversationNotifier notifier,
-    ITransferChatService transferChat
+    ITransferChatService transferChat,
+    ISendEmailResumeService emailResume
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
     public async Task<ProcessIncomingMessageResult> Handle(
@@ -322,6 +323,8 @@ public class ProcessIncomingMessageHandler(
                 {
                     conversation.Status = ConversationStatus.Closed;
                     conversation.ClosedAt = DateTime.UtcNow;
+                    try { await emailResume.ExecuteIfApplicableAsync(conversation, ct); }
+                    catch (Exception ex) { Console.WriteLine($"[SendEmailResume] Error: {ex.Message}"); }
                 }
             }
         }

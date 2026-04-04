@@ -105,6 +105,8 @@ builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcher
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ITransferChatService,
     AgentFlow.Infrastructure.Campaigns.TransferChatService>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ISendEmailResumeService,
+    AgentFlow.Infrastructure.Campaigns.SendEmailResumeService>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
 var jwtSecret = cfg["Jwt:Secret"] ?? "AgentFlow_Dev_Secret_Key_Min32Chars!!";

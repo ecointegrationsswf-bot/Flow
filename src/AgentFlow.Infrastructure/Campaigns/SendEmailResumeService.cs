@@ -1,0 +1,119 @@
+using System.Text.Json;
+using AgentFlow.Domain.Entities;
+using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Email;
+using AgentFlow.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
+
+namespace AgentFlow.Infrastructure.Campaigns;
+
+/// <summary>
+/// Cuando el agente cierra una conversación exitosamente ([INTENT:cierre])
+/// y el maestro de campaña tiene vinculada la acción SEND_EMAIL_RESUME,
+/// envía un email con el resumen de la gestión al email configurado en la acción.
+/// </summary>
+public class SendEmailResumeService(
+    AgentFlowDbContext db,
+    IEmailService emailService) : ISendEmailResumeService
+{
+    private const string ActionName = "SEND_EMAIL_RESUME";
+    private const int MessageCount = 10;
+
+    public async Task ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default)
+    {
+        // Solo aplica si la conversación viene de una campaña
+        if (!conversation.CampaignId.HasValue) return;
+
+        var campaign = await db.Campaigns
+            .Include(c => c.CampaignTemplate)
+            .FirstOrDefaultAsync(c => c.Id == conversation.CampaignId.Value, ct);
+
+        if (campaign?.CampaignTemplate is null) return;
+        if (campaign.CampaignTemplate.ActionIds.Count == 0) return;
+
+        // Verificar que la acción SEND_EMAIL_RESUME esté vinculada y activa.
+        // IMPORTANTE: materializar ActionIds antes del query EF (columna JSON).
+        var actionIds = campaign.CampaignTemplate.ActionIds.ToList();
+        var action = await db.ActionDefinitions
+            .Where(a => actionIds.Contains(a.Id) && a.Name == ActionName && a.IsActive)
+            .Select(a => new { a.Id })
+            .FirstOrDefaultAsync(ct);
+
+        if (action is null) return;
+
+        // Obtener el email del ejecutivo desde ActionConfigs (irá en CC)
+        var executiveEmail = GetEmailFromConfigs(campaign.CampaignTemplate.ActionConfigs, action.Id);
+
+        // Obtener el email del cliente desde el archivo de campaña (CampaignContact)
+        var contact = await db.CampaignContacts
+            .Where(c => c.CampaignId == campaign.Id && c.PhoneNumber == conversation.ClientPhone)
+            .Select(c => new { c.Email })
+            .FirstOrDefaultAsync(ct);
+
+        var clientEmail = contact?.Email;
+
+        // Si no hay email del cliente ni del ejecutivo, no hay a quién enviar
+        if (string.IsNullOrEmpty(clientEmail) && string.IsNullOrEmpty(executiveEmail)) return;
+
+        // Si no hay email del cliente, enviamos solo al ejecutivo (sin CC)
+        var toEmail = !string.IsNullOrEmpty(clientEmail) ? clientEmail : executiveEmail!;
+        var ccEmail = !string.IsNullOrEmpty(clientEmail) ? executiveEmail : null;
+
+        // Cargar últimos mensajes para el resumen
+        var recentMessages = await db.Messages
+            .Where(m => m.ConversationId == conversation.Id)
+            .OrderByDescending(m => m.SentAt)
+            .Take(MessageCount)
+            .OrderBy(m => m.SentAt)
+            .ToListAsync(ct);
+
+        var lines = recentMessages
+            .Select(m => (Who: m.IsFromAgent ? "Agente" : "Cliente", Text: TrimContent(m.Content)))
+            .ToList();
+
+        var clientName = conversation.ClientName ?? conversation.ClientPhone;
+
+        await emailService.SendConversationResumeAsync(
+            toEmail,
+            ccEmail,
+            clientName,
+            conversation.ClientPhone,
+            conversation.PolicyNumber,
+            lines,
+            ct);
+
+        Console.WriteLine($"[SendEmailResume] Email enviado a {toEmail}{(ccEmail is not null ? $" (CC: {ccEmail})" : "")} — conversación {conversation.Id}");
+    }
+
+    /// <summary>Extrae el emailAddress del JSON de configuraciones de acciones del template.</summary>
+    private static string? GetEmailFromConfigs(string? actionConfigs, Guid actionId)
+    {
+        if (string.IsNullOrEmpty(actionConfigs)) return null;
+
+        try
+        {
+            var configs = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(actionConfigs);
+            if (configs is null) return null;
+
+            var key = actionId.ToString();
+            if (!configs.TryGetValue(key, out var cfg)) return null;
+
+            return cfg.TryGetProperty("emailAddress", out var emailProp)
+                ? emailProp.GetString()
+                : null;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[SendEmailResume] Error leyendo ActionConfigs: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>Recorta el contenido de un mensaje y elimina el tag [media:...] si lo tiene.</summary>
+    private static string TrimContent(string content)
+    {
+        var idx = content.IndexOf("\n[media:", StringComparison.Ordinal);
+        var clean = idx >= 0 ? content[..idx].Trim() : content;
+        return clean.Length > 200 ? clean[..200] + "..." : clean;
+    }
+}

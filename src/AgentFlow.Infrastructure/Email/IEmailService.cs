@@ -6,4 +6,13 @@ public interface IEmailService
     Task SendWelcomeTenantEmailAsync(string toEmail, string fullName, string password, string tenantName, CancellationToken ct = default);
     Task SendTwoFactorCodeAsync(string toEmail, string fullName, string code, CancellationToken ct = default);
     Task SendPasswordResetAsync(string toEmail, string fullName, string resetToken, CancellationToken ct = default);
+
+    Task SendConversationResumeAsync(
+        string toEmail,
+        string? ccEmail,
+        string clientName,
+        string clientPhone,
+        string? policyNumber,
+        List<(string Who, string Text)> messages,
+        CancellationToken ct = default);
 }

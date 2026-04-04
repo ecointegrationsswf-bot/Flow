@@ -202,6 +202,132 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         """;
     }
 
+    public async Task SendConversationResumeAsync(
+        string toEmail,
+        string? ccEmail,
+        string clientName,
+        string clientPhone,
+        string? policyNumber,
+        List<(string Who, string Text)> messages,
+        CancellationToken ct = default)
+    {
+        var subject = $"Resumen de gestion - {clientName}";
+        var html = BuildConversationResumeTemplate(clientName, clientPhone, policyNumber, messages);
+        await SendWithCcAsync(toEmail, ccEmail, subject, html, ct);
+    }
+
+    private async Task SendWithCcAsync(string toEmail, string? ccEmail, string subject, string htmlContent, CancellationToken ct)
+    {
+        try
+        {
+            var client = GetClient();
+            var from = new EmailAddress(FromEmail, FromName);
+            var to = new EmailAddress(toEmail);
+            var msg = MailHelper.CreateSingleEmail(from, to, subject, null, htmlContent);
+            if (!string.IsNullOrEmpty(ccEmail))
+                msg.AddCc(new EmailAddress(ccEmail));
+            await client.SendEmailAsync(msg, ct);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error enviando email a {toEmail}: {ex.Message}");
+        }
+    }
+
+    private string BuildConversationResumeTemplate(
+        string clientName, string clientPhone, string? policyNumber,
+        List<(string Who, string Text)> messages)
+    {
+        var messagesHtml = new System.Text.StringBuilder();
+        foreach (var (who, text) in messages)
+        {
+            var isAgent = who == "Agente";
+            var bgColor = isAgent ? "#eff6ff" : "#f8fafc";
+            var labelColor = isAgent ? "#2563eb" : "#64748b";
+            var label = isAgent ? "Agente IA" : "Cliente";
+            messagesHtml.Append($"""
+                <tr>
+                  <td style="padding:8px 0;border-bottom:1px solid #f1f5f9;">
+                    <span style="display:inline-block;font-size:11px;font-weight:600;color:{labelColor};background-color:{bgColor};border-radius:4px;padding:2px 8px;margin-bottom:4px;">{label}</span>
+                    <p style="margin:0;color:#374151;font-size:14px;line-height:1.5;">{System.Net.WebUtility.HtmlEncode(text)}</p>
+                  </td>
+                </tr>
+            """);
+        }
+
+        var policyRow = policyNumber is not null
+            ? $"""<tr><td style="padding:6px 0;color:#64748b;font-size:13px;width:120px;">Poliza:</td><td style="padding:6px 0;color:#1e293b;font-size:13px;font-weight:600;">{System.Net.WebUtility.HtmlEncode(policyNumber)}</td></tr>"""
+            : "";
+
+        var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow,
+            TimeZoneInfo.FindSystemTimeZoneById(
+                OperatingSystem.IsWindows() ? "SA Pacific Standard Time" : "America/Panama"));
+
+        return $"""
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="utf-8"></head>
+        <body style="margin:0;padding:0;background-color:#f4f5f7;font-family:'Segoe UI',Roboto,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7;padding:40px 0;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+                <!-- Header -->
+                <tr>
+                  <td style="background:linear-gradient(135deg,#1e40af 0%,#3b82f6 100%);padding:28px 40px;">
+                    <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">TalkIA</h1>
+                    <p style="margin:6px 0 0;color:#bfdbfe;font-size:14px;">Resumen de gestion completada</p>
+                  </td>
+                </tr>
+                <!-- Client info -->
+                <tr>
+                  <td style="padding:28px 40px 0;">
+                    <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;">
+                      <tr>
+                        <td style="padding:16px 20px;">
+                          <p style="margin:0 0 10px;color:#15803d;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">✅ Gestion exitosa</p>
+                          <table width="100%" cellpadding="0" cellspacing="0">
+                            <tr>
+                              <td style="padding:6px 0;color:#64748b;font-size:13px;width:120px;">Cliente:</td>
+                              <td style="padding:6px 0;color:#1e293b;font-size:13px;font-weight:600;">{System.Net.WebUtility.HtmlEncode(clientName)}</td>
+                            </tr>
+                            <tr>
+                              <td style="padding:6px 0;color:#64748b;font-size:13px;">Telefono:</td>
+                              <td style="padding:6px 0;color:#1e293b;font-size:13px;font-weight:600;">{System.Net.WebUtility.HtmlEncode(clientPhone)}</td>
+                            </tr>
+                            {policyRow}
+                            <tr>
+                              <td style="padding:6px 0;color:#64748b;font-size:13px;">Fecha:</td>
+                              <td style="padding:6px 0;color:#1e293b;font-size:13px;">{now:dd/MM/yyyy HH:mm} (Panama)</td>
+                            </tr>
+                          </table>
+                        </td>
+                      </tr>
+                    </table>
+                  </td>
+                </tr>
+                <!-- Conversation -->
+                <tr>
+                  <td style="padding:24px 40px 0;">
+                    <h2 style="margin:0 0 16px;color:#1e293b;font-size:16px;font-weight:600;">Resumen de la conversacion</h2>
+                    <table width="100%" cellpadding="0" cellspacing="0">
+                      {messagesHtml}
+                    </table>
+                  </td>
+                </tr>
+                <!-- Footer -->
+                <tr>
+                  <td style="background-color:#f8fafc;padding:20px 40px;border-top:1px solid #e2e8f0;text-align:center;margin-top:28px;">
+                    <p style="margin:0;color:#94a3b8;font-size:12px;">&copy; 2026 TalkIA. Todos los derechos reservados.</p>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+        """;
+    }
+
     public async Task SendPasswordResetAsync(string toEmail, string fullName, string resetToken, CancellationToken ct = default)
     {
         var subject = "Restablecer contrasena - TalkIA";
