@@ -85,12 +85,13 @@ export function AppLayout() {
                 />
               ) : (
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500 text-xs font-bold text-white">
-                  {user.fullName
+                  {(user.fullName ?? '')
                     .split(' ')
-                    .map((w) => w[0])
+                    .filter(w => w.length > 0)
+                    .map(w => w[0])
                     .slice(0, 2)
                     .join('')
-                    .toUpperCase()}
+                    .toUpperCase() || '?'}
                 </div>
               )}
               <div className="min-w-0">
@@ -112,12 +113,13 @@ export function AppLayout() {
                 />
               ) : (
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500 text-xs font-bold text-white">
-                  {user.fullName
+                  {(user.fullName ?? '')
                     .split(' ')
-                    .map((w) => w[0])
+                    .filter(w => w.length > 0)
+                    .map(w => w[0])
                     .slice(0, 2)
                     .join('')
-                    .toUpperCase()}
+                    .toUpperCase() || '?'}
                 </div>
               )}
             </button>
