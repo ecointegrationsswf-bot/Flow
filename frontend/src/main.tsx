@@ -12,6 +12,11 @@ const queryClient = new QueryClient({
   },
 })
 
+// Mantener el API activo — ping cada 4 minutos para prevenir idle timeout de IIS
+setInterval(() => {
+  fetch('/api/auth/ping').catch(() => {})
+}, 4 * 60 * 1000)
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>

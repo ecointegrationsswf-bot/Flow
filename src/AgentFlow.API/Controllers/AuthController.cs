@@ -434,4 +434,9 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
 
         return CryptographicOperations.FixedTimeEquals(hash, storedHashBytes);
     }
+
+    // Endpoint ligero para mantener el app pool activo (keep-alive)
+    [HttpGet("ping")]
+    [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+    public IActionResult Ping() => Ok(new { status = "ok", ts = DateTime.UtcNow });
 }
