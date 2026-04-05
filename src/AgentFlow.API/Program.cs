@@ -22,7 +22,7 @@ var isDev   = builder.Environment.IsDevelopment();
 builder.Services.AddDbContext<AgentFlowDbContext>(o =>
     o.UseSqlServer(cfg.GetConnectionString("DefaultConnection"),
         sql => sql.MigrationsAssembly("AgentFlow.Infrastructure"))
-     .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
+     );
 
 // ── Redis (sesiones activas) — opcional en dev ───────────
 var redisConn = cfg.GetConnectionString("Redis");
