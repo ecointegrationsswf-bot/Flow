@@ -5,6 +5,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>AgentFlow.API</RootNamespace>
     <AspNetCoreHostingModel>OutOfProcess</AspNetCoreHostingModel>
+    <!-- Permite ejecutar en cualquier runtime >= net8.0, incluido .NET 10 -->
+    <RollForward>Major</RollForward>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\AgentFlow.Application\AgentFlow.Application.csproj" />
