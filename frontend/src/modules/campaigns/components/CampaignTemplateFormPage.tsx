@@ -48,7 +48,7 @@ export function CampaignTemplateFormPage() {
   const isEdit = !!id
   const navigate = useNavigate()
 
-  const { data: existing, isLoading: loadingTemplate } = useCampaignTemplate(id)
+  const { data: existing, isLoading: loadingTemplate, isError: templateError } = useCampaignTemplate(id)
   const { data: agents } = useAgents()
   const { data: labels, isLoading: loadingLabels } = useLabels()
   const { data: availableActions, isLoading: loadingActions } = useAvailableActions()
@@ -223,6 +223,12 @@ export function CampaignTemplateFormPage() {
   }
 
   if (isEdit && loadingTemplate) return <div className="py-12 text-center text-gray-400">Cargando...</div>
+  if (isEdit && templateError) return (
+    <div className="py-12 text-center">
+      <p className="text-red-500 mb-4">Error al cargar la campaña maestro.</p>
+      <button onClick={() => window.location.reload()} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Reintentar</button>
+    </div>
+  )
 
   const isPending = createMut.isPending || updateMut.isPending
   const inputClass = "mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
