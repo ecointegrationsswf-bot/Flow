@@ -397,6 +397,151 @@ if (isDev)
     }
     catch { }
 
+    // ── Columnas de CampaignTemplates (migraciones que pueden no haberse aplicado en prod) ──
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActionIds')
+            BEGIN ALTER TABLE CampaignTemplates ADD ActionIds nvarchar(2000) NOT NULL DEFAULT '[]'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'PromptTemplateIds')
+            BEGIN ALTER TABLE CampaignTemplates ADD PromptTemplateIds nvarchar(2000) NOT NULL DEFAULT '[]'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActionConfigs')
+            BEGIN ALTER TABLE CampaignTemplates ADD ActionConfigs nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'SystemPrompt')
+            BEGIN ALTER TABLE CampaignTemplates ADD SystemPrompt nvarchar(MAX) NOT NULL DEFAULT ''; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'SendFrom')
+            BEGIN ALTER TABLE CampaignTemplates ADD SendFrom nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'SendUntil')
+            BEGIN ALTER TABLE CampaignTemplates ADD SendUntil nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'MaxRetries')
+            BEGIN ALTER TABLE CampaignTemplates ADD MaxRetries int NOT NULL DEFAULT 3; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'RetryIntervalHours')
+            BEGIN ALTER TABLE CampaignTemplates ADD RetryIntervalHours int NOT NULL DEFAULT 24; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'InactivityCloseHours')
+            BEGIN ALTER TABLE CampaignTemplates ADD InactivityCloseHours int NOT NULL DEFAULT 72; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'CloseConditionKeyword')
+            BEGIN ALTER TABLE CampaignTemplates ADD CloseConditionKeyword nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'MaxTokens')
+            BEGIN ALTER TABLE CampaignTemplates ADD MaxTokens int NOT NULL DEFAULT 1024; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AttentionDays')
+            BEGIN ALTER TABLE CampaignTemplates ADD AttentionDays nvarchar(100) NOT NULL DEFAULT '[1,2,3,4,5]'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AttentionStartTime')
+            BEGIN ALTER TABLE CampaignTemplates ADD AttentionStartTime nvarchar(5) NOT NULL DEFAULT '08:00'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AttentionEndTime')
+            BEGIN ALTER TABLE CampaignTemplates ADD AttentionEndTime nvarchar(5) NOT NULL DEFAULT '17:00'; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] CampaignTemplates columns: {ex.Message}"); }
+
+    // ── Columnas de Tenants (migraciones MoveSendGridToTenant, AddTenantLlmConfiguration) ──
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'SendGridApiKey')
+            BEGIN ALTER TABLE Tenants ADD SendGridApiKey nvarchar(500) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'SenderEmail')
+            BEGIN ALTER TABLE Tenants ADD SenderEmail nvarchar(200) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LlmApiKey')
+            BEGIN ALTER TABLE Tenants ADD LlmApiKey nvarchar(500) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LlmModel')
+            BEGIN ALTER TABLE Tenants ADD LlmModel nvarchar(100) NOT NULL DEFAULT ''; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LlmProvider')
+            BEGIN ALTER TABLE Tenants ADD LlmProvider nvarchar(50) NOT NULL DEFAULT ''; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Tenants columns: {ex.Message}"); }
+
+    // ── Columnas adicionales en Campaigns y AppUsers ──────────────────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LaunchedByUserPhone')
+            BEGIN ALTER TABLE Campaigns ADD LaunchedByUserPhone nvarchar(20) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AppUsers') AND name = 'NotifyPhone')
+            BEGIN ALTER TABLE AppUsers ADD NotifyPhone nvarchar(20) NULL; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Campaigns/AppUsers columns: {ex.Message}"); }
+
+    // ── Tabla ActionDefinitions (migración AddActionDefinitions) ──────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ActionDefinitions')
+            BEGIN
+                CREATE TABLE ActionDefinitions (
+                    Id              uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    Name            nvarchar(100) NOT NULL,
+                    Description     nvarchar(500) NULL,
+                    RequiresWebhook bit NOT NULL DEFAULT 0,
+                    SendsEmail      bit NOT NULL DEFAULT 0,
+                    SendsSms        bit NOT NULL DEFAULT 0,
+                    WebhookUrl      nvarchar(500) NULL,
+                    WebhookMethod   nvarchar(10) NULL,
+                    IsActive        bit NOT NULL DEFAULT 1,
+                    CreatedAt       datetime2 NOT NULL DEFAULT GETUTCDATE(),
+                    UpdatedAt       datetime2 NULL
+                );
+                CREATE UNIQUE INDEX IX_ActionDefinitions_Name ON ActionDefinitions (Name);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] ActionDefinitions table: {ex.Message}"); }
+
+    // ── Tabla PromptTemplates (migración AddPromptTemplates) ──────────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'PromptTemplates')
+            BEGIN
+                CREATE TABLE PromptTemplates (
+                    Id              uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    Name            nvarchar(200) NOT NULL,
+                    Description     nvarchar(500) NULL,
+                    CategoryId      uniqueidentifier NULL,
+                    SystemPrompt    nvarchar(MAX) NULL,
+                    ResultPrompt    nvarchar(MAX) NULL,
+                    AnalysisPrompts nvarchar(MAX) NULL,
+                    FieldMapping    nvarchar(MAX) NULL,
+                    IsActive        bit NOT NULL DEFAULT 1,
+                    CreatedAt       datetime2 NOT NULL DEFAULT GETUTCDATE(),
+                    UpdatedAt       datetime2 NULL,
+                    CONSTRAINT FK_PromptTemplates_AgentCategories
+                        FOREIGN KEY (CategoryId) REFERENCES AgentCategories(Id) ON DELETE SET NULL
+                );
+                CREATE INDEX IX_PromptTemplates_CategoryId ON PromptTemplates (CategoryId);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] PromptTemplates table: {ex.Message}"); }
+
+    // ── Seed acción SEND_EMAIL_RESUME si no existe ─────────────────────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM ActionDefinitions WHERE Name = 'SEND_EMAIL_RESUME')
+            BEGIN
+                INSERT INTO ActionDefinitions (Id, Name, Description, RequiresWebhook, SendsEmail, SendsSms, IsActive, CreatedAt)
+                VALUES ('d221c23d-fa0c-41ad-b356-60df013c877f', 'SEND_EMAIL_RESUME',
+                        'Envía un email con el resumen de la gestión al cerrar la conversación',
+                        0, 1, 0, 1, GETUTCDATE());
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] SEND_EMAIL_RESUME seed: {ex.Message}"); }
+
     if (!db.SuperAdmins.Any())
     {
         db.SuperAdmins.Add(new AgentFlow.Domain.Entities.SuperAdmin
