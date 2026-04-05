@@ -7,7 +7,7 @@ import {
 
 export function CampaignTemplatesPage() {
   const navigate = useNavigate()
-  const { data: templates, isLoading } = useCampaignTemplates()
+  const { data: templates, isLoading, isError, refetch } = useCampaignTemplates()
   const deleteMut = useDeleteCampaignTemplate()
 
   const handleDelete = async (id: string) => {
@@ -33,6 +33,11 @@ export function CampaignTemplatesPage() {
 
       {isLoading ? (
         <div className="py-12 text-center text-gray-400">Cargando...</div>
+      ) : isError ? (
+        <div className="py-12 text-center">
+          <p className="text-red-500 mb-3">Error al cargar los maestros de campaña.</p>
+          <button onClick={() => refetch()} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm hover:bg-blue-700">Reintentar</button>
+        </div>
       ) : !templates?.length ? (
         <div className="py-16 text-center">
           <ClipboardList className="mx-auto h-12 w-12 text-gray-300" />
