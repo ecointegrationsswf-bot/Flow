@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useAuthStore } from '@/shared/stores/authStore'
+import { useTenant } from '@/shared/hooks/useTenant'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -55,7 +55,7 @@ export function CampaignTemplateFormPage() {
   const { data: availablePrompts, isLoading: loadingPrompts } = useAvailablePrompts()
   const createMut = useCreateCampaignTemplate()
   const updateMut = useUpdateCampaignTemplate()
-  const currentUser = useAuthStore(s => s.user)
+  const { data: tenant } = useTenant()
 
   const [followUpHours, setFollowUpHours] = useState<number[]>(existing?.followUpHours ?? [])
   const [newHour, setNewHour] = useState('')
@@ -130,11 +130,11 @@ export function CampaignTemplateFormPage() {
       const action = availableActions?.find(a => a.id === actionId)
       if (action && (action.requiresWebhook || action.sendsEmail || action.sendsSms)) {
         setExpandedActions(prev => new Set(prev).add(actionId))
-        // Pre-llenar email del ejecutivo con el email del usuario autenticado
-        if (action.sendsEmail && currentUser?.email) {
+        // Pre-llenar email del ejecutivo con el email remitente configurado en el tenant
+        if (action.sendsEmail && tenant?.senderEmail) {
           setActionConfigs(prev => ({
             ...prev,
-            [actionId]: { ...prev[actionId], emailAddress: prev[actionId]?.emailAddress || currentUser.email }
+            [actionId]: { ...prev[actionId], emailAddress: prev[actionId]?.emailAddress || tenant.senderEmail! }
           }))
         }
       }

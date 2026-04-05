@@ -21,15 +21,32 @@ public class SendEmailResumeService(
 
     public async Task ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default)
     {
+        Console.WriteLine($"[SendEmailResume] Iniciando — ConvId={conversation.Id} CampaignId={conversation.CampaignId}");
+
         // Solo aplica si la conversación viene de una campaña
-        if (!conversation.CampaignId.HasValue) return;
+        if (!conversation.CampaignId.HasValue)
+        {
+            Console.WriteLine("[SendEmailResume] SKIP: CampaignId es null");
+            return;
+        }
 
         var campaign = await db.Campaigns
             .Include(c => c.CampaignTemplate)
             .FirstOrDefaultAsync(c => c.Id == conversation.CampaignId.Value, ct);
 
-        if (campaign?.CampaignTemplate is null) return;
-        if (campaign.CampaignTemplate.ActionIds.Count == 0) return;
+        if (campaign?.CampaignTemplate is null)
+        {
+            Console.WriteLine($"[SendEmailResume] SKIP: Campaign={campaign?.Id} no tiene CampaignTemplate");
+            return;
+        }
+
+        Console.WriteLine($"[SendEmailResume] Template={campaign.CampaignTemplate.Id} ActionIds={string.Join(",", campaign.CampaignTemplate.ActionIds)}");
+
+        if (campaign.CampaignTemplate.ActionIds.Count == 0)
+        {
+            Console.WriteLine("[SendEmailResume] SKIP: Template sin acciones vinculadas");
+            return;
+        }
 
         // Verificar que la acción SEND_EMAIL_RESUME esté vinculada y activa.
         // IMPORTANTE: materializar ActionIds antes del query EF (columna JSON).
@@ -39,10 +56,18 @@ public class SendEmailResumeService(
             .Select(a => new { a.Id })
             .FirstOrDefaultAsync(ct);
 
-        if (action is null) return;
+        if (action is null)
+        {
+            Console.WriteLine($"[SendEmailResume] SKIP: No se encontró acción activa '{ActionName}' en los ActionIds del template");
+            return;
+        }
+
+        Console.WriteLine($"[SendEmailResume] Acción encontrada Id={action.Id}");
 
         // Obtener el email del ejecutivo desde ActionConfigs (irá en CC)
         var executiveEmail = GetEmailFromConfigs(campaign.CampaignTemplate.ActionConfigs, action.Id);
+        Console.WriteLine($"[SendEmailResume] ActionConfigs raw={campaign.CampaignTemplate.ActionConfigs}");
+        Console.WriteLine($"[SendEmailResume] ExecutiveEmail={executiveEmail}");
 
         // Obtener el email del cliente desde el archivo de campaña (CampaignContact)
         var contact = await db.CampaignContacts
@@ -51,9 +76,14 @@ public class SendEmailResumeService(
             .FirstOrDefaultAsync(ct);
 
         var clientEmail = contact?.Email;
+        Console.WriteLine($"[SendEmailResume] ClientPhone={conversation.ClientPhone} ContactFound={contact is not null} ClientEmail={clientEmail}");
 
         // Si no hay email del cliente ni del ejecutivo, no hay a quién enviar
-        if (string.IsNullOrEmpty(clientEmail) && string.IsNullOrEmpty(executiveEmail)) return;
+        if (string.IsNullOrEmpty(clientEmail) && string.IsNullOrEmpty(executiveEmail))
+        {
+            Console.WriteLine("[SendEmailResume] SKIP: No hay emails configurados (ni cliente ni ejecutivo)");
+            return;
+        }
 
         // Si no hay email del cliente, enviamos solo al ejecutivo (sin CC)
         var toEmail = !string.IsNullOrEmpty(clientEmail) ? clientEmail : executiveEmail!;
