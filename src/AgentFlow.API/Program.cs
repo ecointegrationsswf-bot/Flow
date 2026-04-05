@@ -294,6 +294,7 @@ if (isDev)
 }
 
 // ── Seed super admin en producción (si no existe ninguno) ───────────
+try
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
@@ -556,6 +557,11 @@ if (isDev)
         db.SaveChanges();
         Console.WriteLine("[Seed] Super Admin creado en producción.");
     }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[Startup] Error en bloque de seed/schema: {ex.Message}");
+    // No lanzar — el API debe arrancar aunque el schema check falle
 }
 
 // ── Security headers ─────────────────────────────────

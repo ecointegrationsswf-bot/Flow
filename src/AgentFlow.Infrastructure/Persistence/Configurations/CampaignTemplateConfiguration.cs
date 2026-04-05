@@ -42,9 +42,9 @@ public class CampaignTemplateConfiguration : IEntityTypeConfiguration<CampaignTe
             .HasConversion(
                 v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
                 v => JsonSerializer.Deserialize<List<int>>(v, (JsonSerializerOptions?)null) ?? new List<int> { 1, 2, 3, 4, 5 }
-            ).HasMaxLength(100).HasDefaultValue(new List<int> { 1, 2, 3, 4, 5 });
-        b.Property(t => t.AttentionStartTime).HasMaxLength(5).HasDefaultValue("08:00");
-        b.Property(t => t.AttentionEndTime).HasMaxLength(5).HasDefaultValue("17:00");
+            ).HasMaxLength(100).HasDefaultValueSql("'[1,2,3,4,5]'");
+        b.Property(t => t.AttentionStartTime).HasMaxLength(5).HasDefaultValueSql("'08:00'");
+        b.Property(t => t.AttentionEndTime).HasMaxLength(5).HasDefaultValueSql("'17:00'");
 
         b.Property(t => t.ActionConfigs).HasMaxLength(8000);
 
