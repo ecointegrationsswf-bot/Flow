@@ -22,7 +22,7 @@ var isDev   = builder.Environment.IsDevelopment();
 builder.Services.AddDbContext<AgentFlowDbContext>(o =>
     o.UseSqlServer(cfg.GetConnectionString("DefaultConnection"),
         sql => sql.MigrationsAssembly("AgentFlow.Infrastructure"))
-     );
+     .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
 
 // ── Redis (sesiones activas) — opcional en dev ───────────
 var redisConn = cfg.GetConnectionString("Redis");
@@ -78,6 +78,8 @@ builder.Services.AddSingleton<ConversationNotifier>();
 builder.Services.AddSingleton<IConversationNotifier>(sp => sp.GetRequiredService<ConversationNotifier>());
 
 // ── Hangfire — opcional, no bloquea el inicio si la BD no responde ──
+// NOTA: AddHangfireServer() registra un IHostedService cuyo StartAsync() puede lanzar
+// una excepción no capturada que mata el host. Lo envolvemos en un safe wrapper.
 var hangfireEnabled = false;
 try
 {
@@ -220,7 +222,7 @@ if (isDev)
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
-    db.Database.Migrate();
+    try { db.Database.Migrate(); } catch (Exception ex) { Console.WriteLine($"[Dev] Migrate: {ex.Message}"); }
 
     // Agregar columna ActionConfigs si no existe (evita depender de migraciones con Designer)
     db.Database.ExecuteSqlRaw(@"

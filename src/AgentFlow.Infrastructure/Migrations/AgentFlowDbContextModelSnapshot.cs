@@ -93,7 +93,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("AgentCategories");
+                    b.ToTable("AgentCategories", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentDefinition", b =>
@@ -184,7 +184,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("WhatsAppLineId");
 
-                    b.ToTable("AgentDefinitions");
+                    b.ToTable("AgentDefinitions", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentDocument", b =>
@@ -226,7 +226,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("TenantId");
 
-                    b.ToTable("AgentDocuments");
+                    b.ToTable("AgentDocuments", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentTemplate", b =>
@@ -300,7 +300,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("Category");
 
-                    b.ToTable("AgentTemplates");
+                    b.ToTable("AgentTemplates", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AppUser", b =>
@@ -377,7 +377,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("TenantId", "Email")
                         .IsUnique();
 
-                    b.ToTable("AppUsers");
+                    b.ToTable("AppUsers", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Campaign", b =>
@@ -468,7 +468,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("TenantId", "IsActive");
 
-                    b.ToTable("Campaigns");
+                    b.ToTable("Campaigns", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignContact", b =>
@@ -559,7 +559,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("CampaignId", "DispatchStatus", "ClaimedAt");
 
-                    b.ToTable("CampaignContacts");
+                    b.ToTable("CampaignContacts", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignDispatchLog", b =>
@@ -622,7 +622,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("CampaignId", "OccurredAt");
 
-                    b.ToTable("CampaignDispatchLogs");
+                    b.ToTable("CampaignDispatchLogs", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignTemplate", b =>
@@ -737,7 +737,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("TenantId");
 
-                    b.ToTable("CampaignTemplates");
+                    b.ToTable("CampaignTemplates", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Conversation", b =>
@@ -804,7 +804,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("TenantId", "ClientPhone", "Status");
 
-                    b.ToTable("Conversations");
+                    b.ToTable("Conversations", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.ConversationLabel", b =>
@@ -841,7 +841,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("TenantId", "Name")
                         .IsUnique();
 
-                    b.ToTable("ConversationLabels");
+                    b.ToTable("ConversationLabels", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.GestionEvent", b =>
@@ -873,7 +873,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("ConversationId");
 
-                    b.ToTable("GestionEvents");
+                    b.ToTable("GestionEvents", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Message", b =>
@@ -927,7 +927,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("ConversationId");
 
-                    b.ToTable("Messages");
+                    b.ToTable("Messages", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.PromptTemplate", b =>
@@ -1020,7 +1020,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("Email")
                         .IsUnique();
 
-                    b.ToTable("SuperAdmins");
+                    b.ToTable("SuperAdmins", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Tenant", b =>
@@ -1113,7 +1113,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("Slug")
                         .IsUnique();
 
-                    b.ToTable("Tenants");
+                    b.ToTable("Tenants", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.WebhookLog", b =>
@@ -1159,7 +1159,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("WebhookLogs");
+                    b.ToTable("WebhookLogs", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.WhatsAppLine", b =>
@@ -1213,7 +1213,7 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[TenantId] IS NOT NULL");
 
-                    b.ToTable("WhatsAppLines");
+                    b.ToTable("WhatsAppLines", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentDefinition", b =>

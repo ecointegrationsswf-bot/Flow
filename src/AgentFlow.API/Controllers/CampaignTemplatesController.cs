@@ -83,6 +83,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CampaignTemplateRequest req, CancellationToken ct)
     {
+        if (req.ActionConfigs != null && req.ActionConfigs.Length > 8000)
+            return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
+
         var tenantId = tenantCtx.TenantId;
 
         var template = new CampaignTemplate
@@ -120,6 +123,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] CampaignTemplateRequest req, CancellationToken ct)
     {
+        if (req.ActionConfigs != null && req.ActionConfigs.Length > 8000)
+            return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
+
         var tenantId = tenantCtx.TenantId;
         var template = await db.CampaignTemplates
             .FirstOrDefaultAsync(t => t.Id == id && t.TenantId == tenantId, ct);
