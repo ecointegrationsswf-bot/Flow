@@ -209,10 +209,17 @@ public class FixedFormatCampaignService : IFixedFormatCampaignService
                 PropertyNamingPolicy = null // preservar nombres de columna tal cual
             });
 
+            // Leer email del primer registro (columna "Email" del Excel si existe)
+            var firstRegistro = registros[0];
+            var email = firstRegistro.TryGetValue("Email", out var emailVal)
+                ? emailVal?.ToString()?.Trim()
+                : null;
+            if (string.IsNullOrEmpty(email)) email = null;
+
             contacts.Add(new ContactRow(
                 PhoneNumber: phone,
                 ClientName: nombreCliente,
-                Email: null,
+                Email: email,
                 PolicyNumber: null,
                 InsuranceCompany: null,
                 PendingAmount: null,

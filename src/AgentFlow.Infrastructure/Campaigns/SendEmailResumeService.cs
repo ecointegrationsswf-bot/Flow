@@ -69,14 +69,18 @@ public class SendEmailResumeService(
         Console.WriteLine($"[SendEmailResume] ActionConfigs raw={campaign.CampaignTemplate.ActionConfigs}");
         Console.WriteLine($"[SendEmailResume] ExecutiveEmail={executiveEmail}");
 
-        // Obtener el email del cliente desde el archivo de campaña (CampaignContact)
+        // Obtener el email y número de póliza del cliente desde el archivo de campaña (CampaignContact)
         var contact = await db.CampaignContacts
             .Where(c => c.CampaignId == campaign.Id && c.PhoneNumber == conversation.ClientPhone)
-            .Select(c => new { c.Email })
+            .Select(c => new { c.Email, c.PolicyNumber })
             .FirstOrDefaultAsync(ct);
 
         var clientEmail = contact?.Email;
-        Console.WriteLine($"[SendEmailResume] ClientPhone={conversation.ClientPhone} ContactFound={contact is not null} ClientEmail={clientEmail}");
+        // Usar póliza de la conversación o, si no está, del contacto de campaña
+        var policyNumber = !string.IsNullOrEmpty(conversation.PolicyNumber)
+            ? conversation.PolicyNumber
+            : contact?.PolicyNumber;
+        Console.WriteLine($"[SendEmailResume] ClientPhone={conversation.ClientPhone} ContactFound={contact is not null} ClientEmail={clientEmail} PolicyNumber={policyNumber}");
 
         // Si no hay email del cliente ni del ejecutivo, no hay a quién enviar
         if (string.IsNullOrEmpty(clientEmail) && string.IsNullOrEmpty(executiveEmail))
@@ -89,11 +93,15 @@ public class SendEmailResumeService(
         var toEmail = !string.IsNullOrEmpty(clientEmail) ? clientEmail : executiveEmail!;
         var ccEmail = !string.IsNullOrEmpty(clientEmail) ? executiveEmail : null;
 
-        // Cargar últimos mensajes para el resumen
+        // Cargar mensajes de HOY (en zona horaria de Panamá) para el resumen
+        var panamaZone = TimeZoneInfo.FindSystemTimeZoneById(
+            OperatingSystem.IsWindows() ? "SA Pacific Standard Time" : "America/Panama");
+        var todayPanamaStart = TimeZoneInfo.ConvertTimeToUtc(
+            DateTime.SpecifyKind(TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, panamaZone).Date, DateTimeKind.Unspecified),
+            panamaZone);
+
         var recentMessages = await db.Messages
-            .Where(m => m.ConversationId == conversation.Id)
-            .OrderByDescending(m => m.SentAt)
-            .Take(MessageCount)
+            .Where(m => m.ConversationId == conversation.Id && m.SentAt >= todayPanamaStart)
             .OrderBy(m => m.SentAt)
             .ToListAsync(ct);
 
@@ -108,7 +116,7 @@ public class SendEmailResumeService(
             ccEmail,
             clientName,
             conversation.ClientPhone,
-            conversation.PolicyNumber,
+            policyNumber,
             lines,
             ct);
 

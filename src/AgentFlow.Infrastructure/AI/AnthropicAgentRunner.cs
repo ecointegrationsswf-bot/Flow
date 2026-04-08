@@ -77,8 +77,17 @@ public class AnthropicAgentRunner(
         sb.AppendLine(req.Agent.SystemPrompt);
         sb.AppendLine();
         sb.AppendLine("## Instrucciones de clasificación");
-        sb.AppendLine("Al inicio de tu respuesta incluye una de estas etiquetas:");
-        sb.AppendLine("[INTENT:cobros] | [INTENT:reclamos] | [INTENT:renovaciones] | [INTENT:humano] | [INTENT:cierre]");
+        sb.AppendLine("Al inicio de tu respuesta incluye UNA de estas etiquetas según el contexto:");
+        sb.AppendLine("[INTENT:cobros]      → gestión de cobro/pago activa (cliente aún no ha pagado ni cerrado)");
+        sb.AppendLine("[INTENT:reclamos]    → el cliente tiene un reclamo de seguro");
+        sb.AppendLine("[INTENT:renovaciones]→ el cliente quiere renovar su póliza");
+        sb.AppendLine("[INTENT:humano]      → el cliente pide hablar con una persona");
+        sb.AppendLine("[INTENT:cierre]      → USA ESTA ETIQUETA cuando la conversación llega a su FIN NATURAL:");
+        sb.AppendLine("  • El cliente confirmó que va a pagar (con monto y fecha) y se despidió");
+        sb.AppendLine("  • El cliente confirmó que ya pagó o que enviará el comprobante");
+        sb.AppendLine("  • La solicitud del cliente fue atendida y no hay nada más que gestionar");
+        sb.AppendLine("  • El cliente indicó explícitamente que ya no necesita nada más y se despidió");
+        sb.AppendLine("IMPORTANTE: Cuando uses [INTENT:cierre], colócalo al inicio de tu respuesta como las demás etiquetas.");
         sb.AppendLine();
 
         // Inyectar fecha/hora actual en zona horaria de Panamá para que el agente
