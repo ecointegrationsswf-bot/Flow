@@ -217,12 +217,26 @@ builder.Services.AddCors(o => o.AddPolicy("dev", p =>
 
 var app = builder.Build();
 
+// ── Migraciones automáticas (todos los entornos) ─────────
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
+    try
+    {
+        db.Database.Migrate();
+        Console.WriteLine("[Startup] Migraciones aplicadas correctamente.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Error al aplicar migraciones: {ex.Message}");
+    }
+}
+
 // ── Seed de tenant para desarrollo ──────────────────────
 if (isDev)
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
-    try { db.Database.Migrate(); } catch (Exception ex) { Console.WriteLine($"[Dev] Migrate: {ex.Message}"); }
 
     // Agregar columna ActionConfigs si no existe (evita depender de migraciones con Designer)
     db.Database.ExecuteSqlRaw(@"
