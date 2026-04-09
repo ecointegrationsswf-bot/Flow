@@ -29,6 +29,7 @@ import { ActionsPage } from '@/modules/admin/components/ActionsPage'
 import { PromptsPage } from '@/modules/admin/components/PromptsPage'
 import { PromptFormPage } from '@/modules/admin/components/PromptFormPage'
 import { ProfilePage } from '@/modules/profile/components/ProfilePage'
+import { BrainAgentRegistryPage } from '@/modules/brain/components/BrainAgentRegistryPage'
 import { ForgotPasswordPage } from '@/modules/auth/components/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/modules/auth/components/ResetPasswordPage'
 
@@ -77,6 +78,7 @@ export default function App() {
           <Route path="/agents/new" element={<AgentFormPage />} />
           <Route path="/agents/:id/edit" element={<AgentFormPage />} />
           <Route path="/labels" element={<LabelsPage />} />
+          <Route path="/brain" element={<BrainAgentRegistryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
         </Route>

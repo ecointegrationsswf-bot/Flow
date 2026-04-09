@@ -216,7 +216,8 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 t.LlmModel,
                 SendGridApiKey = string.IsNullOrEmpty(t.SendGridApiKey) ? null : "***" + t.SendGridApiKey.Substring(Math.Max(0, t.SendGridApiKey.Length - 4)),
                 t.SenderEmail,
-                t.CampaignMessageDelaySeconds
+                t.CampaignMessageDelaySeconds,
+                t.BrainEnabled
             })
             .FirstOrDefaultAsync(ct);
 
@@ -302,6 +303,33 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
 
         return Ok(new { delaySeconds = tenant.CampaignMessageDelaySeconds });
     }
+
+    [HttpPut("tenant/brain")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateBrainEnabled([FromBody] UpdateBrainEnabledRequest req, CancellationToken ct)
+    {
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        // Si se intenta activar, verificar que existe un Agente Welcome
+        if (req.BrainEnabled)
+        {
+            var hasWelcome = await db.AgentRegistryEntries
+                .AnyAsync(r => r.TenantId == tenantId && r.IsWelcome && r.IsActive, ct);
+            if (!hasWelcome)
+                return BadRequest(new { error = "Debes registrar un Agente Welcome antes de activar el Cerebro. Ve a Cerebro → Registro de agentes." });
+        }
+
+        tenant.BrainEnabled = req.BrainEnabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { tenant.BrainEnabled });
+    }
+
+    public record UpdateBrainEnabledRequest(bool BrainEnabled);
 
     [HttpPost("forgot-password")]
     [EnableRateLimiting("auth")]

@@ -20,9 +20,9 @@ public class AgentRegistryEntry
     /// <summary>Descripción en lenguaje natural de las capacidades del agente para que Claude tome decisiones de routing.</summary>
     public string Capabilities { get; set; } = string.Empty;
 
-    /// <summary>FK al AgentDefinition existente que ejecuta las respuestas.</summary>
-    public Guid AgentDefinitionId { get; set; }
-    public AgentDefinition AgentDefinition { get; set; } = null!;
+    /// <summary>FK al maestro de campaña completo (prompt, acciones, etiquetas). El Cerebro necesita el paquete completo.</summary>
+    public Guid CampaignTemplateId { get; set; }
+    public CampaignTemplate CampaignTemplate { get; set; } = null!;
 
     /// <summary>Exactamente uno por tenant debe ser true. Primer punto de contacto para inbound fríos.</summary>
     public bool IsWelcome { get; set; }

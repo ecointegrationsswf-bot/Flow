@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Loader2, Save, Mail, Brain, Clock, MessageSquare } from 'lucide-react'
-import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone, useUpdateCampaignDelay } from '@/shared/hooks/useTenant'
+import { ToggleLeft, ToggleRight } from 'lucide-react'
+import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone, useUpdateCampaignDelay, useUpdateBrainEnabled } from '@/shared/hooks/useTenant'
 
 const TIMEZONES = [
   { value: 'America/Panama',      label: 'America/Panama (UTC-5)' },
@@ -48,6 +49,7 @@ export function TenantSettingsTab() {
   const updateLlm = useUpdateTenantLlm()
   const updateTimezone = useUpdateTenantTimezone()
   const updateDelay = useUpdateCampaignDelay()
+  const updateBrain = useUpdateBrainEnabled()
 
   const [sendGridApiKey, setSendGridApiKey] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
@@ -365,6 +367,42 @@ export function TenantSettingsTab() {
             <p className="mt-2 text-sm text-red-600">Error al actualizar la configuracion.</p>
           )}
         </div>
+      </div>
+
+      {/* Seccion: Cerebro */}
+      <div className="rounded-lg bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Brain className="h-5 w-5 text-indigo-600" />
+          <h2 className="text-base font-semibold text-gray-900">Cerebro — Orquestacion Inteligente</h2>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-4">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Activar el Cerebro para este tenant</p>
+            <p className="text-xs text-gray-500 mt-1 max-w-md">
+              Cuando esta activo, todos los mensajes entrantes pasan por el Cerebro antes de ser asignados a un agente.
+              Requiere al menos un Agente Welcome configurado en el registro de agentes.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => updateBrain.mutate(!tenant?.brainEnabled)}
+            disabled={updateBrain.isPending}
+            className="transition-colors"
+          >
+            {tenant?.brainEnabled ? (
+              <ToggleRight className="h-8 w-8 text-indigo-600" />
+            ) : (
+              <ToggleLeft className="h-8 w-8 text-gray-300" />
+            )}
+          </button>
+        </div>
+        {updateBrain.isError && (
+          <p className="mt-2 text-sm text-red-600">{(updateBrain.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
+        )}
+        {updateBrain.isSuccess && (
+          <p className="mt-2 text-sm text-green-600">Configuracion del Cerebro actualizada.</p>
+        )}
       </div>
     </div>
   )

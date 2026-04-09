@@ -19,6 +19,7 @@ export interface TenantInfo {
   sendGridApiKey: string | null
   senderEmail: string | null
   campaignMessageDelaySeconds: number
+  brainEnabled: boolean
 }
 
 export function useTenant() {
@@ -63,6 +64,15 @@ export function useUpdateCampaignDelay() {
   return useMutation({
     mutationFn: (delaySeconds: number) =>
       api.put('/auth/tenant/campaign-delay', { delaySeconds }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateBrainEnabled() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (brainEnabled: boolean) =>
+      api.put('/auth/tenant/brain', { brainEnabled }).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
   })
 }

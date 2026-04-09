@@ -233,6 +233,18 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         return Ok(new { tenant.Id, tenant.Name, tenant.Slug, tenant.Country, tenant.MonthlyBillingAmount, tenant.IsActive });
     }
 
+    [HttpGet("tenants/{tenantId:guid}/agents")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantAgents(Guid tenantId, CancellationToken ct)
+    {
+        var agents = await db.AgentDefinitions
+            .Where(a => a.TenantId == tenantId && a.IsActive)
+            .OrderBy(a => a.Name)
+            .Select(a => new { a.Id, a.Name })
+            .ToListAsync(ct);
+        return Ok(agents);
+    }
+
     [HttpGet("tenants/{tenantId:guid}/users")]
     [Authorize(Roles = "super_admin")]
     public async Task<IActionResult> GetTenantUsers(Guid tenantId, CancellationToken ct)
@@ -945,5 +957,110 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         );
 
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    // ───── Agent Registry (Cerebro) ─────
+
+    public record AgentRegistryRequest(
+        Guid TenantId, string Slug, string Name, string Capabilities,
+        Guid CampaignTemplateId, bool IsWelcome = false);
+
+    [HttpGet("agent-registry")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetAgentRegistry([FromQuery] Guid? tenantId, CancellationToken ct)
+    {
+        var query = db.AgentRegistryEntries.AsQueryable();
+        if (tenantId.HasValue)
+            query = query.Where(r => r.TenantId == tenantId.Value);
+
+        var entries = await query
+            .OrderBy(r => r.Name)
+            .Select(r => new
+            {
+                r.Id, r.TenantId, r.Slug, r.Name, r.Capabilities,
+                r.CampaignTemplateId,
+                CampaignTemplateName = db.CampaignTemplates.Where(ct2 => ct2.Id == r.CampaignTemplateId).Select(ct2 => ct2.Name).FirstOrDefault(),
+                r.IsWelcome, r.IsActive, r.CreatedAt
+            })
+            .ToListAsync(ct);
+        return Ok(entries);
+    }
+
+    [HttpPost("agent-registry")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> CreateAgentRegistryEntry([FromBody] AgentRegistryRequest req, CancellationToken ct)
+    {
+        if (!await db.Tenants.AnyAsync(t => t.Id == req.TenantId, ct))
+            return BadRequest(new { error = "Tenant no encontrado." });
+
+        if (await db.AgentRegistryEntries.AnyAsync(r => r.TenantId == req.TenantId && r.Slug == req.Slug, ct))
+            return BadRequest(new { error = "Ya existe un agente con ese slug para este tenant." });
+
+        if (!await db.CampaignTemplates.AnyAsync(t => t.Id == req.CampaignTemplateId, ct))
+            return BadRequest(new { error = "Maestro de campaña no encontrado." });
+
+        if (req.IsWelcome && await db.AgentRegistryEntries.AnyAsync(r => r.TenantId == req.TenantId && r.IsWelcome, ct))
+            return BadRequest(new { error = "Ya existe un agente welcome para este tenant. Desactive el actual primero." });
+
+        var entry = new AgentRegistryEntry
+        {
+            Id = Guid.NewGuid(),
+            TenantId = req.TenantId,
+            Slug = req.Slug,
+            Name = req.Name,
+            Capabilities = req.Capabilities,
+            CampaignTemplateId = req.CampaignTemplateId,
+            IsWelcome = req.IsWelcome,
+        };
+        db.AgentRegistryEntries.Add(entry);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { entry.Id, entry.Slug, entry.Name });
+    }
+
+    [HttpPut("agent-registry/{id:guid}")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateAgentRegistryEntry(Guid id, [FromBody] AgentRegistryRequest req, CancellationToken ct)
+    {
+        var entry = await db.AgentRegistryEntries.FindAsync([id], ct);
+        if (entry is null) return NotFound();
+
+        if (await db.AgentRegistryEntries.AnyAsync(r => r.TenantId == entry.TenantId && r.Slug == req.Slug && r.Id != id, ct))
+            return BadRequest(new { error = "Ya existe un agente con ese slug para este tenant." });
+
+        if (req.IsWelcome && !entry.IsWelcome
+            && await db.AgentRegistryEntries.AnyAsync(r => r.TenantId == entry.TenantId && r.IsWelcome && r.Id != id, ct))
+            return BadRequest(new { error = "Ya existe un agente welcome para este tenant." });
+
+        entry.Slug = req.Slug;
+        entry.Name = req.Name;
+        entry.Capabilities = req.Capabilities;
+        entry.CampaignTemplateId = req.CampaignTemplateId;
+        entry.IsWelcome = req.IsWelcome;
+        entry.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { entry.Id, entry.Slug, entry.Name });
+    }
+
+    [HttpPut("agent-registry/{id:guid}/toggle")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> ToggleAgentRegistryEntry(Guid id, CancellationToken ct)
+    {
+        var entry = await db.AgentRegistryEntries.FindAsync([id], ct);
+        if (entry is null) return NotFound();
+        entry.IsActive = !entry.IsActive;
+        entry.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { entry.Id, entry.IsActive });
+    }
+
+    [HttpDelete("agent-registry/{id:guid}")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> DeleteAgentRegistryEntry(Guid id, CancellationToken ct)
+    {
+        var entry = await db.AgentRegistryEntries.FindAsync([id], ct);
+        if (entry is null) return NotFound();
+        db.AgentRegistryEntries.Remove(entry);
+        await db.SaveChangesAsync(ct);
+        return NoContent();
     }
 }

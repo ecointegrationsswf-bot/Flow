@@ -47,6 +47,7 @@ public class CampaignTemplateConfiguration : IEntityTypeConfiguration<CampaignTe
         b.Property(t => t.AttentionEndTime).HasMaxLength(5).HasDefaultValueSql("'17:00'");
 
         b.Property(t => t.ActionConfigs).HasColumnType("nvarchar(max)");
+        b.Property(t => t.OutOfContextPolicy).HasConversion<string>().HasMaxLength(20).HasDefaultValue(Domain.Enums.OutOfContextPolicy.Contain);
 
         b.HasOne(t => t.Tenant).WithMany().HasForeignKey(t => t.TenantId).OnDelete(DeleteBehavior.Cascade);
         b.HasOne(t => t.AgentDefinition).WithMany().HasForeignKey(t => t.AgentDefinitionId).OnDelete(DeleteBehavior.NoAction);

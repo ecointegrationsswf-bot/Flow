@@ -22,6 +22,7 @@ public record AgentEntry(
     string Slug,
     string Name,
     string Capabilities,
+    Guid CampaignTemplateId,
     Guid AgentDefinitionId,
     bool IsWelcome
 );

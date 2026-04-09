@@ -41,6 +41,7 @@ export interface CampaignTemplate {
   attentionDays: number[]
   attentionStartTime: string
   attentionEndTime: string
+  outOfContextPolicy: string
   isActive: boolean
   createdAt: string
   updatedAt: string
@@ -68,6 +69,7 @@ export interface CampaignTemplatePayload {
   attentionDays?: number[]
   attentionStartTime?: string
   attentionEndTime?: string
+  outOfContextPolicy?: string
 }
 
 export interface ActionConfig {

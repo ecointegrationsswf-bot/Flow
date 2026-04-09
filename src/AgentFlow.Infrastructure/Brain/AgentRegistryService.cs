@@ -7,6 +7,7 @@ namespace AgentFlow.Infrastructure.Brain;
 /// <summary>
 /// Implementación de IAgentRegistry.
 /// Consulta AgentRegistryEntries por tenant y proyecta a AgentEntry.
+/// El AgentDefinitionId se resuelve desde el CampaignTemplate asociado.
 /// </summary>
 public class AgentRegistryService(AgentFlowDbContext db) : IAgentRegistry
 {
@@ -20,7 +21,8 @@ public class AgentRegistryService(AgentFlowDbContext db) : IAgentRegistry
                 r.Slug,
                 r.Name,
                 r.Capabilities,
-                r.AgentDefinitionId,
+                r.CampaignTemplateId,
+                r.CampaignTemplate.AgentDefinitionId,
                 r.IsWelcome))
             .ToListAsync(ct);
     }
@@ -34,7 +36,8 @@ public class AgentRegistryService(AgentFlowDbContext db) : IAgentRegistry
                 r.Slug,
                 r.Name,
                 r.Capabilities,
-                r.AgentDefinitionId,
+                r.CampaignTemplateId,
+                r.CampaignTemplate.AgentDefinitionId,
                 r.IsWelcome))
             .FirstOrDefaultAsync(ct);
     }
@@ -48,7 +51,8 @@ public class AgentRegistryService(AgentFlowDbContext db) : IAgentRegistry
                 r.Slug,
                 r.Name,
                 r.Capabilities,
-                r.AgentDefinitionId,
+                r.CampaignTemplateId,
+                r.CampaignTemplate.AgentDefinitionId,
                 r.IsWelcome))
             .FirstOrDefaultAsync(ct);
     }

@@ -1,3 +1,5 @@
+using AgentFlow.Domain.Enums;
+
 namespace AgentFlow.Domain.Entities;
 
 /// <summary>
@@ -74,6 +76,12 @@ public class CampaignTemplate
 
     // IDs de prompt templates globales (definidos en admin) vinculados a este maestro
     public List<Guid> PromptTemplateIds { get; set; } = [];
+
+    /// <summary>
+    /// Política del Cerebro cuando el cliente se desvía del contexto de la campaña.
+    /// Se copia a Campaign al crear una campaña desde este maestro.
+    /// </summary>
+    public OutOfContextPolicy OutOfContextPolicy { get; set; } = OutOfContextPolicy.Contain;
 
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -24,7 +24,8 @@ public record CampaignTemplateRequest(
     int MaxTokens = 1024,
     List<int>? AttentionDays = null,
     string AttentionStartTime = "08:00",
-    string AttentionEndTime = "17:00"
+    string AttentionEndTime = "17:00",
+    string OutOfContextPolicy = "Contain"
 );
 
 [ApiController]
@@ -74,6 +75,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 x.MaxRetries, x.RetryIntervalHours, x.InactivityCloseHours,
                 x.CloseConditionKeyword, x.MaxTokens,
                 x.AttentionDays, x.AttentionStartTime, x.AttentionEndTime,
+                OutOfContextPolicy = x.OutOfContextPolicy.ToString(),
                 x.IsActive, x.CreatedAt, x.UpdatedAt
             })
             .FirstOrDefaultAsync(ct);
@@ -115,6 +117,8 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             AttentionDays = req.AttentionDays ?? [1, 2, 3, 4, 5],
             AttentionStartTime = req.AttentionStartTime,
             AttentionEndTime = req.AttentionEndTime,
+            OutOfContextPolicy = Enum.TryParse<AgentFlow.Domain.Enums.OutOfContextPolicy>(req.OutOfContextPolicy, out var policy)
+                ? policy : AgentFlow.Domain.Enums.OutOfContextPolicy.Contain,
         };
 
         db.CampaignTemplates.Add(template);
@@ -155,6 +159,8 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         template.AttentionDays = req.AttentionDays ?? [1, 2, 3, 4, 5];
         template.AttentionStartTime = req.AttentionStartTime;
         template.AttentionEndTime = req.AttentionEndTime;
+        template.OutOfContextPolicy = Enum.TryParse<AgentFlow.Domain.Enums.OutOfContextPolicy>(req.OutOfContextPolicy, out var pol)
+            ? pol : AgentFlow.Domain.Enums.OutOfContextPolicy.Contain;
         template.UpdatedAt = DateTime.UtcNow;
 
         // HasConversion en List<int> no tiene ValueComparer — marcar explícitamente como modificado

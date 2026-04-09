@@ -4,6 +4,7 @@ using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AgentFlow.Infrastructure.Migrations
 {
     [DbContext(typeof(AgentFlowDbContext))]
-    partial class AgentFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260409200734_AddOutOfContextPolicyToCampaignTemplate")]
+    partial class AddOutOfContextPolicyToCampaignTemplate
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -238,7 +241,7 @@ namespace AgentFlow.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<Guid>("CampaignTemplateId")
+                    b.Property<Guid>("AgentDefinitionId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Capabilities")
@@ -273,12 +276,9 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CampaignTemplateId");
+                    b.HasIndex("AgentDefinitionId");
 
                     b.HasIndex("TenantId");
-
-                    b.HasIndex("TenantId", "CampaignTemplateId")
-                        .IsUnique();
 
                     b.HasIndex("TenantId", "Slug")
                         .IsUnique();
@@ -1106,9 +1106,6 @@ namespace AgentFlow.Infrastructure.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<bool>("BrainEnabled")
-                        .HasColumnType("bit");
-
                     b.Property<TimeOnly>("BusinessHoursEnd")
                         .HasColumnType("time");
 
@@ -1338,9 +1335,9 @@ namespace AgentFlow.Infrastructure.Migrations
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentRegistryEntry", b =>
                 {
-                    b.HasOne("AgentFlow.Domain.Entities.CampaignTemplate", "CampaignTemplate")
+                    b.HasOne("AgentFlow.Domain.Entities.AgentDefinition", "AgentDefinition")
                         .WithMany()
-                        .HasForeignKey("CampaignTemplateId")
+                        .HasForeignKey("AgentDefinitionId")
                         .OnDelete(DeleteBehavior.NoAction)
                         .IsRequired();
 
@@ -1350,7 +1347,7 @@ namespace AgentFlow.Infrastructure.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
-                    b.Navigation("CampaignTemplate");
+                    b.Navigation("AgentDefinition");
 
                     b.Navigation("Tenant");
                 });

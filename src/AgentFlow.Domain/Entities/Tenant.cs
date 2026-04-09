@@ -42,6 +42,12 @@ public class Tenant
     // Valor mínimo: 3. Valor máximo: 120. Default: 10 (seguro para WhatsApp).
     public int CampaignMessageDelaySeconds { get; set; } = 10;
 
+    /// <summary>
+    /// Interruptor global del Cerebro. Cuando es false el sistema funciona igual que hoy.
+    /// Cuando es true, todos los mensajes de este tenant pasan por el Cerebro.
+    /// </summary>
+    public bool BrainEnabled { get; set; }
+
     public ICollection<AgentDefinition> Agents { get; set; } = [];
     public ICollection<Campaign> Campaigns { get; set; } = [];
     public ICollection<AppUser> Users { get; set; } = [];

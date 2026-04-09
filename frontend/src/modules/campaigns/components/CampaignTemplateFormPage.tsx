@@ -89,6 +89,7 @@ export function CampaignTemplateFormPage() {
   const [attentionDays, setAttentionDays] = useState<number[]>(existing?.attentionDays ?? [1, 2, 3, 4, 5])
   const [attentionStart, setAttentionStart] = useState(existing?.attentionStartTime ?? '08:00')
   const [attentionEnd, setAttentionEnd] = useState(existing?.attentionEndTime ?? '17:00')
+  const [outOfContextPolicy, setOutOfContextPolicy] = useState(existing?.outOfContextPolicy ?? 'Contain')
 
   // Sync all state when existing template loads (edit mode)
   useEffect(() => {
@@ -107,6 +108,7 @@ export function CampaignTemplateFormPage() {
     setAttentionDays(existing.attentionDays ?? [1, 2, 3, 4, 5])
     setAttentionStart(existing.attentionStartTime ?? '08:00')
     setAttentionEnd(existing.attentionEndTime ?? '17:00')
+    if (existing.outOfContextPolicy) setOutOfContextPolicy(existing.outOfContextPolicy)
   }, [existing?.id])
 
   const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
@@ -238,6 +240,7 @@ export function CampaignTemplateFormPage() {
       retryIntervalHours: 24,
       inactivityCloseHours: 72,
       maxTokens: 1024,
+      outOfContextPolicy,
     }
     if (isEdit && id) {
       updateMut.mutate({ id, ...payload }, { onSuccess: () => navigate('/campaign-templates') })
@@ -407,6 +410,24 @@ export function CampaignTemplateFormPage() {
             <p className="mt-1 text-xs text-gray-500">Horas despues de enviada la campana para cerrar automaticamente.</p>
           </div>
         </section>
+
+        {/* Seccion: Politica del Cerebro — solo visible si BrainEnabled */}
+        {tenant?.brainEnabled && (
+          <section className="rounded-lg bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-sm font-semibold text-gray-900">Comportamiento del Cerebro ante desvios</h2>
+            <p className="mb-3 text-xs text-gray-500">Define que hace el Cerebro cuando el cliente habla de algo fuera del contexto de esta campana.</p>
+            <div className="max-w-xs">
+              <select
+                value={outOfContextPolicy}
+                onChange={(e) => setOutOfContextPolicy(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="Contain">Contener — el agente de esta campana gestiona todo</option>
+                <option value="Transfer">Transferir — el Cerebro ruta al agente mas adecuado</option>
+              </select>
+            </div>
+          </section>
+        )}
 
         {/* Seccion 4: Etiquetas */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
