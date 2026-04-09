@@ -167,6 +167,11 @@ builder.Services.AddScoped<IAgentRepository, AgentRepository>();
 builder.Services.AddScoped<ICampaignRepository, CampaignRepository>();
 builder.Services.AddScoped<IContextDispatcher, ContextDispatcher>();
 
+// ── Cerebro ─────────────────────────────────────────────
+builder.Services.AddScoped<IAgentRegistry, AgentFlow.Infrastructure.Brain.AgentRegistryService>();
+builder.Services.AddScoped<IClassifierService, AgentFlow.Infrastructure.Brain.ClassifierService>();
+builder.Services.AddScoped<IBrainService, AgentFlow.Infrastructure.Brain.BrainService>();
+
 // ── Tenant context ─────────────────────────────────────
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ITenantContext, HttpTenantContext>();
