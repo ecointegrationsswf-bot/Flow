@@ -17,6 +17,7 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
     public async Task<Conversation?> GetByIdAsync(Guid id, CancellationToken ct = default)
         => await db.Conversations
             .Include(c => c.Messages)
+            .Include(c => c.Campaign)   // para mostrar el nombre de campaña en el monitor
             .FirstOrDefaultAsync(c => c.Id == id, ct);
 
     public async Task<IEnumerable<Conversation>> GetActiveByTenantAsync(Guid tenantId, CancellationToken ct = default)

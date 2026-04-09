@@ -89,6 +89,7 @@ export interface Conversation {
   channel: ChannelType
   activeAgentId?: string
   campaignId?: string
+  campaignName?: string
   status: ConversationStatus
   isHumanHandled: boolean
   handledByUserId?: string

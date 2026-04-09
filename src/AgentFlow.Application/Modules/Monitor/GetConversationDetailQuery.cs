@@ -15,7 +15,8 @@ public record ConversationDetail(
     string Channel,
     bool IsHumanHandled,
     DateTime LastActivityAt,
-    IEnumerable<MessageDetail> Messages
+    IEnumerable<MessageDetail> Messages,
+    string? CampaignName
 );
 
 public record MessageDetail(
@@ -61,7 +62,8 @@ public class GetConversationDetailHandler(IConversationRepository repo)
                     m.ExternalMessageId,
                     m.AgentName,
                     m.DetectedIntent
-                ))
+                )),
+            conv.Campaign?.Name
         );
     }
 }

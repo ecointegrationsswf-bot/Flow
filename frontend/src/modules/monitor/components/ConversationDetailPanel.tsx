@@ -86,8 +86,13 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
       {/* Header — clean white with name and actions */}
       <div className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
         <div className="flex items-center gap-3">
-          <div>
+          <div className="flex items-center gap-2">
             <p className="text-base font-semibold text-gray-900">{displayName}</p>
+            {conversation.campaignName && (
+              <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-600 border border-blue-100">
+                {conversation.campaignName}
+              </span>
+            )}
           </div>
         </div>
 
