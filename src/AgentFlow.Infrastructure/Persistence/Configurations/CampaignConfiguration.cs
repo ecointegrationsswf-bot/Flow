@@ -19,6 +19,7 @@ public class CampaignConfiguration : IEntityTypeConfiguration<Campaign>
         b.Property(c => c.Status).HasConversion<string>().HasMaxLength(30);
         b.Property(c => c.LaunchedByUserId).HasMaxLength(100);
         b.Property(c => c.LaunchedByUserPhone).HasMaxLength(20);
+        b.Property(c => c.OutOfContextPolicy).HasConversion<string>().HasMaxLength(20).HasDefaultValue(Domain.Enums.OutOfContextPolicy.Contain);
         b.HasOne(c => c.Tenant).WithMany().HasForeignKey(c => c.TenantId).OnDelete(DeleteBehavior.Restrict);
         b.HasOne(c => c.AgentDefinition).WithMany().HasForeignKey(c => c.AgentDefinitionId).OnDelete(DeleteBehavior.Restrict);
         b.HasMany(c => c.Contacts).WithOne(cc => cc.Campaign).HasForeignKey(cc => cc.CampaignId);

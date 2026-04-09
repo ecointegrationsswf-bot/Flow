@@ -50,5 +50,11 @@ public class Campaign
     /// </summary>
     public string? LaunchedByUserPhone { get; set; }
 
+    /// <summary>
+    /// Política del Cerebro cuando el cliente se desvía del contexto de la campaña.
+    /// Contain = el agente de campaña responde todo. Transfer = el Cerebro ruta al agente adecuado.
+    /// </summary>
+    public OutOfContextPolicy OutOfContextPolicy { get; set; } = OutOfContextPolicy.Contain;
+
     public ICollection<CampaignContact> Contacts { get; set; } = [];
 }

@@ -4,6 +4,7 @@ using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AgentFlow.Infrastructure.Migrations
 {
     [DbContext(typeof(AgentFlowDbContext))]
-    partial class AgentFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260409191655_AddAgentRegistry")]
+    partial class AddAgentRegistry
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -487,13 +490,6 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(300)
                         .HasColumnType("nvarchar(300)");
-
-                    b.Property<string>("OutOfContextPolicy")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)")
-                        .HasDefaultValue("Contain");
 
                     b.Property<int>("ProcessedContacts")
                         .HasColumnType("int");

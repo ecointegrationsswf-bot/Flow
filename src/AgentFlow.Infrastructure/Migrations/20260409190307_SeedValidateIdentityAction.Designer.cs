@@ -4,6 +4,7 @@ using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AgentFlow.Infrastructure.Migrations
 {
     [DbContext(typeof(AgentFlowDbContext))]
-    partial class AgentFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260409190307_SeedValidateIdentityAction")]
+    partial class SeedValidateIdentityAction
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -232,57 +235,6 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.ToTable("AgentDocuments");
                 });
 
-            modelBuilder.Entity("AgentFlow.Domain.Entities.AgentRegistryEntry", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("AgentDefinitionId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("Capabilities")
-                        .IsRequired()
-                        .HasMaxLength(500)
-                        .HasColumnType("nvarchar(500)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.Property<bool>("IsActive")
-                        .HasColumnType("bit");
-
-                    b.Property<bool>("IsWelcome")
-                        .HasColumnType("bit");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(100)
-                        .HasColumnType("nvarchar(100)");
-
-                    b.Property<string>("Slug")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<Guid>("TenantId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime?>("UpdatedAt")
-                        .HasColumnType("datetime2");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("AgentDefinitionId");
-
-                    b.HasIndex("TenantId");
-
-                    b.HasIndex("TenantId", "Slug")
-                        .IsUnique();
-
-                    b.ToTable("AgentRegistryEntries", (string)null);
-                });
-
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentTemplate", b =>
                 {
                     b.Property<Guid>("Id")
@@ -487,13 +439,6 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsRequired()
                         .HasMaxLength(300)
                         .HasColumnType("nvarchar(300)");
-
-                    b.Property<string>("OutOfContextPolicy")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(20)
-                        .HasColumnType("nvarchar(20)")
-                        .HasDefaultValue("Contain");
 
                     b.Property<int>("ProcessedContacts")
                         .HasColumnType("int");
@@ -1321,25 +1266,6 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("AgentDefinition");
-                });
-
-            modelBuilder.Entity("AgentFlow.Domain.Entities.AgentRegistryEntry", b =>
-                {
-                    b.HasOne("AgentFlow.Domain.Entities.AgentDefinition", "AgentDefinition")
-                        .WithMany()
-                        .HasForeignKey("AgentDefinitionId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
-                        .WithMany()
-                        .HasForeignKey("TenantId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("AgentDefinition");
-
-                    b.Navigation("Tenant");
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AppUser", b =>

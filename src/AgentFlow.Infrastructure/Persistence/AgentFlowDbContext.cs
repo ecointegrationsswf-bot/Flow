@@ -24,6 +24,7 @@ public class AgentFlowDbContext(DbContextOptions<AgentFlowDbContext> options) : 
     public DbSet<PromptTemplate> PromptTemplates => Set<PromptTemplate>();
     public DbSet<WebhookLog> WebhookLogs => Set<WebhookLog>();
     public DbSet<CampaignDispatchLog> CampaignDispatchLogs => Set<CampaignDispatchLog>();
+    public DbSet<AgentRegistryEntry> AgentRegistryEntries => Set<AgentRegistryEntry>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {

@@ -1,3 +1,5 @@
+using AgentFlow.Domain.Enums;
+
 namespace AgentFlow.Domain.Interfaces;
 
 /// <summary>
@@ -14,10 +16,20 @@ public interface ISessionStore
 }
 
 public record SessionState(
+    // ── Campos originales (no modificar orden) ──
     Guid ConversationId,
     Guid AgentId,
     string AgentType,
     Guid? CampaignId,
     bool IsHumanHandled,
-    DateTime LastActivityAt
+    DateTime LastActivityAt,
+
+    // ── Campos del Cerebro (opcionales — compatibles con sesiones existentes en Redis) ──
+    BrainSessionState BrainState = BrainSessionState.Active_AI,
+    SessionOrigin Origin = SessionOrigin.Inbound,
+    Guid? ActiveCampaignId = null,
+    string? ActiveAgentSlug = null,
+    List<string>? IntentHistory = null,
+    ValidationContext? ValidationState = null,
+    DateTime? EscalatedAt = null
 );
