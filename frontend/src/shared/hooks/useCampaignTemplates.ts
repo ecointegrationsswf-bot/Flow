@@ -133,6 +133,17 @@ export function useDeleteCampaignTemplate() {
   })
 }
 
+export function useDuplicateCampaignTemplate() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const { data } = await api.post(`/campaign-templates/${id}/duplicate`, { name })
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
+  })
+}
+
 export function useAvailableActions() {
   return useQuery({
     queryKey: ['available-actions'],

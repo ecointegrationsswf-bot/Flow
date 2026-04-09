@@ -7,6 +7,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
+public record DuplicateTemplateRequest(string Name);
+
 public record CampaignTemplateRequest(
     string Name, Guid AgentDefinitionId,
     List<int> FollowUpHours, int AutoCloseHours,
@@ -188,6 +190,51 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             .ToListAsync(ct);
 
         return Ok(prompts);
+    }
+
+    /// <summary>Duplica un maestro de campaña existente con un nuevo nombre.</summary>
+    [HttpPost("{id:guid}/duplicate")]
+    public async Task<IActionResult> Duplicate(Guid id, [FromBody] DuplicateTemplateRequest req, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var original = await db.CampaignTemplates
+            .FirstOrDefaultAsync(t => t.Id == id && t.TenantId == tenantId, ct);
+
+        if (original is null) return NotFound();
+
+        var copy = new CampaignTemplate
+        {
+            Id = Guid.NewGuid(),
+            TenantId = tenantId,
+            Name = req.Name.Trim(),
+            AgentDefinitionId = original.AgentDefinitionId,
+            FollowUpHours = [.. original.FollowUpHours],
+            AutoCloseHours = original.AutoCloseHours,
+            LabelIds = [.. original.LabelIds],
+            SendEmail = original.SendEmail,
+            EmailAddress = original.EmailAddress,
+            ActionIds = [.. original.ActionIds],
+            ActionConfigs = original.ActionConfigs,
+            PromptTemplateIds = [.. original.PromptTemplateIds],
+            SystemPrompt = original.SystemPrompt,
+            SendFrom = original.SendFrom,
+            SendUntil = original.SendUntil,
+            MaxRetries = original.MaxRetries,
+            RetryIntervalHours = original.RetryIntervalHours,
+            InactivityCloseHours = original.InactivityCloseHours,
+            CloseConditionKeyword = original.CloseConditionKeyword,
+            MaxTokens = original.MaxTokens,
+            AttentionDays = [.. original.AttentionDays],
+            AttentionStartTime = original.AttentionStartTime,
+            AttentionEndTime = original.AttentionEndTime,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+            UpdatedAt = DateTime.UtcNow,
+        };
+
+        db.CampaignTemplates.Add(copy);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { copy.Id, copy.Name });
     }
 
     [HttpDelete("{id:guid}")]

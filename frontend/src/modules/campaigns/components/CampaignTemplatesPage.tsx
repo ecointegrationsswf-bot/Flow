@@ -1,18 +1,36 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ClipboardList, Plus, Pencil, Trash2, Clock, Tag } from 'lucide-react'
+import { ClipboardList, Plus, Pencil, Trash2, Clock, Tag, Copy } from 'lucide-react'
 import {
   useCampaignTemplates,
   useDeleteCampaignTemplate,
+  useDuplicateCampaignTemplate,
 } from '@/shared/hooks/useCampaignTemplates'
 
 export function CampaignTemplatesPage() {
   const navigate = useNavigate()
   const { data: templates, isLoading, isError, refetch } = useCampaignTemplates()
   const deleteMut = useDeleteCampaignTemplate()
+  const duplicateMut = useDuplicateCampaignTemplate()
+
+  // Estado del modal de duplicar
+  const [duplicateModal, setDuplicateModal] = useState<{ id: string; name: string } | null>(null)
+  const [newName, setNewName] = useState('')
 
   const handleDelete = async (id: string) => {
     if (!confirm('Eliminar este maestro de campana?')) return
     await deleteMut.mutateAsync(id)
+  }
+
+  const openDuplicate = (id: string, name: string) => {
+    setNewName(`Copia de ${name}`)
+    setDuplicateModal({ id, name })
+  }
+
+  const handleDuplicate = async () => {
+    if (!duplicateModal || !newName.trim()) return
+    await duplicateMut.mutateAsync({ id: duplicateModal.id, name: newName.trim() })
+    setDuplicateModal(null)
   }
 
   return (
@@ -80,6 +98,13 @@ export function CampaignTemplatesPage() {
 
               <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
                 <button
+                  onClick={() => openDuplicate(t.id, t.name)}
+                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-purple-600 transition-colors"
+                  title="Copiar maestro"
+                >
+                  <Copy className="h-4 w-4" />
+                </button>
+                <button
                   onClick={() => navigate(`/campaign-templates/${t.id}/edit`)}
                   className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
                   title="Editar"
@@ -96,6 +121,42 @@ export function CampaignTemplatesPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* Modal — copiar maestro */}
+      {duplicateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl">
+            <h2 className="mb-1 text-base font-semibold text-gray-900">Copiar maestro de campaña</h2>
+            <p className="mb-4 text-sm text-gray-500">
+              Se creará una copia de <strong>{duplicateModal.name}</strong> con toda su configuración. Puedes cambiar el nombre antes de confirmar.
+            </p>
+            <label className="mb-1 block text-sm font-medium text-gray-700">Nombre del nuevo maestro</label>
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleDuplicate()}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400"
+              placeholder="Nombre del maestro copiado"
+            />
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => setDuplicateModal(null)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleDuplicate}
+                disabled={!newName.trim() || duplicateMut.isPending}
+                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+              >
+                {duplicateMut.isPending ? 'Copiando...' : 'Crear copia'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
