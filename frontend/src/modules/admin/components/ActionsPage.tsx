@@ -10,6 +10,20 @@ import {
   type ActionPayload,
 } from '../hooks/useAdminActions'
 
+const ACTION_FRIENDLY_NAMES: Record<string, string> = {
+  'SEND_EMAIL_RESUME': 'Enviar email con resumen',
+  'TRANSFER_CHAT': 'Escalar a humano',
+  'SEND_MESSAGE': 'Enviar mensaje',
+  'SEND_RESUME': 'Enviar resumen',
+  'PREMIUM': 'Premium',
+  'CLOSE_CONVERSATION': 'Cerrar conversación',
+  'ESCALATE_TO_HUMAN': 'Escalar a ejecutivo',
+  'SEND_PAYMENT_LINK': 'Enviar enlace de pago',
+  'SEND_DOCUMENT': 'Enviar documento',
+}
+
+const getFriendlyName = (name: string) => ACTION_FRIENDLY_NAMES[name] ?? name
+
 const emptyForm: ActionPayload = {
   name: '',
   description: '',
@@ -130,9 +144,12 @@ export function ActionsPage() {
               {actions.map((a) => (
                 <tr key={a.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3">
-                    <span className="inline-flex items-center gap-1.5 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                      {a.name}
-                    </span>
+                    <div>
+                      <span className="inline-flex items-center gap-1.5 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                        {getFriendlyName(a.name)}
+                      </span>
+                      <p className="mt-0.5 text-[10px] text-gray-400">{a.name}</p>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-gray-600 max-w-xs truncate">{a.description || '\u2014'}</td>
                   <td className="px-4 py-3 text-center">
@@ -225,14 +242,15 @@ export function ActionsPage() {
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="">Selecciona una accion</option>
-                  <option value="SEND_MESSAGE">SEND_MESSAGE</option>
-                  <option value="SEND_RESUME">SEND_RESUME</option>
-                  <option value="TRANSFER_CHAT">TRANSFER_CHAT</option>
-                  <option value="PREMIUM">PREMIUM</option>
-                  <option value="CLOSE_CONVERSATION">CLOSE_CONVERSATION</option>
-                  <option value="ESCALATE_TO_HUMAN">ESCALATE_TO_HUMAN</option>
-                  <option value="SEND_PAYMENT_LINK">SEND_PAYMENT_LINK</option>
-                  <option value="SEND_DOCUMENT">SEND_DOCUMENT</option>
+                  <option value="SEND_MESSAGE">Enviar mensaje</option>
+                  <option value="SEND_RESUME">Enviar resumen</option>
+                  <option value="TRANSFER_CHAT">Escalar a humano</option>
+                  <option value="SEND_EMAIL_RESUME">Enviar email con resumen</option>
+                  <option value="PREMIUM">Premium</option>
+                  <option value="CLOSE_CONVERSATION">Cerrar conversación</option>
+                  <option value="ESCALATE_TO_HUMAN">Escalar a ejecutivo</option>
+                  <option value="SEND_PAYMENT_LINK">Enviar enlace de pago</option>
+                  <option value="SEND_DOCUMENT">Enviar documento</option>
                 </select>
               </div>
 

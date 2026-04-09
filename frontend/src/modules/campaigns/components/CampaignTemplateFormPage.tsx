@@ -1,4 +1,18 @@
 import { useState, useEffect } from 'react'
+
+const ACTION_FRIENDLY_NAMES: Record<string, string> = {
+  'SEND_EMAIL_RESUME': 'Enviar email con resumen',
+  'TRANSFER_CHAT': 'Escalar a humano',
+  'SEND_MESSAGE': 'Enviar mensaje',
+  'SEND_RESUME': 'Enviar resumen',
+  'PREMIUM': 'Premium',
+  'CLOSE_CONVERSATION': 'Cerrar conversación',
+  'ESCALATE_TO_HUMAN': 'Escalar a ejecutivo',
+  'SEND_PAYMENT_LINK': 'Enviar enlace de pago',
+  'SEND_DOCUMENT': 'Enviar documento',
+}
+const getFriendlyName = (name: string) => ACTION_FRIENDLY_NAMES[name] ?? name
+
 import { useTenant } from '@/shared/hooks/useTenant'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
@@ -461,7 +475,7 @@ export function CampaignTemplateFormPage() {
                       <Zap className="h-4 w-4 shrink-0 text-amber-500" />
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-900">{action.name}</span>
+                          <span className="text-sm font-medium text-gray-900">{getFriendlyName(action.name)}</span>
                           <div className="flex gap-1">
                             {action.requiresWebhook && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">Webhook</span>}
                             {action.sendsEmail && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">Email</span>}
