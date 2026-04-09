@@ -97,9 +97,9 @@ public class ProcessIncomingMessageHandler(
         }
 
         // ── 4. Routing normal — el Cerebro eligió un agente ──
-        // Resolver el AgentDefinitionId desde el slug del AgentRegistry
         var registryEntry = await agentRegistry.GetBySlugAsync(cmd.TenantId, decision.AgentSlug, ct);
         var agentId = registryEntry?.AgentDefinitionId;
+        var brainCampaignTemplateId = registryEntry?.CampaignTemplateId;
 
         // Construir dispatch simulado para reutilizar el flujo original (pasos 2-13)
         var dispatch = new DispatchResult(
@@ -127,7 +127,8 @@ public class ProcessIncomingMessageHandler(
         catch { /* Redis no disponible */ }
 
         // ── Reutilizar flujo original desde paso 2 en adelante ──
-        return await ExecuteStandardFlow(cmd, dispatch, tenant, isBrainControlled: true, ct);
+        return await ExecuteStandardFlow(cmd, dispatch, tenant, isBrainControlled: true, ct,
+            brainCampaignTemplateId: brainCampaignTemplateId);
     }
 
     /// <summary>
@@ -237,7 +238,8 @@ public class ProcessIncomingMessageHandler(
     /// </summary>
     private async Task<ProcessIncomingMessageResult> ExecuteStandardFlow(
         ProcessIncomingMessageCommand cmd, DispatchResult dispatch, Tenant tenant,
-        bool isBrainControlled, CancellationToken ct)
+        bool isBrainControlled, CancellationToken ct,
+        Guid? brainCampaignTemplateId = null)
     {
         // ── 2. OBTENER O CREAR CONVERSACIÓN ──────────────
         Conversation conversation;
@@ -325,23 +327,38 @@ public class ProcessIncomingMessageHandler(
                 if (conversation.ActiveAgentId != agent.Id)
                     conversation.ActiveAgentId = agent.Id;
 
+                // ── CEREBRO: usar el SystemPrompt del maestro de campaña, no el del AgentDefinition ──
+                // Cada maestro tiene su propio prompt aunque compartan el mismo agente IA.
+                if (isBrainControlled && brainCampaignTemplateId.HasValue)
+                {
+                    var brainTemplate = await agents.GetCampaignTemplateByIdAsync(brainCampaignTemplateId.Value, ct);
+                    if (brainTemplate is not null && !string.IsNullOrEmpty(brainTemplate.SystemPrompt))
+                    {
+                        agent.SystemPrompt = brainTemplate.SystemPrompt;
+                    }
+                }
+
                 var tenantApiKey = tenant.LlmApiKey;
 
                 // Horario de atención
                 List<int>? attentionDays = null;
                 string? attentionStart = null, attentionEnd = null;
-                if (conversation.CampaignId.HasValue)
+
+                // Resolver CampaignTemplate: del Cerebro o de la conversación
+                var templateIdToLoad = brainCampaignTemplateId ?? null;
+                if (templateIdToLoad is null && conversation.CampaignId.HasValue)
                 {
                     var campaign = await conversations.GetCampaignAsync(conversation.CampaignId.Value, ct);
-                    if (campaign?.CampaignTemplateId.HasValue == true)
+                    templateIdToLoad = campaign?.CampaignTemplateId;
+                }
+                if (templateIdToLoad.HasValue)
+                {
+                    var tmpl = await agents.GetCampaignTemplateByIdAsync(templateIdToLoad.Value, ct);
+                    if (tmpl is not null)
                     {
-                        var tmpl = await agents.GetCampaignTemplateByIdAsync(campaign.CampaignTemplateId.Value, ct);
-                        if (tmpl is not null)
-                        {
-                            attentionDays = tmpl.AttentionDays;
-                            attentionStart = tmpl.AttentionStartTime;
-                            attentionEnd = tmpl.AttentionEndTime;
-                        }
+                        attentionDays = tmpl.AttentionDays;
+                        attentionStart = tmpl.AttentionStartTime;
+                        attentionEnd = tmpl.AttentionEndTime;
                     }
                 }
 
