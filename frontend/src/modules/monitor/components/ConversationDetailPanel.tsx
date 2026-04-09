@@ -176,7 +176,15 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
         </div>
       )}
 
-      {/* Input area — matching reference: emoji, clip, text field, send */}
+      {/* Input area — bloqueado si un ejecutivo está manejando la conversación por WhatsApp */}
+      {conversation.isHumanHandled ? (
+        <div className="flex items-center justify-center gap-2 border-t border-gray-200 bg-gray-50 px-6 py-4">
+          <UserCheck className="h-4 w-4 text-amber-500 shrink-0" />
+          <p className="text-sm text-gray-500">
+            Un ejecutivo está atendiendo esta conversación por WhatsApp. El chat del monitor está deshabilitado.
+          </p>
+        </div>
+      ) : (
       <div className="flex items-end gap-3 border-t border-gray-200 bg-white px-6 py-3">
         <button type="button" className="mb-1 rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
           <Smile className="h-5 w-5" />
@@ -213,6 +221,7 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
           )}
         </button>
       </div>
+      )}
     </div>
   )
 }
