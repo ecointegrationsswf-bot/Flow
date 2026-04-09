@@ -76,9 +76,14 @@ export function CampaignTemplateFormPage() {
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>(existing?.labelIds ?? [])
   const [selectedActionIds, setSelectedActionIds] = useState<string[]>(existing?.actionIds ?? [])
   const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>(existing?.promptTemplateIds ?? [])
-  const [actionConfigs, setActionConfigs] = useState<Record<string, ActionConfig>>(
-    (existing?.actionConfigs as Record<string, ActionConfig>) ?? {}
-  )
+  const [actionConfigs, setActionConfigs] = useState<Record<string, ActionConfig>>(() => {
+    const raw = existing?.actionConfigs
+    if (!raw) return {}
+    if (typeof raw === 'string') {
+      try { return JSON.parse(raw) } catch { return {} }
+    }
+    return raw as Record<string, ActionConfig>
+  })
   const [expandedActions, setExpandedActions] = useState<Set<string>>(new Set())
   const [configErrors, setConfigErrors] = useState<Record<string, Record<string, string>>>({})
   const [attentionDays, setAttentionDays] = useState<number[]>(existing?.attentionDays ?? [1, 2, 3, 4, 5])
@@ -92,8 +97,13 @@ export function CampaignTemplateFormPage() {
     if (existing.labelIds.length > 0) setSelectedLabelIds(existing.labelIds)
     if (existing.actionIds.length > 0) setSelectedActionIds(existing.actionIds)
     if (existing.promptTemplateIds.length > 0) setSelectedPromptIds(existing.promptTemplateIds)
-    if (existing.actionConfigs && Object.keys(existing.actionConfigs).length > 0)
-      setActionConfigs(existing.actionConfigs as Record<string, ActionConfig>)
+    if (existing.actionConfigs) {
+      const raw = existing.actionConfigs
+      const parsed: Record<string, ActionConfig> = typeof raw === 'string'
+        ? (() => { try { return JSON.parse(raw) } catch { return {} } })()
+        : raw as Record<string, ActionConfig>
+      if (Object.keys(parsed).length > 0) setActionConfigs(parsed)
+    }
     setAttentionDays(existing.attentionDays ?? [1, 2, 3, 4, 5])
     setAttentionStart(existing.attentionStartTime ?? '08:00')
     setAttentionEnd(existing.attentionEndTime ?? '17:00')

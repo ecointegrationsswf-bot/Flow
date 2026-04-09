@@ -85,7 +85,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] CampaignTemplateRequest req, CancellationToken ct)
     {
-        if (req.ActionConfigs != null && req.ActionConfigs.Length > 8000)
+        if (req.ActionConfigs != null && req.ActionConfigs.Length > 50000)
             return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
 
         var tenantId = tenantCtx.TenantId;
@@ -125,7 +125,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     [HttpPut("{id:guid}")]
     public async Task<IActionResult> Update(Guid id, [FromBody] CampaignTemplateRequest req, CancellationToken ct)
     {
-        if (req.ActionConfigs != null && req.ActionConfigs.Length > 8000)
+        if (req.ActionConfigs != null && req.ActionConfigs.Length > 50000)
             return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
 
         var tenantId = tenantCtx.TenantId;
@@ -166,12 +166,13 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         return Ok(new { template.Id, template.Name });
     }
 
-    /// <summary>Lista las acciones activas (globales, definidas en admin) para vincular a maestros.</summary>
+    /// <summary>Lista las acciones activas del tenant para vincular a maestros.</summary>
     [HttpGet("available-actions")]
     public async Task<IActionResult> AvailableActions(CancellationToken ct)
     {
+        var tenantId = tenantCtx.TenantId;
         var actions = await db.Set<ActionDefinition>()
-            .Where(a => a.IsActive)
+            .Where(a => a.TenantId == tenantId && a.IsActive)
             .OrderBy(a => a.Name)
             .Select(a => new { a.Id, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms })
             .ToListAsync(ct);

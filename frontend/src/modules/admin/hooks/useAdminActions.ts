@@ -3,6 +3,7 @@ import { adminClient } from '@/shared/api/adminClient'
 
 export interface ActionDefinition {
   id: string
+  tenantId: string
   name: string
   description: string | null
   requiresWebhook: boolean
@@ -15,6 +16,7 @@ export interface ActionDefinition {
 }
 
 export interface ActionPayload {
+  tenantId: string
   name: string
   description?: string | null
   requiresWebhook: boolean
@@ -24,10 +26,13 @@ export interface ActionPayload {
   webhookMethod?: string | null
 }
 
-export function useAdminActions() {
+export function useAdminActions(tenantId?: string) {
   return useQuery<ActionDefinition[]>({
-    queryKey: ['admin-actions'],
-    queryFn: () => adminClient.get('/admin/actions').then((r: { data: ActionDefinition[] }) => r.data),
+    queryKey: ['admin-actions', tenantId],
+    queryFn: () =>
+      adminClient
+        .get('/admin/actions', { params: tenantId ? { tenantId } : {} })
+        .then((r: { data: ActionDefinition[] }) => r.data),
   })
 }
 

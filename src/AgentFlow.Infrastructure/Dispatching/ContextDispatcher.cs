@@ -66,22 +66,14 @@ public class ContextDispatcher(
 
         if (campaignContact?.Campaign is not null)
         {
-            // Buscar si ya hay una conversación para este contacto.
-            // Primero por CampaignId exacto (conversación creada por el envío de campaña),
-            // luego cualquier conversación abierta del mismo teléfono como fallback.
+            // Buscar si ya hay una conversación para este contacto EN ESTA CAMPAÑA.
+            // Sin fallback a otras campañas para evitar mezclar datos de clientes.
             var existingConv = await db.Conversations
                 .Where(c =>
                     c.TenantId == request.TenantId
                     && c.ClientPhone == request.FromPhone
                     && c.CampaignId == campaignContact.CampaignId
                     && c.Status != ConversationStatus.Closed)
-                .FirstOrDefaultAsync(ct)
-                ?? await db.Conversations
-                .Where(c =>
-                    c.TenantId == request.TenantId
-                    && c.ClientPhone == request.FromPhone
-                    && c.Status != ConversationStatus.Closed)
-                .OrderByDescending(c => c.LastActivityAt)
                 .FirstOrDefaultAsync(ct);
 
             return new DispatchResult(

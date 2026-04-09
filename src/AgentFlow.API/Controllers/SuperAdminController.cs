@@ -715,17 +715,21 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
     // ───── Action Definitions ─────
 
     public record ActionDefinitionRequest(
-        string Name, string? Description,
+        Guid TenantId, string Name, string? Description,
         bool RequiresWebhook, bool SendsEmail, bool SendsSms,
         string? WebhookUrl = null, string? WebhookMethod = null);
 
     [HttpGet("actions")]
     [Authorize(Roles = "super_admin")]
-    public async Task<IActionResult> GetActions(CancellationToken ct)
+    public async Task<IActionResult> GetActions([FromQuery] Guid? tenantId, CancellationToken ct)
     {
-        var actions = await db.ActionDefinitions
+        var query = db.ActionDefinitions.AsQueryable();
+        if (tenantId.HasValue)
+            query = query.Where(a => a.TenantId == tenantId.Value);
+
+        var actions = await query
             .OrderBy(a => a.Name)
-            .Select(a => new { a.Id, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.WebhookUrl, a.WebhookMethod, a.IsActive, a.CreatedAt })
+            .Select(a => new { a.Id, a.TenantId, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.WebhookUrl, a.WebhookMethod, a.IsActive, a.CreatedAt })
             .ToListAsync(ct);
         return Ok(actions);
     }
@@ -734,12 +738,16 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
     [Authorize(Roles = "super_admin")]
     public async Task<IActionResult> CreateAction([FromBody] ActionDefinitionRequest req, CancellationToken ct)
     {
-        if (await db.ActionDefinitions.AnyAsync(a => a.Name == req.Name, ct))
-            return BadRequest(new { error = "Ya existe una accion con ese nombre." });
+        if (!await db.Tenants.AnyAsync(t => t.Id == req.TenantId, ct))
+            return BadRequest(new { error = "Tenant no encontrado." });
+
+        if (await db.ActionDefinitions.AnyAsync(a => a.TenantId == req.TenantId && a.Name == req.Name, ct))
+            return BadRequest(new { error = "Ya existe una accion con ese nombre para este tenant." });
 
         var action = new ActionDefinition
         {
             Id = Guid.NewGuid(),
+            TenantId = req.TenantId,
             Name = req.Name,
             Description = req.Description,
             RequiresWebhook = req.RequiresWebhook,
@@ -760,9 +768,9 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         var action = await db.ActionDefinitions.FindAsync([id], ct);
         if (action is null) return NotFound();
 
-        // Check unique name
-        if (await db.ActionDefinitions.AnyAsync(a => a.Name == req.Name && a.Id != id, ct))
-            return BadRequest(new { error = "Ya existe una accion con ese nombre." });
+        // Check unique name per tenant
+        if (await db.ActionDefinitions.AnyAsync(a => a.TenantId == action.TenantId && a.Name == req.Name && a.Id != id, ct))
+            return BadRequest(new { error = "Ya existe una accion con ese nombre para este tenant." });
 
         action.Name = req.Name;
         action.Description = req.Description;

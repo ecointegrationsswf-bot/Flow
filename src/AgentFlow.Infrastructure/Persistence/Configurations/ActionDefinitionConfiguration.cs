@@ -10,10 +10,12 @@ public class ActionDefinitionConfiguration : IEntityTypeConfiguration<ActionDefi
     {
         b.ToTable("ActionDefinitions");
         b.HasKey(a => a.Id);
+        b.Property(a => a.TenantId).IsRequired();
+        b.HasOne(a => a.Tenant).WithMany().HasForeignKey(a => a.TenantId).OnDelete(DeleteBehavior.Cascade);
         b.Property(a => a.Name).HasMaxLength(100).IsRequired();
         b.Property(a => a.Description).HasMaxLength(500);
         b.Property(a => a.WebhookUrl).HasMaxLength(500);
         b.Property(a => a.WebhookMethod).HasMaxLength(10);
-        b.HasIndex(a => a.Name).IsUnique();
+        b.HasIndex(a => new { a.TenantId, a.Name }).IsUnique();
     }
 }
