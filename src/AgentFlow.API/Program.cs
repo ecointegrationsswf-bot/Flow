@@ -230,6 +230,28 @@ var app = builder.Build();
     {
         Console.WriteLine($"[Startup] Error al aplicar migraciones: {ex.Message}");
     }
+
+    // Garantizar columnas críticas aunque la migración haya fallado parcialmente
+    try
+    {
+        using var scope2 = app.Services.CreateScope();
+        var db2 = scope2.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AppUsers') AND name = 'Permissions')
+            BEGIN
+                ALTER TABLE AppUsers ADD Permissions nvarchar(2000) NOT NULL DEFAULT '[]';
+            END");
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActionConfigs')
+            BEGIN
+                ALTER TABLE CampaignTemplates ADD ActionConfigs nvarchar(max) NULL;
+            END");
+        Console.WriteLine("[Startup] Columnas de seguridad verificadas.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Error verificando columnas: {ex.Message}");
+    }
 }
 
 // ── Seed de tenant para desarrollo ──────────────────────
