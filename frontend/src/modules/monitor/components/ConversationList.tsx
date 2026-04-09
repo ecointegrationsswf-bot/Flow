@@ -140,6 +140,12 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
                   {c.status === 'Active' && (
                     <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-green-400" />
                   )}
+                  {c.status === 'EscalatedToHuman' && (
+                    <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-orange-400" title="Escalado a humano" />
+                  )}
+                  {isStale && (
+                    <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-red-500" title="Sin respuesta del cliente" />
+                  )}
                 </div>
 
                 <div className="min-w-0 flex-1">
@@ -156,7 +162,6 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
                       {c.lastMessagePreview ?? '—'}
                     </p>
                     <div className="flex shrink-0 items-center gap-1">
-                      {isStale && <span className="h-2.5 w-2.5 rounded-full bg-red-500" />}
                       {c.isHumanHandled && (
                         <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">H</span>
                       )}
