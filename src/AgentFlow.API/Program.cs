@@ -170,6 +170,7 @@ builder.Services.AddScoped<IContextDispatcher, ContextDispatcher>();
 // ── Cerebro ─────────────────────────────────────────────
 builder.Services.AddScoped<IAgentRegistry, AgentFlow.Infrastructure.Brain.AgentRegistryService>();
 builder.Services.AddScoped<IClassifierService, AgentFlow.Infrastructure.Brain.ClassifierService>();
+builder.Services.AddScoped<IValidationService, AgentFlow.Infrastructure.Brain.ValidationService>();
 builder.Services.AddScoped<IBrainService, AgentFlow.Infrastructure.Brain.BrainService>();
 
 // ── Tenant context ─────────────────────────────────────

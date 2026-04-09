@@ -12,14 +12,17 @@ namespace AgentFlow.Infrastructure.Brain;
 /// Reglas (en orden):
 /// 1. ¿Estado HumanClosed? → rechazar
 /// 2. ¿Estado Escalated_Human? → rechazar
-/// 3. ¿ClassifierService dice shouldEscalate? → escalar
-/// 4. ¿Campaña activa + desvío? → aplicar OutOfContextPolicy
-/// 5. Rutear al agentSlug clasificado
+/// 3. ¿Estado Pending_Validation? → continuar flujo de validación
+/// 4. ¿ClassifierService dice requiresValidation? → iniciar flujo
+/// 5. ¿ClassifierService dice shouldEscalate? → escalar
+/// 6. ¿Campaña activa + desvío? → aplicar OutOfContextPolicy
+/// 7. Rutear al agentSlug clasificado
 /// </summary>
 public class BrainService(
     ISessionStore sessions,
     IClassifierService classifier,
     IAgentRegistry registry,
+    IValidationService validation,
     AgentFlowDbContext db) : IBrainService
 {
     private const double EscalateConfidenceThreshold = 0.2;
@@ -49,7 +52,27 @@ public class BrainService(
                 false);
         }
 
-        // ── 3. Cargar agentes del tenant ──
+        // ── 3. ¿Flujo de validación en curso? ──
+        if (session?.BrainState == BrainSessionState.Pending_Validation
+            && session.ValidationState is not null)
+        {
+            return await HandleValidationFlowAsync(request, session, ct);
+        }
+
+        // ── 3b. ¿Validation_Failed? — permitir reintento o escalar ──
+        if (session?.BrainState == BrainSessionState.Validation_Failed)
+        {
+            // El cliente respondió después de un fallo — reiniciar como Active_AI
+            var resetSession = session with
+            {
+                BrainState = BrainSessionState.Active_AI,
+                ValidationState = null
+            };
+            await SaveSessionAsync(request.TenantId, request.ContactId, resetSession, ct);
+            session = resetSession;
+        }
+
+        // ── 4. Cargar agentes del tenant ──
         var agents = await registry.GetAgentsAsync(request.TenantId, ct);
         if (agents.Count == 0)
         {
@@ -57,7 +80,7 @@ public class BrainService(
                 "No hay agentes configurados para este tenant.");
         }
 
-        // ── 4. Clasificar intención ──
+        // ── 5. Clasificar intención ──
         var history = session?.IntentHistory ?? [];
         var classification = await classifier.ClassifyAsync(new ClassifierInput(
             request.TenantId,
@@ -70,7 +93,34 @@ public class BrainService(
                 : null
         ), ct);
 
-        // ── 5. ¿Escalar a humano? ──
+        // ── 6. ¿Requiere validación de identidad? → iniciar flujo C ──
+        if (classification.RequiresValidation)
+        {
+            var campaignTemplateId = await GetCampaignTemplateIdAsync(
+                request.CampaignId ?? session?.ActiveCampaignId, ct);
+
+            var flow = await validation.StartFlowAsync(
+                request.TenantId, campaignTemplateId, classification.Intent, ct);
+
+            if (!flow.IsComplete && flow.MessageToClient is not null)
+            {
+                // Hay preguntas configuradas — entrar en modo validación
+                var valSession = CreateOrUpdateSession(session, request,
+                    BrainSessionState.Pending_Validation, classification, agents);
+                valSession = valSession with { ValidationState = flow.State };
+                await SaveSessionAsync(request.TenantId, request.ContactId, valSession, ct);
+
+                return new BrainDecision(
+                    classification.AgentSlug,
+                    classification.Intent,
+                    BrainSessionState.Pending_Validation,
+                    true,
+                    flow.MessageToClient);
+            }
+            // Sin preguntas configuradas → continuar routing normal
+        }
+
+        // ── 7. ¿Escalar a humano? ──
         if (classification.ShouldEscalate ||
             classification.Confidence < EscalateConfidenceThreshold)
         {
@@ -86,7 +136,7 @@ public class BrainService(
                 false);
         }
 
-        // ── 6. ¿Campaña activa + desvío? → aplicar OutOfContextPolicy ──
+        // ── 8. ¿Campaña activa + desvío? → aplicar OutOfContextPolicy ──
         var campaignId = request.CampaignId ?? session?.ActiveCampaignId;
         if (campaignId.HasValue && session?.ActiveAgentSlug is not null
             && classification.AgentSlug != session.ActiveAgentSlug)
@@ -95,7 +145,6 @@ public class BrainService(
 
             if (policy == OutOfContextPolicy.Contain)
             {
-                // Mantener agente de campaña — ignorar clasificación
                 var containSession = CreateOrUpdateSession(session, request,
                     BrainSessionState.Active_Campaign, classification, agents,
                     overrideSlug: session.ActiveAgentSlug);
@@ -107,10 +156,9 @@ public class BrainService(
                     BrainSessionState.Active_Campaign,
                     false);
             }
-            // Policy = Transfer → continuar con el agente clasificado (paso 7)
         }
 
-        // ── 7. Routing normal ──
+        // ── 9. Routing normal ──
         var targetState = campaignId.HasValue
             ? BrainSessionState.Active_Campaign
             : BrainSessionState.Active_AI;
@@ -122,7 +170,69 @@ public class BrainService(
             classification.AgentSlug,
             classification.Intent,
             targetState,
-            classification.RequiresValidation);
+            false);
+    }
+
+    // ── Flujo de validación (Escenario C) ──
+
+    private async Task<BrainDecision> HandleValidationFlowAsync(
+        BrainRequest request, SessionState session, CancellationToken ct)
+    {
+        var flow = await validation.ContinueFlowAsync(session.ValidationState!, request.Message, ct);
+
+        if (flow.ReadyToValidate)
+        {
+            // Todas las preguntas respondidas → llamar webhook
+            var campaignTemplateId = await GetCampaignTemplateIdAsync(session.ActiveCampaignId, ct);
+            var result = await validation.CallWebhookAsync(
+                request.TenantId, campaignTemplateId, flow.State, ct);
+
+            if (result.IsValid)
+            {
+                // Validación exitosa → volver a Active_AI
+                var validSession = session with
+                {
+                    BrainState = BrainSessionState.Active_AI,
+                    ValidationState = null
+                };
+                await SaveSessionAsync(request.TenantId, request.ContactId, validSession, ct);
+
+                return new BrainDecision(
+                    session.ActiveAgentSlug ?? "",
+                    session.ValidationState!.Intent,
+                    BrainSessionState.Active_AI,
+                    false,
+                    result.MessageToClient);
+            }
+            else
+            {
+                // Validación fallida
+                var failedSession = session with
+                {
+                    BrainState = BrainSessionState.Validation_Failed,
+                    ValidationState = null
+                };
+                await SaveSessionAsync(request.TenantId, request.ContactId, failedSession, ct);
+
+                return new BrainDecision(
+                    session.ActiveAgentSlug ?? "",
+                    session.ValidationState!.Intent,
+                    BrainSessionState.Validation_Failed,
+                    false,
+                    result.MessageToClient ?? "No pudimos verificar su identidad. Un ejecutivo lo atenderá.");
+            }
+        }
+
+        // Quedan preguntas pendientes — seguir preguntando
+        var updatedSession = session with { ValidationState = flow.State };
+        await SaveSessionAsync(request.TenantId, request.ContactId, updatedSession, ct);
+
+        return new BrainDecision(
+            session.ActiveAgentSlug ?? "",
+            session.ValidationState!.Intent,
+            BrainSessionState.Pending_Validation,
+            true,
+            flow.MessageToClient);
     }
 
     // ── Helpers ──
@@ -190,6 +300,15 @@ public class BrainService(
         return await db.Campaigns
             .Where(c => c.Id == campaignId)
             .Select(c => c.OutOfContextPolicy)
+            .FirstOrDefaultAsync(ct);
+    }
+
+    private async Task<Guid?> GetCampaignTemplateIdAsync(Guid? campaignId, CancellationToken ct)
+    {
+        if (!campaignId.HasValue) return null;
+        return await db.Campaigns
+            .Where(c => c.Id == campaignId.Value)
+            .Select(c => c.CampaignTemplateId)
             .FirstOrDefaultAsync(ct);
     }
 }
