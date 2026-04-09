@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ClipboardList, Plus, Pencil, Trash2, Clock, Tag, Copy } from 'lucide-react'
+import { ClipboardList, Plus, Pencil, Trash2, Clock, Tag, Copy, Search, X } from 'lucide-react'
 import {
   useCampaignTemplates,
   useDeleteCampaignTemplate,
@@ -12,6 +12,10 @@ export function CampaignTemplatesPage() {
   const { data: templates, isLoading, isError, refetch } = useCampaignTemplates()
   const deleteMut = useDeleteCampaignTemplate()
   const duplicateMut = useDuplicateCampaignTemplate()
+
+  // Filtros
+  const [search, setSearch] = useState('')
+  const [filterStatus, setFilterStatus] = useState('')
 
   // Estado del modal de duplicar
   const [duplicateModal, setDuplicateModal] = useState<{ id: string; name: string } | null>(null)
@@ -32,6 +36,23 @@ export function CampaignTemplatesPage() {
     await duplicateMut.mutateAsync({ id: duplicateModal.id, name: newName.trim() })
     setDuplicateModal(null)
   }
+
+  const filtered = useMemo(() => {
+    if (!templates) return []
+    const q = search.toLowerCase().trim()
+    return templates.filter((t) => {
+      if (filterStatus === 'active' && !t.isActive) return false
+      if (filterStatus === 'inactive' && t.isActive) return false
+      if (!q) return true
+      return (
+        t.name.toLowerCase().includes(q) ||
+        (t.agentName ?? '').toLowerCase().includes(q)
+      )
+    })
+  }, [templates, search, filterStatus])
+
+  const hasFilters = search || filterStatus
+  const clearFilters = () => { setSearch(''); setFilterStatus('') }
 
   return (
     <div>
@@ -63,64 +84,110 @@ export function CampaignTemplatesPage() {
           <p className="mt-1 text-sm text-gray-500">Crea tu primer maestro para definir las reglas de tus campanas.</p>
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {templates.map((t) => (
-            <div key={t.id} className="rounded-lg bg-white p-5 shadow-sm">
-              <div className="mb-3 flex items-start justify-between">
-                <div>
-                  <h3 className="text-sm font-semibold text-gray-900">{t.name}</h3>
-                  <p className="text-xs text-gray-500">Agente: {t.agentName ?? '—'}</p>
-                </div>
-                <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${t.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                  {t.isActive ? 'Activo' : 'Inactivo'}
-                </span>
-              </div>
-
-              <div className="space-y-2 text-xs text-gray-600">
-                <div className="flex items-center gap-1.5">
-                  <Clock className="h-3.5 w-3.5 text-gray-400" />
-                  <span>Seguimientos: {t.followUpHours.length > 0 ? t.followUpHours.map(h => `${h}h`).join(', ') : 'Ninguno'}</span>
-                </div>
-                <div className="flex items-center gap-1.5">
-                  <Clock className="h-3.5 w-3.5 text-gray-400" />
-                  <span>Cierre: {t.autoCloseHours}h</span>
-                </div>
-                {t.labelIds.length > 0 && (
-                  <div className="flex items-center gap-1.5">
-                    <Tag className="h-3.5 w-3.5 text-gray-400" />
-                    <span>{t.labelIds.length} etiqueta{t.labelIds.length > 1 ? 's' : ''}</span>
-                  </div>
-                )}
-                {t.sendEmail && (
-                  <div className="text-blue-600">Email: {t.emailAddress}</div>
-                )}
-              </div>
-
-              <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
-                <button
-                  onClick={() => openDuplicate(t.id, t.name)}
-                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-purple-600 transition-colors"
-                  title="Copiar maestro"
-                >
-                  <Copy className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => navigate(`/campaign-templates/${t.id}/edit`)}
-                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                  title="Editar"
-                >
-                  <Pencil className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => handleDelete(t.id)}
-                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
-                  title="Eliminar"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
+        <div className="space-y-4">
+          {/* Barra de filtros */}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="relative flex-1 min-w-48">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+              <input
+                type="text"
+                placeholder="Buscar por nombre o agente..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 py-2 pl-9 pr-3 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
             </div>
-          ))}
+
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="rounded-lg border border-gray-300 py-2 px-3 text-sm text-gray-700 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="">Todos los estados</option>
+              <option value="active">Activo</option>
+              <option value="inactive">Inactivo</option>
+            </select>
+
+            {hasFilters && (
+              <button
+                onClick={clearFilters}
+                className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                <X className="h-4 w-4" /> Limpiar
+              </button>
+            )}
+
+            <span className="ml-auto text-xs text-gray-400">
+              {filtered.length} de {templates.length} maestro{templates.length !== 1 ? 's' : ''}
+            </span>
+          </div>
+
+          {/* Grid de tarjetas */}
+          {filtered.length === 0 ? (
+            <div className="py-12 text-center text-sm text-gray-400">
+              No se encontraron maestros con los filtros aplicados.
+            </div>
+          ) : (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {filtered.map((t) => (
+                <div key={t.id} className="rounded-lg bg-white p-5 shadow-sm">
+                  <div className="mb-3 flex items-start justify-between">
+                    <div>
+                      <h3 className="text-sm font-semibold text-gray-900">{t.name}</h3>
+                      <p className="text-xs text-gray-500">Agente: {t.agentName ?? '—'}</p>
+                    </div>
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${t.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                      {t.isActive ? 'Activo' : 'Inactivo'}
+                    </span>
+                  </div>
+
+                  <div className="space-y-2 text-xs text-gray-600">
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-gray-400" />
+                      <span>Seguimientos: {t.followUpHours.length > 0 ? t.followUpHours.map(h => `${h}h`).join(', ') : 'Ninguno'}</span>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <Clock className="h-3.5 w-3.5 text-gray-400" />
+                      <span>Cierre: {t.autoCloseHours}h</span>
+                    </div>
+                    {t.labelIds.length > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <Tag className="h-3.5 w-3.5 text-gray-400" />
+                        <span>{t.labelIds.length} etiqueta{t.labelIds.length > 1 ? 's' : ''}</span>
+                      </div>
+                    )}
+                    {t.sendEmail && (
+                      <div className="text-blue-600">Email: {t.emailAddress}</div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
+                    <button
+                      onClick={() => openDuplicate(t.id, t.name)}
+                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-purple-600 transition-colors"
+                      title="Copiar maestro"
+                    >
+                      <Copy className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => navigate(`/campaign-templates/${t.id}/edit`)}
+                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                      title="Editar"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDelete(t.id)}
+                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
+                      title="Eliminar"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
