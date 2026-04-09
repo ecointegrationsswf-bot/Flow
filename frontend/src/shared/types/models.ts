@@ -134,6 +134,7 @@ export interface AppUser {
   isActive: boolean
   canEditPhone: boolean
   allowedAgentIds: string[]
+  permissions: string[]
   avatarUrl?: string | null
   createdAt: string
   lastLoginAt?: string

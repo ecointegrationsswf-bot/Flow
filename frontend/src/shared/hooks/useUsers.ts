@@ -19,6 +19,7 @@ interface CreateUserPayload {
   role: string
   canEditPhone: boolean
   allowedAgentIds: string[]
+  permissions: string[]
 }
 
 export function useCreateUser() {
@@ -40,6 +41,7 @@ interface UpdateUserPayload {
   isActive: boolean
   canEditPhone: boolean
   allowedAgentIds: string[]
+  permissions: string[]
   password?: string
 }
 

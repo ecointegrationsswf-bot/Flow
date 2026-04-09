@@ -24,6 +24,12 @@ public class AppUser
     /// </summary>
     public List<Guid> AllowedAgentIds { get; set; } = [];
 
+    /// <summary>
+    /// Permisos granulares del usuario. Ej: ["view_monitor", "create_campaigns"].
+    /// Lista vacia = sin permisos adicionales (solo los del rol base).
+    /// </summary>
+    public List<string> Permissions { get; set; } = [];
+
     public string? AvatarUrl { get; set; }
 
     /// <summary>

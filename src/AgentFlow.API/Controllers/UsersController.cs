@@ -6,8 +6,8 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
-public record CreateUserRequest(string FullName, string Email, string Password, string Role, bool CanEditPhone = false, List<Guid>? AllowedAgentIds = null);
-public record UpdateUserRequest(string FullName, string Email, string Role, bool IsActive, bool CanEditPhone = false, List<Guid>? AllowedAgentIds = null, string? Password = null);
+public record CreateUserRequest(string FullName, string Email, string Password, string Role, bool CanEditPhone = false, List<Guid>? AllowedAgentIds = null, List<string>? Permissions = null);
+public record UpdateUserRequest(string FullName, string Email, string Role, bool IsActive, bool CanEditPhone = false, List<Guid>? AllowedAgentIds = null, string? Password = null, List<string>? Permissions = null);
 
 [ApiController]
 [Route("api/users")]
@@ -31,6 +31,7 @@ public class UsersController(AgentFlowDbContext db, ITenantContext tenantCtx) : 
                 u.IsActive,
                 u.CanEditPhone,
                 u.AllowedAgentIds,
+                u.Permissions,
                 u.CreatedAt,
                 u.LastLoginAt,
             })
@@ -56,6 +57,7 @@ public class UsersController(AgentFlowDbContext db, ITenantContext tenantCtx) : 
                 u.IsActive,
                 u.CanEditPhone,
                 u.AllowedAgentIds,
+                u.Permissions,
                 u.CreatedAt,
                 u.LastLoginAt,
             })
@@ -92,6 +94,7 @@ public class UsersController(AgentFlowDbContext db, ITenantContext tenantCtx) : 
             IsActive = true,
             CanEditPhone = req.CanEditPhone,
             AllowedAgentIds = req.AllowedAgentIds ?? [],
+            Permissions = req.Permissions ?? [],
             CreatedAt = DateTime.UtcNow,
         };
 
@@ -140,6 +143,8 @@ public class UsersController(AgentFlowDbContext db, ITenantContext tenantCtx) : 
         user.IsActive = req.IsActive;
         user.CanEditPhone = req.CanEditPhone;
         user.AllowedAgentIds = req.AllowedAgentIds ?? [];
+        user.Permissions = req.Permissions ?? [];
+        db.Entry(user).Property(u => u.Permissions).IsModified = true;
 
         if (!string.IsNullOrWhiteSpace(req.Password))
             user.PasswordHash = AuthController.HashPassword(req.Password);
