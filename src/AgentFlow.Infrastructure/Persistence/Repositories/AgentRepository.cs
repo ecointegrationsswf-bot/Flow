@@ -20,4 +20,7 @@ public class AgentRepository(AgentFlowDbContext db) : IAgentRepository
 
     public async Task<CampaignTemplate?> GetCampaignTemplateByIdAsync(Guid templateId, CancellationToken ct = default)
         => await db.CampaignTemplates.FirstOrDefaultAsync(t => t.Id == templateId, ct);
+
+    public async Task<PromptTemplate?> GetPromptTemplateByIdAsync(Guid promptTemplateId, CancellationToken ct = default)
+        => await db.PromptTemplates.FirstOrDefaultAsync(p => p.Id == promptTemplateId, ct);
 }

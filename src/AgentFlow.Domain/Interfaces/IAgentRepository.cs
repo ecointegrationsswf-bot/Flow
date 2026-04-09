@@ -13,4 +13,5 @@ public interface IAgentRepository
     Task<AgentDefinition?> GetFirstActiveByTenantAsync(Guid tenantId, CancellationToken ct = default);
     Task<Tenant?> GetTenantByIdAsync(Guid tenantId, CancellationToken ct = default);
     Task<CampaignTemplate?> GetCampaignTemplateByIdAsync(Guid templateId, CancellationToken ct = default);
+    Task<PromptTemplate?> GetPromptTemplateByIdAsync(Guid promptTemplateId, CancellationToken ct = default);
 }

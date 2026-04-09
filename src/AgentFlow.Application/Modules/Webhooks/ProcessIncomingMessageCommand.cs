@@ -327,14 +327,28 @@ public class ProcessIncomingMessageHandler(
                 if (conversation.ActiveAgentId != agent.Id)
                     conversation.ActiveAgentId = agent.Id;
 
-                // ── CEREBRO: usar el SystemPrompt del maestro de campaña, no el del AgentDefinition ──
-                // Cada maestro tiene su propio prompt aunque compartan el mismo agente IA.
+                // ── CEREBRO: usar el SystemPrompt del PromptTemplate vinculado al maestro de campaña ──
+                // La cadena es: AgentRegistry → CampaignTemplate → PromptTemplateIds → PromptTemplate.SystemPrompt
                 if (isBrainControlled && brainCampaignTemplateId.HasValue)
                 {
                     var brainTemplate = await agents.GetCampaignTemplateByIdAsync(brainCampaignTemplateId.Value, ct);
-                    if (brainTemplate is not null && !string.IsNullOrEmpty(brainTemplate.SystemPrompt))
+                    if (brainTemplate is not null)
                     {
-                        agent.SystemPrompt = brainTemplate.SystemPrompt;
+                        // Primero intentar el SystemPrompt directo del maestro
+                        if (!string.IsNullOrEmpty(brainTemplate.SystemPrompt))
+                        {
+                            agent.SystemPrompt = brainTemplate.SystemPrompt;
+                        }
+                        // Si está vacío, cargar desde el PromptTemplate vinculado
+                        else if (brainTemplate.PromptTemplateIds.Count > 0)
+                        {
+                            var promptTemplateId = brainTemplate.PromptTemplateIds[0];
+                            var promptTemplate = await agents.GetPromptTemplateByIdAsync(promptTemplateId, ct);
+                            if (promptTemplate is not null && !string.IsNullOrEmpty(promptTemplate.SystemPrompt))
+                            {
+                                agent.SystemPrompt = promptTemplate.SystemPrompt;
+                            }
+                        }
                     }
                 }
 
