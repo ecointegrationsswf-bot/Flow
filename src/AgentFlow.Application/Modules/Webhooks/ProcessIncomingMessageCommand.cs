@@ -53,7 +53,8 @@ public class ProcessIncomingMessageHandler(
     ISendEmailResumeService emailResume,
     IBrainService brainService,
     IAgentRegistry agentRegistry,
-    ICampaignRepository campaignRepo
+    ICampaignRepository campaignRepo,
+    AgentFlow.Domain.Webhooks.IActionExecutorService actionExecutor
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
     public async Task<ProcessIncomingMessageResult> Handle(
@@ -483,6 +484,56 @@ public class ProcessIncomingMessageHandler(
                         AttentionStartTime: attentionStart, AttentionEndTime: attentionEnd
                     ), ct);
                     replyText = agentResponse.ReplyText;
+
+                    // ── Webhook Contract System ────────────────────────────────
+                    // Si el agente emitió un tag [ACTION:xxx], intentamos ejecutar
+                    // la acción via ActionExecutorService. Si el tenant tiene
+                    // WebhookContractEnabled=false o no hay config, es NoOp silencioso.
+                    var actionSlug = ExtractActionTag(replyText);
+                    if (!string.IsNullOrEmpty(actionSlug))
+                    {
+                        // Limpiar el tag del texto visible al cliente
+                        replyText = RemoveActionTag(replyText);
+
+                        try
+                        {
+                            var actionResult = await actionExecutor.ExecuteAsync(
+                                actionSlug: actionSlug,
+                                tenantId: cmd.TenantId,
+                                campaignTemplateId: brainCampaignTemplateId
+                                    ?? (campaignTemplate?.Id),
+                                contactPhone: cmd.FromPhone,
+                                conversationId: conversation.Id,
+                                collectedParams: AgentFlow.Domain.Webhooks.CollectedParams.Empty(),
+                                agentSlug: agent.Name,
+                                ct: ct);
+
+                            // Si la acción devolvió datos para el agente, apendicarlos al replyText
+                            if (actionResult.Success && !string.IsNullOrEmpty(actionResult.DataForAgent))
+                            {
+                                replyText = string.IsNullOrEmpty(replyText)
+                                    ? actionResult.DataForAgent
+                                    : $"{replyText}\n\n{actionResult.DataForAgent}";
+                            }
+                            // Si falló con mensaje controlado, usarlo como respuesta
+                            else if (!actionResult.Success && !string.IsNullOrEmpty(actionResult.ErrorMessage))
+                            {
+                                replyText = string.IsNullOrEmpty(replyText)
+                                    ? actionResult.ErrorMessage
+                                    : $"{replyText}\n\n{actionResult.ErrorMessage}";
+                            }
+
+                            // Si la acción pidió escalar, forzar ShouldEscalate en la respuesta
+                            if (actionResult.ShouldEscalate)
+                            {
+                                agentResponse = agentResponse with { ShouldEscalate = true };
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"[ActionExecutor] Error ejecutando {actionSlug}: {ex.Message}");
+                        }
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -592,5 +643,31 @@ public class ProcessIncomingMessageHandler(
             agentResponse?.ShouldClose ?? false,
             agentResponse?.DetectedIntent ?? dispatch.Intent
         );
+    }
+
+    // ── Webhook Contract System — helpers de parsing del tag [ACTION:xxx] ──
+
+    private static readonly System.Text.RegularExpressions.Regex ActionTagRegex =
+        new(@"\[ACTION:([A-Z_][A-Z0-9_]*)\]", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Extrae el slug de una acción del texto del agente.
+    /// Formato esperado: [ACTION:SEND_PAYMENT_LINK]
+    /// Devuelve null si no hay tag.
+    /// </summary>
+    private static string? ExtractActionTag(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return null;
+        var match = ActionTagRegex.Match(text);
+        return match.Success ? match.Groups[1].Value.ToUpperInvariant() : null;
+    }
+
+    /// <summary>
+    /// Elimina el tag [ACTION:xxx] del texto para que el cliente no lo vea.
+    /// </summary>
+    private static string RemoveActionTag(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        return ActionTagRegex.Replace(text, "").Trim();
     }
 }

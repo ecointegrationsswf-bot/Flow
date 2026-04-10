@@ -173,6 +173,20 @@ builder.Services.AddScoped<IClassifierService, AgentFlow.Infrastructure.Brain.Cl
 builder.Services.AddScoped<IValidationService, AgentFlow.Infrastructure.Brain.ValidationService>();
 builder.Services.AddScoped<IBrainService, AgentFlow.Infrastructure.Brain.BrainService>();
 
+// ── Webhook Contract System ────────────────────────────
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.ISystemContextBuilder,
+    AgentFlow.Infrastructure.Webhooks.SystemContextBuilder>();
+builder.Services.AddSingleton<AgentFlow.Domain.Webhooks.IPayloadBuilder,
+    AgentFlow.Infrastructure.Webhooks.PayloadBuilder>();
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IHttpDispatcher,
+    AgentFlow.Infrastructure.Webhooks.HttpDispatcher>();
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IOutputInterpreter,
+    AgentFlow.Infrastructure.Webhooks.OutputInterpreter>();
+builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ActionConfigReader>();
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionExecutorService,
+    AgentFlow.Infrastructure.Webhooks.ActionExecutorService>();
+
 // ── Tenant context ─────────────────────────────────────
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ITenantContext, HttpTenantContext>();

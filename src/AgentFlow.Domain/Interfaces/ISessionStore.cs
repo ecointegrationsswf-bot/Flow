@@ -31,5 +31,10 @@ public record SessionState(
     string? ActiveAgentSlug = null,
     List<string>? IntentHistory = null,
     ValidationContext? ValidationState = null,
-    DateTime? EscalatedAt = null
+    DateTime? EscalatedAt = null,
+
+    // ── Campos del Webhook Contract System (Fase 3+) ──
+    // ActionContext: diccionario que crece con los valores devueltos por outputAction=inject_context.
+    // Disponible para el agente en turnos futuros. Default null para compat con sesiones existentes.
+    Dictionary<string, string>? ActionContext = null
 );

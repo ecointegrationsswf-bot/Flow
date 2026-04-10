@@ -48,6 +48,14 @@ public class Tenant
     /// </summary>
     public bool BrainEnabled { get; set; }
 
+    /// <summary>
+    /// Interruptor global del Webhook Contract System.
+    /// Cuando es false el ActionExecutorService no se invoca — el flujo actual queda intacto.
+    /// Cuando es true, el sistema ejecuta webhooks basados en InputSchema/OutputSchema
+    /// configurados en CampaignTemplates.ActionConfigs por acción.
+    /// </summary>
+    public bool WebhookContractEnabled { get; set; }
+
     public ICollection<AgentDefinition> Agents { get; set; } = [];
     public ICollection<Campaign> Campaigns { get; set; } = [];
     public ICollection<AppUser> Users { get; set; } = [];
