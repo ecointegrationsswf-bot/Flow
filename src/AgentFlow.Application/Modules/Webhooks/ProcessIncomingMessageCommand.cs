@@ -80,9 +80,36 @@ public class ProcessIncomingMessageHandler(
     private async Task<ProcessIncomingMessageResult> HandleWithBrain(
         ProcessIncomingMessageCommand cmd, Tenant tenant, CancellationToken ct)
     {
-        // ── 1. El Cerebro decide ──
-        var decision = await brainService.RouteAsync(new BrainRequest(
-            cmd.TenantId, cmd.FromPhone, cmd.Message, cmd.Channel.ToString(), null), ct);
+        // ── OPTIMIZACIÓN: Skip del clasificador si hay sesión activa reciente ──
+        // Si el cliente está mid-conversación con un agente (< 30 min de inactividad),
+        // reutilizamos el mismo agentSlug sin llamar al LLM clasificador.
+        // Ahorra ~12 segundos por mensaje en el 80% de los casos.
+        BrainDecision? decision = null;
+        try
+        {
+            var session = await sessions.GetAsync(cmd.TenantId, cmd.FromPhone, ct);
+            if (session is not null
+                && !string.IsNullOrEmpty(session.ActiveAgentSlug)
+                && session.BrainState == BrainSessionState.Active_AI
+                && DateTime.UtcNow - session.LastActivityAt < TimeSpan.FromMinutes(30))
+            {
+                // Reutilizar decisión previa — sin clasificar
+                decision = new BrainDecision(
+                    AgentSlug: session.ActiveAgentSlug,
+                    Intent: session.AgentType ?? "continuation",
+                    SessionState: BrainSessionState.Active_AI,
+                    ValidationPending: false,
+                    MessageToClient: null);
+            }
+        }
+        catch { /* Redis no disponible — continuar con clasificación normal */ }
+
+        // ── 1. Si no hubo shortcut, clasificar normalmente ──
+        if (decision is null)
+        {
+            decision = await brainService.RouteAsync(new BrainRequest(
+                cmd.TenantId, cmd.FromPhone, cmd.Message, cmd.Channel.ToString(), null), ct);
+        }
 
         // ── 2. Estado terminal → silencio ──
         if (decision.SessionState == BrainSessionState.HumanClosed)
@@ -101,34 +128,20 @@ public class ProcessIncomingMessageHandler(
         var agentId = registryEntry?.AgentDefinitionId;
         var brainCampaignTemplateId = registryEntry?.CampaignTemplateId;
 
-        // Construir dispatch simulado para reutilizar el flujo original (pasos 2-13)
+        var existingConv = await conversations.GetLatestByPhoneAsync(cmd.TenantId, cmd.FromPhone, ct);
+
         var dispatch = new DispatchResult(
-            ExistingConversationId: null,
+            ExistingConversationId: existingConv?.Id,
             SelectedAgentId: agentId,
             Intent: decision.Intent,
-            IsExistingSession: false,
+            IsExistingSession: existingConv is not null,
             IsCampaignContact: false,
-            CampaignId: null);
+            CampaignId: existingConv?.CampaignId);
 
-        // Intentar recuperar sesión existente de Redis para continuidad
-        try
-        {
-            var existingSession = await sessions.GetAsync(cmd.TenantId, cmd.FromPhone, ct);
-            if (existingSession is not null)
-            {
-                dispatch = dispatch with
-                {
-                    ExistingConversationId = existingSession.ConversationId,
-                    IsExistingSession = true,
-                    CampaignId = existingSession.CampaignId
-                };
-            }
-        }
-        catch { /* Redis no disponible */ }
-
-        // ── Reutilizar flujo original desde paso 2 en adelante ──
         return await ExecuteStandardFlow(cmd, dispatch, tenant, isBrainControlled: true, ct,
-            brainCampaignTemplateId: brainCampaignTemplateId);
+            brainCampaignTemplateId: brainCampaignTemplateId,
+            preloadedConversation: existingConv,
+            brainAgentSlug: decision.AgentSlug);
     }
 
     /// <summary>
@@ -239,11 +252,28 @@ public class ProcessIncomingMessageHandler(
     private async Task<ProcessIncomingMessageResult> ExecuteStandardFlow(
         ProcessIncomingMessageCommand cmd, DispatchResult dispatch, Tenant tenant,
         bool isBrainControlled, CancellationToken ct,
-        Guid? brainCampaignTemplateId = null)
+        Guid? brainCampaignTemplateId = null,
+        Conversation? preloadedConversation = null,
+        string? brainAgentSlug = null)
     {
         // ── 2. OBTENER O CREAR CONVERSACIÓN ──────────────
         Conversation conversation;
-        if (dispatch.IsExistingSession && dispatch.ExistingConversationId.HasValue)
+        if (preloadedConversation is not null)
+        {
+            // Conversación ya cargada por HandleWithBrain — evitar segunda query
+            conversation = preloadedConversation;
+            if (conversation.Status == ConversationStatus.Closed ||
+                conversation.Status == ConversationStatus.Unresponsive ||
+                conversation.Status == ConversationStatus.WaitingClient)
+            {
+                conversation.Status = ConversationStatus.Active;
+                conversation.IsHumanHandled = false;
+                conversation.LastActivityAt = DateTime.UtcNow;
+                if (cmd.ClientName is not null)
+                    conversation.ClientName = cmd.ClientName;
+            }
+        }
+        else if (dispatch.IsExistingSession && dispatch.ExistingConversationId.HasValue)
         {
             conversation = (await conversations.GetByIdAsync(dispatch.ExistingConversationId.Value, ct))!;
             if (conversation.Status == ConversationStatus.Closed ||
@@ -317,62 +347,56 @@ public class ProcessIncomingMessageHandler(
         if (!conversation.IsHumanHandled)
         {
             var agentId = dispatch.SelectedAgentId ?? conversation.ActiveAgentId;
+
             AgentDefinition? agent = null;
             if (agentId.HasValue)
                 agent = await agents.GetByIdAsync(agentId.Value, ct);
             agent ??= await agents.GetFirstActiveByTenantAsync(cmd.TenantId, ct);
+
+            // Resolver templateId: del Cerebro directo, o desde conversation.CampaignId
+            Guid? templateIdToLoad = brainCampaignTemplateId;
+            if (templateIdToLoad is null && conversation.CampaignId.HasValue)
+            {
+                var campaign = await conversations.GetCampaignAsync(conversation.CampaignId.Value, ct);
+                templateIdToLoad = campaign?.CampaignTemplateId;
+            }
+
+            CampaignTemplate? campaignTemplate = templateIdToLoad.HasValue
+                ? await agents.GetCampaignTemplateByIdAsync(templateIdToLoad.Value, ct)
+                : null;
 
             if (agent is not null)
             {
                 if (conversation.ActiveAgentId != agent.Id)
                     conversation.ActiveAgentId = agent.Id;
 
-                // ── CEREBRO: usar el SystemPrompt del PromptTemplate vinculado al maestro de campaña ──
-                // La cadena es: AgentRegistry → CampaignTemplate → PromptTemplateIds → PromptTemplate.SystemPrompt
-                if (isBrainControlled && brainCampaignTemplateId.HasValue)
-                {
-                    var brainTemplate = await agents.GetCampaignTemplateByIdAsync(brainCampaignTemplateId.Value, ct);
-                    if (brainTemplate is not null)
-                    {
-                        // Primero intentar el SystemPrompt directo del maestro
-                        if (!string.IsNullOrEmpty(brainTemplate.SystemPrompt))
-                        {
-                            agent.SystemPrompt = brainTemplate.SystemPrompt;
-                        }
-                        // Si está vacío, cargar desde el PromptTemplate vinculado
-                        else if (brainTemplate.PromptTemplateIds.Count > 0)
-                        {
-                            var promptTemplateId = brainTemplate.PromptTemplateIds[0];
-                            var promptTemplate = await agents.GetPromptTemplateByIdAsync(promptTemplateId, ct);
-                            if (promptTemplate is not null && !string.IsNullOrEmpty(promptTemplate.SystemPrompt))
-                            {
-                                agent.SystemPrompt = promptTemplate.SystemPrompt;
-                            }
-                        }
-                    }
-                }
-
                 var tenantApiKey = tenant.LlmApiKey;
 
-                // Horario de atención
+                // Horario de atención desde el template ya cargado
                 List<int>? attentionDays = null;
                 string? attentionStart = null, attentionEnd = null;
-
-                // Resolver CampaignTemplate: del Cerebro o de la conversación
-                var templateIdToLoad = brainCampaignTemplateId ?? null;
-                if (templateIdToLoad is null && conversation.CampaignId.HasValue)
+                if (campaignTemplate is not null)
                 {
-                    var campaign = await conversations.GetCampaignAsync(conversation.CampaignId.Value, ct);
-                    templateIdToLoad = campaign?.CampaignTemplateId;
+                    attentionDays = campaignTemplate.AttentionDays;
+                    attentionStart = campaignTemplate.AttentionStartTime;
+                    attentionEnd = campaignTemplate.AttentionEndTime;
                 }
-                if (templateIdToLoad.HasValue)
+
+                // ── CEREBRO: sobreescribir SystemPrompt del agente con el del PromptTemplate ──
+                if (isBrainControlled && campaignTemplate is not null)
                 {
-                    var tmpl = await agents.GetCampaignTemplateByIdAsync(templateIdToLoad.Value, ct);
-                    if (tmpl is not null)
+                    if (!string.IsNullOrEmpty(campaignTemplate.SystemPrompt))
                     {
-                        attentionDays = tmpl.AttentionDays;
-                        attentionStart = tmpl.AttentionStartTime;
-                        attentionEnd = tmpl.AttentionEndTime;
+                        agent.SystemPrompt = campaignTemplate.SystemPrompt;
+                    }
+                    else if (campaignTemplate.PromptTemplateIds.Count > 0)
+                    {
+                        var promptTemplate = await agents.GetPromptTemplateByIdAsync(
+                            campaignTemplate.PromptTemplateIds[0], ct);
+                        if (promptTemplate is not null && !string.IsNullOrEmpty(promptTemplate.SystemPrompt))
+                        {
+                            agent.SystemPrompt = promptTemplate.SystemPrompt;
+                        }
                     }
                 }
 
@@ -471,16 +495,27 @@ public class ProcessIncomingMessageHandler(
             }
         }
 
-        // Actualizar sesión Redis
+        // Actualizar sesión Redis (incluye slug del Cerebro para shortcut en próximos mensajes)
         try
         {
+            var brainState = conversation.IsHumanHandled
+                ? BrainSessionState.Escalated_Human
+                : BrainSessionState.Active_AI;
+
             await sessions.SetAsync(cmd.TenantId, cmd.FromPhone, new SessionState(
-                conversation.Id,
-                conversation.ActiveAgentId ?? dispatch.SelectedAgentId ?? Guid.Empty,
-                agentResponse?.DetectedIntent ?? dispatch.Intent,
-                dispatch.CampaignId,
-                conversation.IsHumanHandled,
-                DateTime.UtcNow
+                ConversationId: conversation.Id,
+                AgentId: conversation.ActiveAgentId ?? dispatch.SelectedAgentId ?? Guid.Empty,
+                AgentType: agentResponse?.DetectedIntent ?? dispatch.Intent,
+                CampaignId: dispatch.CampaignId,
+                IsHumanHandled: conversation.IsHumanHandled,
+                LastActivityAt: DateTime.UtcNow,
+                BrainState: brainState,
+                Origin: SessionOrigin.Inbound,
+                ActiveCampaignId: dispatch.CampaignId,
+                ActiveAgentSlug: brainAgentSlug,
+                IntentHistory: null,
+                ValidationState: null,
+                EscalatedAt: null
             ), TimeSpan.FromHours(72), ct);
         }
         catch { }

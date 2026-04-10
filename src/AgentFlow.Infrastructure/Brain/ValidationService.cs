@@ -207,14 +207,17 @@ public class ValidationService(
         }
 
         // Si no hay config en el template, buscar en cualquier template del tenant que tenga esta acción
+        // ActionIds es JSON en BD → no se puede filtrar en SQL, hay que traer y filtrar en memoria
         if (string.IsNullOrEmpty(actionConfigs))
         {
-            actionConfigs = await db.CampaignTemplates
-                .Where(t => t.TenantId == tenantId
-                    && t.ActionIds.Contains(actionId)
-                    && t.ActionConfigs != null)
-                .Select(t => t.ActionConfigs)
-                .FirstOrDefaultAsync(ct);
+            var templates = await db.CampaignTemplates
+                .Where(t => t.TenantId == tenantId && t.ActionConfigs != null)
+                .Select(t => new { t.ActionIds, t.ActionConfigs })
+                .ToListAsync(ct);
+
+            actionConfigs = templates
+                .FirstOrDefault(t => t.ActionIds.Contains(actionId))
+                ?.ActionConfigs;
         }
 
         if (string.IsNullOrEmpty(actionConfigs)) return null;

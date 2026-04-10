@@ -18,7 +18,8 @@ public class ClassifierService(
     AI.AnthropicSettings settings,
     AgentFlowDbContext db) : IClassifierService
 {
-    private const string Model = "claude-sonnet-4-6";
+    // Haiku 4.5 — el más rápido para respuestas rápidas (ideal para clasificación)
+    private const string Model = "claude-haiku-4-5";
     private const int MaxTokens = 256;
     private const decimal Temperature = 0.0m;
 
@@ -60,8 +61,9 @@ public class ClassifierService(
             var raw = response.Content.OfType<TextContent>().FirstOrDefault()?.Text ?? "";
             return ParseResponse(raw, input);
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"[ClassifierService] Error: {ex.Message} | {ex.InnerException?.Message}");
             return Fallback(input);
         }
     }
@@ -91,8 +93,11 @@ public class ClassifierService(
         if (input.RecentHistory.Count > 0)
         {
             sb.AppendLine("## Últimos mensajes");
-            foreach (var msg in input.RecentHistory.TakeLast(5))
-                sb.AppendLine($"- {msg}");
+            foreach (var msg in input.RecentHistory.TakeLast(3))
+            {
+                var trimmed = msg.Length > 150 ? msg.Substring(0, 150) + "..." : msg;
+                sb.AppendLine($"- {trimmed}");
+            }
             sb.AppendLine();
         }
 

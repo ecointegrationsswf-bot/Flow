@@ -355,29 +355,42 @@ public class WebhookController(
         }
 
         // ── 11. Procesar mensaje ──────────────────────────
-        var result = await mediator.Send(new ProcessIncomingMessageCommand(
-            line.TenantId.Value,
-            fromPhone,
-            messageText,
-            ChannelType.WhatsApp,
-            clientName,
-            payload.Id,
-            mediaUrl,
-            mediaType
-        ), ct);
-
-        // Actualizar bitácora como procesado exitosamente
-        log.Status = "processed";
-        log.StatusReason = result.AgentType;
-        db.WebhookLogs.Add(log);
-        await db.SaveChangesAsync(ct);
-
-        return Ok(new
+        try
         {
-            status = "processed",
-            conversationId = result.ConversationId,
-            agentType = result.AgentType
-        });
+            var result = await mediator.Send(new ProcessIncomingMessageCommand(
+                line.TenantId.Value,
+                fromPhone,
+                messageText,
+                ChannelType.WhatsApp,
+                clientName,
+                payload.Id,
+                mediaUrl,
+                mediaType
+            ), ct);
+
+            // Actualizar bitácora como procesado exitosamente
+            log.Status = "processed";
+            log.StatusReason = result.AgentType;
+            db.WebhookLogs.Add(log);
+            await db.SaveChangesAsync(ct);
+
+            return Ok(new
+            {
+                status = "processed",
+                conversationId = result.ConversationId,
+                agentType = result.AgentType
+            });
+        }
+        catch (Exception ex)
+        {
+            // Capturar error para diagnóstico
+            var errorDetail = ex.Message + " | " + (ex.InnerException?.Message ?? "") + " | " + ex.StackTrace;
+            log.Status = "error";
+            log.StatusReason = errorDetail.Length > 2000 ? errorDetail.Substring(0, 2000) : errorDetail;
+            db.WebhookLogs.Add(log);
+            try { await db.SaveChangesAsync(ct); } catch { }
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>

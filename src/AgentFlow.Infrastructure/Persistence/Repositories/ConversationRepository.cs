@@ -63,4 +63,11 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
 
     public async Task<Campaign?> GetCampaignAsync(Guid campaignId, CancellationToken ct = default)
         => await db.Campaigns.FirstOrDefaultAsync(c => c.Id == campaignId, ct);
+
+    public async Task<Conversation?> GetLatestByPhoneAsync(Guid tenantId, string phone, CancellationToken ct = default)
+        => await db.Conversations
+            .Include(c => c.Messages)
+            .Where(c => c.TenantId == tenantId && c.ClientPhone == phone)
+            .OrderByDescending(c => c.LastActivityAt)
+            .FirstOrDefaultAsync(ct);
 }
