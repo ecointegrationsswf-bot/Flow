@@ -79,6 +79,21 @@ export interface ActionConfig {
   webhookPayload?: string
   emailAddress?: string
   smsPhoneNumber?: string
+
+  // ── Webhook Contract System (Fase 5) ──
+  // Extensiones opcionales para el contrato tipificado.
+  // Se guardan dentro del mismo JSON actionConfigs[actionId] sin romper los campos legacy.
+  // Tipado como `any` para evitar import cíclico con el módulo webhookBuilder.
+  contentType?: string
+  structure?: string
+  authType?: string
+  authValue?: string
+  apiKeyHeaderName?: string
+  timeoutSeconds?: number
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  inputSchema?: any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  outputSchema?: any
 }
 
 export function useCampaignTemplates() {

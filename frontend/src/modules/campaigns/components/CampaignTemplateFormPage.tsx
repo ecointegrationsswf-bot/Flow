@@ -21,6 +21,8 @@ import { z } from 'zod'
 import { ArrowLeft, Plus, X, Clock, Zap, FileText, Webhook, Mail, MessageSquare, ChevronDown, ChevronUp, Globe } from 'lucide-react'
 import { useAgents } from '@/shared/hooks/useAgents'
 import { useLabels } from '@/shared/hooks/useLabels'
+import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
+import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
 import {
   useCampaignTemplate,
   useCreateCampaignTemplate,
@@ -90,6 +92,8 @@ export function CampaignTemplateFormPage() {
   const [attentionStart, setAttentionStart] = useState(existing?.attentionStartTime ?? '08:00')
   const [attentionEnd, setAttentionEnd] = useState(existing?.attentionEndTime ?? '17:00')
   const [outOfContextPolicy, setOutOfContextPolicy] = useState(existing?.outOfContextPolicy ?? 'Contain')
+  // Webhook Contract Builder — modal state (Fase 5)
+  const [webhookBuilderActionId, setWebhookBuilderActionId] = useState<string | null>(null)
 
   // Sync all state when existing template loads (edit mode)
   useEffect(() => {
@@ -582,6 +586,27 @@ export function CampaignTemplateFormPage() {
                               />
                               <p className="mt-1 text-xs text-gray-400">Usa {'{{variable}}'} para campos dinamicos.</p>
                             </div>
+
+                            {/* Webhook Contract System — Builder avanzado (Fase 5) */}
+                            <div className="mt-3 pt-3 border-t border-amber-200">
+                              <button
+                                type="button"
+                                onClick={() => setWebhookBuilderActionId(action.id)}
+                                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700"
+                              >
+                                <Webhook className="h-3.5 w-3.5" />
+                                Configurar contrato avanzado
+                                {(config.inputSchema || config.outputSchema) && (
+                                  <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px]">
+                                    Configurado
+                                  </span>
+                                )}
+                              </button>
+                              <p className="mt-1 text-[10px] text-gray-500">
+                                Define un contrato tipificado con InputSchema y OutputSchema para que el Cerebro
+                                ejecute el webhook automáticamente cuando el agente emita [ACTION:{action.name}].
+                              </p>
+                            </div>
                           </div>
                         )}
 
@@ -717,6 +742,56 @@ export function CampaignTemplateFormPage() {
           </button>
         </div>
       </form>
+
+      {/* Webhook Contract Builder Modal (Fase 5) */}
+      {webhookBuilderActionId && (() => {
+        const action = availableActions?.find(a => a.id === webhookBuilderActionId)
+        const currentConfig = actionConfigs[webhookBuilderActionId] ?? {}
+
+        const initial: Partial<WebhookContractBundle> = {
+          webhookUrl: currentConfig.webhookUrl ?? '',
+          webhookMethod: (currentConfig.webhookMethod as WebhookContractBundle['webhookMethod']) ?? 'POST',
+          contentType: (currentConfig.contentType as WebhookContractBundle['contentType']) ?? 'application/json',
+          structure: (currentConfig.structure as WebhookContractBundle['structure']) ?? 'flat',
+          authType: (currentConfig.authType as WebhookContractBundle['authType']) ?? 'None',
+          authValue: currentConfig.authValue,
+          apiKeyHeaderName: currentConfig.apiKeyHeaderName,
+          webhookHeaders: currentConfig.webhookHeaders,
+          timeoutSeconds: currentConfig.timeoutSeconds ?? 10,
+          inputSchema: currentConfig.inputSchema,
+          outputSchema: currentConfig.outputSchema,
+        }
+
+        return (
+          <WebhookBuilderModal
+            initial={initial}
+            actionName={action?.name ?? ''}
+            onClose={() => setWebhookBuilderActionId(null)}
+            onSave={(bundle) => {
+              // Mergear el bundle dentro del actionConfigs[actionId] existente
+              const actionId = webhookBuilderActionId
+              setActionConfigs(prev => ({
+                ...prev,
+                [actionId]: {
+                  ...prev[actionId],
+                  webhookUrl: bundle.webhookUrl,
+                  webhookMethod: bundle.webhookMethod,
+                  contentType: bundle.contentType,
+                  structure: bundle.structure,
+                  authType: bundle.authType,
+                  authValue: bundle.authValue,
+                  apiKeyHeaderName: bundle.apiKeyHeaderName,
+                  webhookHeaders: bundle.webhookHeaders,
+                  timeoutSeconds: bundle.timeoutSeconds,
+                  inputSchema: bundle.inputSchema,
+                  outputSchema: bundle.outputSchema,
+                },
+              }))
+              setWebhookBuilderActionId(null)
+            }}
+          />
+        )
+      })()}
     </div>
   )
 }
