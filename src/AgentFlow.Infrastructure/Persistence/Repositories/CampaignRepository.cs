@@ -59,4 +59,11 @@ public class CampaignRepository(AgentFlowDbContext db) : ICampaignRepository
         db.Campaigns.Update(campaign);
         await db.SaveChangesAsync(ct);
     }
+
+    public async Task<CampaignContact?> GetContactByPhoneAsync(Guid campaignId, string phone, CancellationToken ct = default)
+    {
+        return await db.CampaignContacts
+            .AsNoTracking()
+            .FirstOrDefaultAsync(cc => cc.CampaignId == campaignId && cc.PhoneNumber == phone, ct);
+    }
 }

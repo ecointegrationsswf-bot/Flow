@@ -20,4 +20,10 @@ public interface ICampaignRepository
 
     /// <summary>Actualiza una campaña existente.</summary>
     Task UpdateAsync(Campaign campaign, CancellationToken ct = default);
+
+    /// <summary>
+    /// Obtiene un contacto de campaña por teléfono. Usado al responder mensajes
+    /// entrantes para cargar los datos del Excel (ContactDataJson) y pasarlos al LLM.
+    /// </summary>
+    Task<CampaignContact?> GetContactByPhoneAsync(Guid campaignId, string phone, CancellationToken ct = default);
 }

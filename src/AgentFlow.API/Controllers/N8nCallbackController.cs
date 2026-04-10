@@ -120,13 +120,21 @@ public class N8nCallbackController(
                     .Select(c => c.Id)
                     .ToListAsync(ct);
 
+                // Solo bloquear si el contacto está siendo atendido por un humano,
+                // o si está activo en OTRA campaña en curso. Las conversaciones inbound
+                // antiguas se cierran automáticamente en campaign-send cuando llega la campaña.
                 activeSessions = await db.Conversations
                     .Where(c => c.TenantId == tenantId
                              && req.Phones.Contains(c.ClientPhone)
-                             && c.Status == ConversationStatus.Active
-                             // Excluir conversaciones de la campaña actual o de campañas ya completadas
-                             && (currentCampaignId == null || c.CampaignId != currentCampaignId)
-                             && (c.CampaignId == null || !completedCampaignIds.Contains(c.CampaignId.Value)))
+                             && c.Status != ConversationStatus.Closed
+                             && (
+                                 // a) Conversación en atención humana (no interrumpir)
+                                 c.IsHumanHandled
+                                 // b) O conversación activa de otra campaña en curso
+                                 || (c.CampaignId != null
+                                     && (currentCampaignId == null || c.CampaignId != currentCampaignId)
+                                     && !completedCampaignIds.Contains(c.CampaignId.Value))
+                             ))
                     .Select(c => c.ClientPhone)
                     .ToListAsync(ct);
             }
@@ -188,6 +196,27 @@ public class N8nCallbackController(
 
         if (campaign is null)
             return NotFound(new { error = "Campaña no encontrada.", success = false });
+
+        // ── Verificar si hay conversación siendo atendida por humano ──
+        // Si un ejecutivo está atendiendo al cliente, NO interrumpir con la campaña.
+        // Marcamos como skipped y dejamos que n8n mueva al siguiente contacto.
+        var hasHumanHandled = await db.Conversations.AnyAsync(c =>
+            c.TenantId == campaign.TenantId
+            && c.ClientPhone == req.Phone
+            && c.Status != ConversationStatus.Closed
+            && c.IsHumanHandled, ct);
+
+        if (hasHumanHandled)
+        {
+            return Ok(new
+            {
+                success = false,
+                skipped = true,
+                error = "Contacto en atención humana — campaña no enviada.",
+                campaignId = req.CampaignId,
+                phone = req.Phone,
+            });
+        }
 
         string? promptText = null;
         if (campaign.CampaignTemplate?.PromptTemplateIds?.Count > 0)
@@ -303,44 +332,58 @@ public class N8nCallbackController(
             return Ok(new { success = false, error = ex.Message, durationMs = sw.ElapsedMilliseconds, campaignId = req.CampaignId, phone = req.Phone });
         }
 
-        // ── Crear o recuperar conversación en el monitor ─────────────────────
-        // La conversación se crea inmediatamente al enviar para que el ejecutivo
-        // pueda verla en el monitor antes de que el cliente responda.
+        // ── Crear conversación nueva en el monitor ─────────────────────
+        // Nueva campaña siempre crea conversación fresca. Las conversaciones
+        // anteriores del contacto (que NO estén en atención humana) se cierran.
         Guid conversationId;
         try
         {
             var tenantId = campaign.TenantId;
 
-            // Reusar conversación abierta si ya existe para este teléfono
-            var existing = await db.Conversations
-                .FirstOrDefaultAsync(c => c.TenantId == tenantId
-                                       && c.ClientPhone == req.Phone
-                                       && c.Status != ConversationStatus.Closed, ct);
+            // Cerrar todas las conversaciones activas previas del contacto
+            // (excluye las que están siendo atendidas por un humano)
+            var previousActive = await db.Conversations
+                .Where(c => c.TenantId == tenantId
+                         && c.ClientPhone == req.Phone
+                         && c.Status != ConversationStatus.Closed
+                         && !c.IsHumanHandled)
+                .ToListAsync(ct);
 
-            if (existing is not null)
+            foreach (var prev in previousActive)
             {
-                conversationId = existing.Id;
-                existing.LastActivityAt = DateTime.UtcNow;
-            }
-            else
-            {
-                var conversation = new Conversation
+                prev.Status = ConversationStatus.Closed;
+                prev.ClosedAt = DateTime.UtcNow;
+                prev.LastActivityAt = DateTime.UtcNow;
+
+                // Registrar GestionEvent de auditoría
+                db.Set<AgentFlow.Domain.Entities.GestionEvent>().Add(new AgentFlow.Domain.Entities.GestionEvent
                 {
-                    Id             = Guid.NewGuid(),
-                    TenantId       = tenantId,
-                    ClientPhone    = req.Phone,
-                    ClientName     = req.ClientName,
-                    PolicyNumber   = req.PolicyNumber,
-                    Channel        = ChannelType.WhatsApp,
-                    ActiveAgentId  = req.AgentId,
-                    CampaignId     = req.CampaignId,
-                    Status         = ConversationStatus.WaitingClient,
-                    StartedAt      = DateTime.UtcNow,
-                    LastActivityAt = DateTime.UtcNow,
-                };
-                db.Conversations.Add(conversation);
-                conversationId = conversation.Id;
+                    Id = Guid.NewGuid(),
+                    ConversationId = prev.Id,
+                    Result = AgentFlow.Domain.Enums.GestionResult.Pending,
+                    Origin = "system:campaign-superseded",
+                    Notes = $"Conversación cerrada automáticamente por nueva campaña {campaign.Name} ({req.CampaignId})",
+                    OccurredAt = DateTime.UtcNow,
+                });
             }
+
+            // Crear conversación nueva para esta campaña
+            var conversation = new Conversation
+            {
+                Id             = Guid.NewGuid(),
+                TenantId       = tenantId,
+                ClientPhone    = req.Phone,
+                ClientName     = req.ClientName,
+                PolicyNumber   = req.PolicyNumber,
+                Channel        = ChannelType.WhatsApp,
+                ActiveAgentId  = req.AgentId,
+                CampaignId     = req.CampaignId,
+                Status         = ConversationStatus.WaitingClient,
+                StartedAt      = DateTime.UtcNow,
+                LastActivityAt = DateTime.UtcNow,
+            };
+            db.Conversations.Add(conversation);
+            conversationId = conversation.Id;
 
             // Registrar el mensaje saliente
             var outboundMsg = new AgentFlow.Domain.Entities.Message

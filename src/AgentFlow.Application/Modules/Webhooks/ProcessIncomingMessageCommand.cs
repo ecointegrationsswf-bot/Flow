@@ -52,7 +52,8 @@ public class ProcessIncomingMessageHandler(
     ITransferChatService transferChat,
     ISendEmailResumeService emailResume,
     IBrainService brainService,
-    IAgentRegistry agentRegistry
+    IAgentRegistry agentRegistry,
+    ICampaignRepository campaignRepo
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
     public async Task<ProcessIncomingMessageResult> Handle(
@@ -135,7 +136,9 @@ public class ProcessIncomingMessageHandler(
             SelectedAgentId: agentId,
             Intent: decision.Intent,
             IsExistingSession: existingConv is not null,
-            IsCampaignContact: false,
+            // Si la conversación viene de una campaña, marcarlo para que se inyecten
+            // los datos del ContactDataJson al clientContext
+            IsCampaignContact: existingConv?.CampaignId is not null,
             CampaignId: existingConv?.CampaignId);
 
         return await ExecuteStandardFlow(cmd, dispatch, tenant, isBrainControlled: true, ct,
@@ -306,8 +309,11 @@ public class ProcessIncomingMessageHandler(
         }
 
         // ── 3. PERSISTIR MENSAJE ENTRANTE ────────────────
+        // Ampliado a 20 mensajes para conversaciones largas — los datos del cliente
+        // ya no dependen del historial (van en clientContext) pero el contexto
+        // conversacional sigue siendo importante.
         var recentHistorySnapshot = conversation.Messages?
-            .OrderByDescending(m => m.SentAt).Take(10).OrderBy(m => m.SentAt).ToList() ?? [];
+            .OrderByDescending(m => m.SentAt).Take(20).OrderBy(m => m.SentAt).ToList() ?? [];
 
         var inboundContent = cmd.Message;
         if (!string.IsNullOrEmpty(cmd.MediaUrl))
@@ -405,8 +411,65 @@ public class ProcessIncomingMessageHandler(
                     ["nombre"] = cmd.ClientName ?? conversation.ClientName ?? "Cliente",
                     ["telefono"] = cmd.FromPhone
                 };
-                if (dispatch.IsCampaignContact && conversation.PolicyNumber is not null)
-                    clientContext["poliza"] = conversation.PolicyNumber;
+
+                // ── Inyectar datos del Excel de la campaña (ContactDataJson) ──
+                // Si la conversación proviene de una campaña, cargar los datos del contacto
+                // del Excel original para que el agente tenga TODA la información disponible
+                // (póliza, aseguradora, monto, producto, etc.) en cada respuesta,
+                // sin depender del historial de mensajes.
+                if (conversation.CampaignId.HasValue)
+                {
+                    var campaignContact = await campaignRepo.GetContactByPhoneAsync(
+                        conversation.CampaignId.Value, cmd.FromPhone, ct);
+
+                    if (campaignContact is not null)
+                    {
+                        // Campos fuertemente tipados del contacto
+                        if (!string.IsNullOrEmpty(campaignContact.PolicyNumber))
+                            clientContext["poliza"] = campaignContact.PolicyNumber;
+                        if (!string.IsNullOrEmpty(campaignContact.InsuranceCompany))
+                            clientContext["aseguradora"] = campaignContact.InsuranceCompany;
+                        if (campaignContact.PendingAmount.HasValue)
+                            clientContext["monto_pendiente"] = campaignContact.PendingAmount.Value.ToString("F2");
+
+                        // Aplanar ContactDataJson (todas las columnas del Excel)
+                        if (!string.IsNullOrEmpty(campaignContact.ContactDataJson))
+                        {
+                            try
+                            {
+                                var records = System.Text.Json.JsonSerializer
+                                    .Deserialize<List<Dictionary<string, System.Text.Json.JsonElement>>>(
+                                        campaignContact.ContactDataJson);
+
+                                if (records is not null && records.Count > 0)
+                                {
+                                    // Si es 1 solo registro → aplanar cada campo al contexto
+                                    if (records.Count == 1)
+                                    {
+                                        foreach (var (key, val) in records[0])
+                                        {
+                                            var strVal = val.ValueKind == System.Text.Json.JsonValueKind.String
+                                                ? val.GetString() ?? ""
+                                                : val.ToString();
+                                            if (!string.IsNullOrEmpty(strVal))
+                                                clientContext[key] = strVal;
+                                        }
+                                    }
+                                    // Múltiples registros (cliente con varias pólizas) → inyectar JSON completo
+                                    else
+                                    {
+                                        clientContext["total_registros"] = records.Count.ToString();
+                                        clientContext["datos_completos"] = campaignContact.ContactDataJson;
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[ClientContext] Error parseando ContactDataJson: {ex.Message}");
+                            }
+                        }
+                    }
+                }
 
                 try
                 {

@@ -177,8 +177,9 @@ public class AnthropicAgentRunner(
     private async Task<List<Anthropic.SDK.Messaging.Message>> BuildMessagesAsync(
         AgentRunRequest req, CancellationToken ct)
     {
+        // Historial extendido a 20 mensajes para mantener contexto en conversaciones largas
         var messages = req.RecentHistory
-            .TakeLast(10)
+            .TakeLast(20)
             .Select(m => new Anthropic.SDK.Messaging.Message
             {
                 Role    = m.IsFromAgent ? RoleType.Assistant : RoleType.User,
