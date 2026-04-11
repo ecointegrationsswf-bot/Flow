@@ -36,8 +36,13 @@ import { ResetPasswordPage } from '@/modules/auth/components/ResetPasswordPage'
 
 export default function App() {
   const hydrate = useAuthStore((s) => s.hydrate)
+  const refreshMe = useAuthStore((s) => s.refreshMe)
   const hydrateSa = useSuperAdminStore((s) => s.hydrate)
-  useEffect(() => { hydrate(); hydrateSa() }, [hydrate, hydrateSa])
+  useEffect(() => {
+    hydrate()
+    hydrateSa()
+    refreshMe() // Refresca permisos desde el servidor en cada carga
+  }, [hydrate, hydrateSa, refreshMe])
 
   return (
     <Routes>

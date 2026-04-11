@@ -465,6 +465,41 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
         return CryptographicOperations.FixedTimeEquals(hash, storedHashBytes);
     }
 
+    // Retorna el usuario autenticado con permisos frescos desde la BD
+    [HttpGet("me")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> GetMe(CancellationToken ct)
+    {
+        var userId = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
+            ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userId is null || !Guid.TryParse(userId, out var id))
+            return Unauthorized();
+
+        var user = await db.AppUsers
+            .Where(u => u.Id == id)
+            .Select(u => new
+            {
+                Id = u.Id.ToString(),
+                u.FullName,
+                u.Email,
+                Role = u.Role.ToString(),
+                u.AvatarUrl,
+                u.Permissions,
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (user is null) return NotFound();
+
+        return Ok(new UserInfo(
+            Id: user.Id,
+            FullName: user.FullName,
+            Email: user.Email,
+            Role: user.Role,
+            AvatarUrl: user.AvatarUrl,
+            Permissions: user.Permissions ?? []
+        ));
+    }
+
     // Endpoint ligero para mantener el app pool activo (keep-alive)
     [HttpGet("ping")]
     [Microsoft.AspNetCore.Authorization.AllowAnonymous]
