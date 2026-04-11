@@ -5,6 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import { Loader2, Eye, EyeOff, ShieldCheck, KeyRound } from 'lucide-react'
 import { useAuthStore } from '@/shared/stores/authStore'
+import type { AuthUser } from '@/shared/stores/authStore'
 import { api } from '@/shared/api/client'
 
 const loginSchema = z.object({
@@ -126,11 +127,15 @@ export function LoginPage() {
   }
 
   const finishLogin = async (res: { token: string; tenantId: string; user: Record<string, unknown> }) => {
+    const user: AuthUser = {
+      ...(res.user as Omit<AuthUser, 'permissions'>),
+      permissions: Array.isArray(res.user.permissions) ? (res.user.permissions as string[]) : [],
+    }
     localStorage.setItem('token', res.token)
     localStorage.setItem('tenantId', res.tenantId)
-    localStorage.setItem('user', JSON.stringify(res.user))
+    localStorage.setItem('user', JSON.stringify(user))
     useAuthStore.setState({
-      token: res.token, tenantId: res.tenantId, user: res.user as never, isAuthenticated: true,
+      token: res.token, tenantId: res.tenantId, user, isAuthenticated: true,
     })
     navigate('/dashboard', { replace: true })
   }
