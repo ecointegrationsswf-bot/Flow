@@ -34,7 +34,8 @@ public record UserInfo(
     string FullName,
     string Email,
     string Role,
-    string? AvatarUrl = null
+    string? AvatarUrl = null,
+    List<string>? Permissions = null
 );
 
 [ApiController]
@@ -143,7 +144,8 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 FullName: user.FullName,
                 Email: user.Email,
                 Role: user.Role.ToString(),
-                AvatarUrl: user.AvatarUrl
+                AvatarUrl: user.AvatarUrl,
+                Permissions: user.Permissions ?? []
             )
         ));
     }

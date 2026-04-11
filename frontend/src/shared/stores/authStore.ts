@@ -2,12 +2,13 @@ import { create } from 'zustand'
 import { api } from '@/shared/api/client'
 import type { UserRole } from '@/shared/types'
 
-interface AuthUser {
+export interface AuthUser {
   id: string
   fullName: string
   email: string
   role: UserRole
   avatarUrl?: string | null
+  permissions: string[]
 }
 
 interface AuthState {
@@ -30,19 +31,15 @@ export const useAuthStore = create<AuthState>((set) => ({
     const { data } = await api.post<{
       token: string
       tenantId: string
-      user: { id: string; fullName: string; email: string; role: UserRole; avatarUrl?: string | null }
+      user: AuthUser
     }>('/auth/login', { email, password })
 
+    const user: AuthUser = { ...data.user, permissions: data.user.permissions ?? [] }
     localStorage.setItem('token', data.token)
     localStorage.setItem('tenantId', data.tenantId)
-    localStorage.setItem('user', JSON.stringify(data.user))
+    localStorage.setItem('user', JSON.stringify(user))
 
-    set({
-      token: data.token,
-      tenantId: data.tenantId,
-      user: data.user,
-      isAuthenticated: true,
-    })
+    set({ token: data.token, tenantId: data.tenantId, user, isAuthenticated: true })
   },
 
   logout: () => {
@@ -59,7 +56,8 @@ export const useAuthStore = create<AuthState>((set) => ({
 
     if (token && tenantId && userJson) {
       try {
-        const user = JSON.parse(userJson) as AuthUser
+        const raw = JSON.parse(userJson)
+        const user: AuthUser = { ...raw, permissions: raw.permissions ?? [] }
         set({ token, tenantId, user, isAuthenticated: true })
       } catch {
         set({ token: null, tenantId: null, user: null, isAuthenticated: false })

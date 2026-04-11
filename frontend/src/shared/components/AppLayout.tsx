@@ -6,25 +6,33 @@ import {
 import { useAuthStore } from '@/shared/stores/authStore'
 import { useUiStore } from '@/shared/stores/uiStore'
 import { useWhatsAppStatus } from '@/shared/hooks/useWhatsApp'
+import { usePermissions } from '@/shared/hooks/usePermissions'
 
-const navItems = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { to: '/monitor', icon: MessageSquare, label: 'Monitor' },
-  { to: '/campaign-templates', icon: ClipboardList, label: 'Maestro Campanas' },
-  { to: '/campaigns', icon: Megaphone, label: 'Campanas' },
-  { to: '/agents', icon: Bot, label: 'Agentes IA' },
-  { to: '/labels', icon: Tag, label: 'Etiquetas' },
-  { to: '/brain', icon: Brain, label: 'Cerebro' },
-  { to: '/settings', icon: Settings, label: 'Configuracion' },
-  { to: '/profile', icon: User, label: 'Mi Perfil' },
-]
+// permission: undefined = visible siempre (ej: Dashboard, Perfil)
+const NAV_ITEMS = [
+  { to: '/dashboard',          icon: LayoutDashboard, label: 'Dashboard',        permission: undefined },
+  { to: '/monitor',            icon: MessageSquare,   label: 'Monitor',           permission: 'view_monitor' },
+  { to: '/campaign-templates', icon: ClipboardList,   label: 'Maestro Campanas',  permission: 'view_campaign_templates' },
+  { to: '/campaigns',          icon: Megaphone,       label: 'Campanas',          permission: 'view_campaigns' },
+  { to: '/agents',             icon: Bot,             label: 'Agentes IA',        permission: 'view_agents' },
+  { to: '/labels',             icon: Tag,             label: 'Etiquetas',         permission: undefined },
+  { to: '/brain',              icon: Brain,           label: 'Cerebro',           permission: undefined },
+  { to: '/settings',           icon: Settings,        label: 'Configuracion',     permission: undefined },
+  { to: '/profile',            icon: User,            label: 'Mi Perfil',         permission: undefined },
+] as const
 
 export function AppLayout() {
   const { user, logout } = useAuthStore()
   const { sidebarCollapsed, toggleSidebar } = useUiStore()
   const { data: waStatus } = useWhatsAppStatus()
+  const { hasPermission } = usePermissions()
   const navigate = useNavigate()
   const waConnected = waStatus?.status === 'authenticated'
+
+  // Filtrar items según permisos (Admin ve todo)
+  const visibleItems = NAV_ITEMS.filter(item =>
+    item.permission === undefined || hasPermission(item.permission)
+  )
 
   return (
     <div className="flex h-screen">
@@ -46,7 +54,7 @@ export function AppLayout() {
 
         {/* Nav */}
         <nav className="flex-1 space-y-1 px-2">
-          {navItems.map(({ to, icon: Icon, label }) => (
+          {visibleItems.map(({ to, icon: Icon, label, permission }) => (
             <NavLink
               key={to}
               to={to}
@@ -79,20 +87,10 @@ export function AppLayout() {
               className="mb-2 flex w-full items-center gap-2.5 rounded-md px-1 py-1 text-left hover:bg-gray-50"
             >
               {user.avatarUrl ? (
-                <img
-                  src={user.avatarUrl}
-                  alt={user.fullName}
-                  className="h-8 w-8 shrink-0 rounded-full object-cover"
-                />
+                <img src={user.avatarUrl} alt={user.fullName} className="h-8 w-8 shrink-0 rounded-full object-cover" />
               ) : (
                 <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-blue-500 text-xs font-bold text-white">
-                  {(user.fullName ?? '')
-                    .split(' ')
-                    .filter(w => w.length > 0)
-                    .map(w => w[0])
-                    .slice(0, 2)
-                    .join('')
-                    .toUpperCase() || '?'}
+                  {(user.fullName ?? '').split(' ').filter(w => w.length > 0).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?'}
                 </div>
               )}
               <div className="min-w-0">
@@ -102,25 +100,12 @@ export function AppLayout() {
             </button>
           )}
           {sidebarCollapsed && user && (
-            <button
-              onClick={() => navigate('/profile')}
-              className="mb-2 flex w-full items-center justify-center rounded-md py-1 hover:bg-gray-50"
-            >
+            <button onClick={() => navigate('/profile')} className="mb-2 flex w-full items-center justify-center rounded-md py-1 hover:bg-gray-50">
               {user.avatarUrl ? (
-                <img
-                  src={user.avatarUrl}
-                  alt={user.fullName}
-                  className="h-8 w-8 rounded-full object-cover"
-                />
+                <img src={user.avatarUrl} alt={user.fullName} className="h-8 w-8 rounded-full object-cover" />
               ) : (
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-blue-500 text-xs font-bold text-white">
-                  {(user.fullName ?? '')
-                    .split(' ')
-                    .filter(w => w.length > 0)
-                    .map(w => w[0])
-                    .slice(0, 2)
-                    .join('')
-                    .toUpperCase() || '?'}
+                  {(user.fullName ?? '').split(' ').filter(w => w.length > 0).map(w => w[0]).slice(0, 2).join('').toUpperCase() || '?'}
                 </div>
               )}
             </button>

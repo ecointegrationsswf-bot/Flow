@@ -4,6 +4,7 @@ import { useAuthStore } from '@/shared/stores/authStore'
 import { useSuperAdminStore } from '@/shared/stores/superAdminStore'
 import { AppLayout } from '@/shared/components/AppLayout'
 import { ProtectedRoute } from '@/shared/components/ProtectedRoute'
+import { PermissionRoute } from '@/shared/components/PermissionRoute'
 import { LoginPage } from '@/modules/auth/components/LoginPage'
 import { DashboardPage } from '@/modules/dashboard/components/DashboardPage'
 import { MonitorPage } from '@/modules/monitor/components/MonitorPage'
@@ -67,20 +68,36 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/monitor" element={<MonitorPage />} />
-          <Route path="/campaign-templates" element={<CampaignTemplatesPage />} />
-          <Route path="/campaign-templates/new" element={<CampaignTemplateFormPage />} />
-          <Route path="/campaign-templates/:id/edit" element={<CampaignTemplateFormPage />} />
-          <Route path="/campaigns" element={<CampaignsPage />} />
-          <Route path="/campaigns/new" element={<CampaignUploadPage />} />
-          <Route path="/campaigns/new-fixed" element={<CampaignFixedUploadPage />} />
-          <Route path="/agents" element={<AgentsListPage />} />
-          <Route path="/agents/new" element={<AgentFormPage />} />
-          <Route path="/agents/:id/edit" element={<AgentFormPage />} />
           <Route path="/labels" element={<LabelsPage />} />
           <Route path="/brain" element={<BrainAgentRegistryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+
+          {/* Monitor */}
+          <Route element={<PermissionRoute permission="view_monitor" />}>
+            <Route path="/monitor" element={<MonitorPage />} />
+          </Route>
+
+          {/* Maestros de campaña */}
+          <Route element={<PermissionRoute permission="view_campaign_templates" />}>
+            <Route path="/campaign-templates" element={<CampaignTemplatesPage />} />
+            <Route path="/campaign-templates/new" element={<CampaignTemplateFormPage />} />
+            <Route path="/campaign-templates/:id/edit" element={<CampaignTemplateFormPage />} />
+          </Route>
+
+          {/* Campañas */}
+          <Route element={<PermissionRoute permission="view_campaigns" />}>
+            <Route path="/campaigns" element={<CampaignsPage />} />
+            <Route path="/campaigns/new" element={<CampaignUploadPage />} />
+            <Route path="/campaigns/new-fixed" element={<CampaignFixedUploadPage />} />
+          </Route>
+
+          {/* Agentes */}
+          <Route element={<PermissionRoute permission="view_agents" />}>
+            <Route path="/agents" element={<AgentsListPage />} />
+            <Route path="/agents/new" element={<AgentFormPage />} />
+            <Route path="/agents/:id/edit" element={<AgentFormPage />} />
+          </Route>
         </Route>
       </Route>
 
