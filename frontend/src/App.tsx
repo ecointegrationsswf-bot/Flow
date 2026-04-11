@@ -81,6 +81,8 @@ export default function App() {
           {/* Maestros de campaña */}
           <Route element={<PermissionRoute permission="view_campaign_templates" />}>
             <Route path="/campaign-templates" element={<CampaignTemplatesPage />} />
+          </Route>
+          <Route element={<PermissionRoute permission="edit_campaign_templates" />}>
             <Route path="/campaign-templates/new" element={<CampaignTemplateFormPage />} />
             <Route path="/campaign-templates/:id/edit" element={<CampaignTemplateFormPage />} />
           </Route>
@@ -88,6 +90,8 @@ export default function App() {
           {/* Campañas */}
           <Route element={<PermissionRoute permission="view_campaigns" />}>
             <Route path="/campaigns" element={<CampaignsPage />} />
+          </Route>
+          <Route element={<PermissionRoute permission="create_campaigns" />}>
             <Route path="/campaigns/new" element={<CampaignUploadPage />} />
             <Route path="/campaigns/new-fixed" element={<CampaignFixedUploadPage />} />
           </Route>
@@ -95,6 +99,8 @@ export default function App() {
           {/* Agentes */}
           <Route element={<PermissionRoute permission="view_agents" />}>
             <Route path="/agents" element={<AgentsListPage />} />
+          </Route>
+          <Route element={<PermissionRoute permission="edit_agents" />}>
             <Route path="/agents/new" element={<AgentFormPage />} />
             <Route path="/agents/:id/edit" element={<AgentFormPage />} />
           </Route>

@@ -6,8 +6,11 @@ import {
   useDeleteCampaignTemplate,
   useDuplicateCampaignTemplate,
 } from '@/shared/hooks/useCampaignTemplates'
+import { usePermissions } from '@/shared/hooks/usePermissions'
 
 export function CampaignTemplatesPage() {
+  const { hasPermission } = usePermissions()
+  const canEdit = hasPermission('edit_campaign_templates')
   const navigate = useNavigate()
   const { data: templates, isLoading, isError, refetch } = useCampaignTemplates()
   const deleteMut = useDeleteCampaignTemplate()
@@ -61,13 +64,15 @@ export function CampaignTemplatesPage() {
           <h1 className="text-2xl font-bold text-gray-900">Maestro de Campanas</h1>
           <p className="text-sm text-gray-500">Define las reglas y configuracion de tus campanas</p>
         </div>
-        <button
-          onClick={() => navigate('/campaign-templates/new')}
-          className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
-        >
-          <Plus className="h-4 w-4" />
-          Nuevo maestro
-        </button>
+        {canEdit && (
+          <button
+            onClick={() => navigate('/campaign-templates/new')}
+            className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+          >
+            <Plus className="h-4 w-4" />
+            Nuevo maestro
+          </button>
+        )}
       </div>
 
       {isLoading ? (
@@ -161,29 +166,31 @@ export function CampaignTemplatesPage() {
                     )}
                   </div>
 
-                  <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
-                    <button
-                      onClick={() => openDuplicate(t.id, t.name)}
-                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-purple-600 transition-colors"
-                      title="Copiar maestro"
-                    >
-                      <Copy className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => navigate(`/campaign-templates/${t.id}/edit`)}
-                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                      title="Editar"
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </button>
-                    <button
-                      onClick={() => handleDelete(t.id)}
-                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
-                      title="Eliminar"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </div>
+                  {canEdit && (
+                    <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
+                      <button
+                        onClick={() => openDuplicate(t.id, t.name)}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-purple-600 transition-colors"
+                        title="Copiar maestro"
+                      >
+                        <Copy className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => navigate(`/campaign-templates/${t.id}/edit`)}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                        title="Editar"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => handleDelete(t.id)}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
+                        title="Eliminar"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

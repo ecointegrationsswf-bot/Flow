@@ -7,6 +7,7 @@ import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { useCampaigns, useLaunchCampaign } from '@/shared/hooks/useCampaigns'
+import { usePermissions } from '@/shared/hooks/usePermissions'
 
 const triggerLabels: Record<string, string> = {
   FileUpload: 'Archivo',
@@ -27,6 +28,8 @@ const statusConfig: Record<string, { label: string; className: string }> = {
 const LAUNCHABLE = new Set(['Pending', 'Failed'])
 
 export function CampaignsPage() {
+  const { hasPermission } = usePermissions()
+  const canCreate = hasPermission('create_campaigns')
   const { data: campaigns, isLoading, isError } = useCampaigns()
   const launchMut = useLaunchCampaign()
   const [launchingId, setLaunchingId] = useState<string | null>(null)
@@ -89,14 +92,14 @@ export function CampaignsPage() {
       <PageHeader
         title="Campanas"
         subtitle="Gestiona campanas de cobros, reclamos y renovaciones"
-        action={
+        action={canCreate ? (
           <Link
             to="/campaigns/new"
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
           >
             <Plus className="h-4 w-4" /> Nueva campana
           </Link>
-        }
+        ) : undefined}
       />
 
       {launchError && (
@@ -111,14 +114,14 @@ export function CampaignsPage() {
           icon={Megaphone}
           title="Sin campanas"
           description="Crea tu primera campana subiendo un archivo de contactos"
-          action={
+          action={canCreate ? (
             <Link
               to="/campaigns/new"
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
             >
               Crear campana
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <div className="space-y-3">

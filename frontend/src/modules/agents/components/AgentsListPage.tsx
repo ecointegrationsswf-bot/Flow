@@ -7,8 +7,11 @@ import { EmptyState } from '@/shared/components/EmptyState'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { useAgents, useDeleteAgent } from '@/shared/hooks/useAgents'
+import { usePermissions } from '@/shared/hooks/usePermissions'
 
 export function AgentsListPage() {
+  const { hasPermission } = usePermissions()
+  const canEdit = hasPermission('edit_agents')
   const { data: agents, isLoading } = useAgents()
   const deleteMutation = useDeleteAgent()
   const [deleteId, setDeleteId] = useState<string | null>(null)
@@ -33,14 +36,14 @@ export function AgentsListPage() {
       <PageHeader
         title="Agentes IA"
         subtitle="Configura los agentes que atienden conversaciones"
-        action={
+        action={canEdit ? (
           <Link
             to="/agents/new"
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             <Plus className="h-4 w-4" /> Nuevo agente
           </Link>
-        }
+        ) : undefined}
       />
 
       {!agents || agents.length === 0 ? (
@@ -48,14 +51,14 @@ export function AgentsListPage() {
           icon={Bot}
           title="Sin agentes configurados"
           description="Crea tu primer agente IA para empezar a gestionar conversaciones"
-          action={
+          action={canEdit ? (
             <Link
               to="/agents/new"
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
             >
               Crear agente
             </Link>
-          }
+          ) : undefined}
         />
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -102,22 +105,24 @@ export function AgentsListPage() {
                 <p>Reintentos: {agent.maxRetries} | Cierre: {agent.inactivityCloseHours}h</p>
               </div>
 
-              <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
-                <Link
-                  to={`/agents/${agent.id}/edit`}
-                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                  title="Editar"
-                >
-                  <Pencil className="h-4 w-4" />
-                </Link>
-                <button
-                  onClick={() => setDeleteId(agent.id)}
-                  className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
-                  title="Eliminar"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
-              </div>
+              {canEdit && (
+                <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
+                  <Link
+                    to={`/agents/${agent.id}/edit`}
+                    className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                    title="Editar"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </Link>
+                  <button
+                    onClick={() => setDeleteId(agent.id)}
+                    className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
+                    title="Eliminar"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
             </div>
           ))}
         </div>
