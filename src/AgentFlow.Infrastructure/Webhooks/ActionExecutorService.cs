@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Webhooks;
 using AgentFlow.Infrastructure.Persistence;
@@ -35,6 +36,7 @@ public class ActionExecutorService(
     private const string ValidateIdentitySlug = "VALIDATE_IDENTITY";
     private const int CircuitBreakerThreshold = 3;
     private static readonly TimeSpan CircuitBreakerWindow = TimeSpan.FromMinutes(5);
+    private static readonly JsonSerializerOptions _jsonOpts = new() { PropertyNameCaseInsensitive = true };
 
     public async Task<ActionResult> ExecuteAsync(
         string actionSlug,
@@ -69,7 +71,7 @@ public class ActionExecutorService(
             return ActionResult.NoOp();
         }
 
-        // ── 3. Cargar ActionDefinition ──
+        // ── 3. Cargar ActionDefinition (incluye DefaultWebhookContract para fallback) ──
         var actionDef = await db.ActionDefinitions
             .Where(a => a.TenantId == tenantId && a.Name == actionSlug && a.IsActive)
             .FirstOrDefaultAsync(ct);
@@ -87,16 +89,7 @@ public class ActionExecutorService(
             return ActionResult.NoOp();
         }
 
-        // ── 4. En Fase 4 solo soportamos SystemOnly ──
-        if (actionDef.ParamSource != ParamSource.SystemOnly)
-        {
-            logger.LogWarning(
-                "[ActionExecutor] Action {Action} tiene ParamSource={Source} — no soportado aún (requiere Collecting_Params)",
-                actionSlug, actionDef.ParamSource);
-            return ActionResult.NoOp();
-        }
-
-        // ── 5. Circuit breaker ──
+        // ── 4. Circuit breaker ──
         if (IsCircuitOpen(tenantId, actionSlug))
         {
             logger.LogWarning("[ActionExecutor] Circuit abierto para {Action} tenant={TenantId}",
@@ -104,23 +97,58 @@ public class ActionExecutorService(
             return ActionResult.Fail("Estamos teniendo dificultades. Te contactaremos pronto.");
         }
 
-        // ── 6. Leer configuración del CampaignTemplate.ActionConfigs ──
-        if (!campaignTemplateId.HasValue)
+        // ── 5. Leer configuración: Template override → DefaultWebhookContract fallback ──
+        ActionConfigBundle? bundle = null;
+
+        // Nivel 1: config del template (override)
+        if (campaignTemplateId.HasValue)
         {
-            logger.LogWarning("[ActionExecutor] Sin CampaignTemplateId para {Action} — no hay config", actionSlug);
-            return ActionResult.NoOp();
+            var template = await db.CampaignTemplates
+                .Where(t => t.Id == campaignTemplateId.Value && t.TenantId == tenantId)
+                .Select(t => new { t.ActionConfigs })
+                .FirstOrDefaultAsync(ct);
+
+            bundle = configReader.Read(template?.ActionConfigs, actionDef.Id);
         }
 
-        var template = await db.CampaignTemplates
-            .Where(t => t.Id == campaignTemplateId.Value && t.TenantId == tenantId)
-            .Select(t => new { t.ActionConfigs })
-            .FirstOrDefaultAsync(ct);
-
-        var bundle = configReader.Read(template?.ActionConfigs, actionDef.Id);
+        // Nivel 2: fallback a DefaultWebhookContract de la ActionDefinition
+        if (bundle?.InputSchema is null && !string.IsNullOrWhiteSpace(actionDef.DefaultWebhookContract))
+        {
+            try
+            {
+                var defaultBundle = JsonSerializer.Deserialize<ActionConfigBundleJson>(
+                    actionDef.DefaultWebhookContract, _jsonOpts);
+                if (defaultBundle is not null)
+                {
+                    bundle = new ActionConfigBundle
+                    {
+                        EndpointConfig = new WebhookEndpointConfig
+                        {
+                            WebhookUrl = defaultBundle.WebhookUrl ?? "",
+                            WebhookMethod = defaultBundle.WebhookMethod ?? "POST",
+                            AuthType = defaultBundle.AuthType ?? "None",
+                            AuthValue = defaultBundle.AuthValue,
+                            ApiKeyHeaderName = defaultBundle.ApiKeyHeaderName ?? "X-Api-Key",
+                            WebhookHeaders = defaultBundle.WebhookHeaders,
+                            TimeoutSeconds = defaultBundle.TimeoutSeconds ?? 10
+                        },
+                        InputSchema = defaultBundle.InputSchema,
+                        OutputSchema = defaultBundle.OutputSchema,
+                        TriggerConfig = defaultBundle.TriggerConfig
+                    };
+                    logger.LogDebug("[ActionExecutor] Usando DefaultWebhookContract para {Action}", actionSlug);
+                }
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning("[ActionExecutor] DefaultWebhookContract inválido para {Action}: {Message}",
+                    actionSlug, ex.Message);
+            }
+        }
 
         if (bundle?.InputSchema is null)
         {
-            logger.LogDebug("[ActionExecutor] Sin InputSchema configurado para {Action}, skip", actionSlug);
+            logger.LogDebug("[ActionExecutor] Sin InputSchema (ni template ni default) para {Action}, skip", actionSlug);
             return ActionResult.NoOp();
         }
 

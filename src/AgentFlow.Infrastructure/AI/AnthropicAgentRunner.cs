@@ -151,6 +151,29 @@ public class AnthropicAgentRunner(
                 sb.AppendLine($"- {k}: {v}");
         }
 
+        // ── Action Trigger Protocol Fase 4 — resultado de acción previa ────
+        // Si en el turno anterior se ejecutó una acción y devolvió datos útiles
+        // (link de pago generado, datos del cliente consultados, etc.), el
+        // handler los pasa aquí para que el agente los incluya en su respuesta.
+        // El handler ya valida freshness, así que si llega, se inyecta sin más.
+        if (req.LastActionResult is { DataForAgent: { Length: > 0 } data } last)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## RESULTADO DE ACCIÓN EJECUTADA");
+            sb.AppendLine($"{last.Slug}: {data}");
+            sb.AppendLine("Usa esta información en tu respuesta al cliente si es relevante. No repitas todo el bloque, solo el dato útil.");
+        }
+
+        // ── Action Trigger Protocol — bloque ACCIONES DISPONIBLES ──────────
+        // Lo preconstruye IActionPromptBuilder en la capa de aplicación y
+        // lo pasa vía AgentRunRequest.ActionsBlock. En Fase 0 siempre viene
+        // vacío (NoOp), por lo que el prompt queda idéntico al histórico.
+        if (!string.IsNullOrEmpty(req.ActionsBlock))
+        {
+            sb.AppendLine();
+            sb.AppendLine(req.ActionsBlock);
+        }
+
         return sb.ToString();
     }
 

@@ -1,4 +1,5 @@
 using AgentFlow.Domain.Enums;
+using AgentFlow.Domain.Webhooks;
 
 namespace AgentFlow.Domain.Interfaces;
 
@@ -36,5 +37,12 @@ public record SessionState(
     // ── Campos del Webhook Contract System (Fase 3+) ──
     // ActionContext: diccionario que crece con los valores devueltos por outputAction=inject_context.
     // Disponible para el agente en turnos futuros. Default null para compat con sesiones existentes.
-    Dictionary<string, string>? ActionContext = null
+    Dictionary<string, string>? ActionContext = null,
+
+    // ── Action Trigger Protocol (Fase 4) ──
+    // Resultado de la última acción ejecutada exitosamente en esta conversación.
+    // Se inyecta al system prompt del siguiente turno del agente como contexto
+    // bajo la sección "RESULTADO DE ACCIÓN PREVIA" mientras IsFresh()==true.
+    // Default null para compat con sesiones existentes en Redis.
+    LastActionResult? LastActionResult = null
 );

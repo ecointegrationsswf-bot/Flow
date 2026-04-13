@@ -1,4 +1,5 @@
 using AgentFlow.Domain.Entities;
+using AgentFlow.Domain.Webhooks;
 
 namespace AgentFlow.Domain.Interfaces;
 
@@ -22,7 +23,9 @@ public record AgentRunRequest(
     string? MediaType = null,                           // "image" | "document" | "audio"
     List<int>? AttentionDays = null,                    // días laborables (0=Dom…6=Sáb)
     string? AttentionStartTime = null,                  // "HH:mm"
-    string? AttentionEndTime = null                     // "HH:mm"
+    string? AttentionEndTime = null,                    // "HH:mm"
+    string? ActionsBlock = null,                        // Action Trigger Protocol — bloque "ACCIONES DISPONIBLES" preconstruido por IActionPromptBuilder
+    LastActionResult? LastActionResult = null           // Action Trigger Protocol Fase 4 — resultado de acción previa para inyectar al prompt
 );
 
 public record AgentResponse(

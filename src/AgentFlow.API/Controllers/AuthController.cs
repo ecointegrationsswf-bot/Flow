@@ -219,7 +219,8 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 SendGridApiKey = string.IsNullOrEmpty(t.SendGridApiKey) ? null : "***" + t.SendGridApiKey.Substring(Math.Max(0, t.SendGridApiKey.Length - 4)),
                 t.SenderEmail,
                 t.CampaignMessageDelaySeconds,
-                t.BrainEnabled
+                t.BrainEnabled,
+                t.WebhookContractEnabled
             })
             .FirstOrDefaultAsync(ct);
 
@@ -332,6 +333,24 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
     }
 
     public record UpdateBrainEnabledRequest(bool BrainEnabled);
+
+    [HttpPut("tenant/webhook-contract")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateWebhookContractEnabled([FromBody] UpdateWebhookContractRequest req, CancellationToken ct)
+    {
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        tenant.WebhookContractEnabled = req.Enabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { tenant.WebhookContractEnabled });
+    }
+
+    public record UpdateWebhookContractRequest(bool Enabled);
 
     [HttpPost("forgot-password")]
     [EnableRateLimiting("auth")]

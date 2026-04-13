@@ -8,6 +8,8 @@ export interface AvailableAction {
   requiresWebhook: boolean
   sendsEmail: boolean
   sendsSms: boolean
+  /** JSON del DefaultWebhookContract — si existe, los templates heredan sin config propia */
+  defaultWebhookContract?: string | null
 }
 
 export interface AvailablePrompt {
@@ -94,6 +96,12 @@ export interface ActionConfig {
   inputSchema?: any
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   outputSchema?: any
+
+  // ── Action Trigger Protocol (Fase 5) ──
+  // Metadata que define cuándo el agente IA debe disparar esta acción.
+  // Se persiste junto al resto del bundle.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  triggerConfig?: any
 }
 
 export function useCampaignTemplates() {

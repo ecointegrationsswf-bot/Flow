@@ -180,7 +180,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         var actions = await db.Set<ActionDefinition>()
             .Where(a => a.TenantId == tenantId && a.IsActive)
             .OrderBy(a => a.Name)
-            .Select(a => new { a.Id, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms })
+            .Select(a => new { a.Id, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.DefaultTriggerConfig, a.DefaultWebhookContract })
             .ToListAsync(ct);
 
         return Ok(actions);

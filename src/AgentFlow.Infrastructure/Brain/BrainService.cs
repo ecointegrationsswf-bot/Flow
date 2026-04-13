@@ -283,7 +283,11 @@ public class BrainService(
             ActiveAgentSlug: slug,
             IntentHistory: intentHistory,
             ValidationState: existing?.ValidationState,
-            EscalatedAt: existing?.EscalatedAt
+            EscalatedAt: existing?.EscalatedAt,
+            // Propagar campos del Webhook Contract System / Action Trigger Protocol
+            // desde la sesión previa para que no se pierdan al reclasificar.
+            ActionContext: existing?.ActionContext,
+            LastActionResult: existing?.LastActionResult
         );
     }
 

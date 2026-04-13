@@ -18,6 +18,8 @@ namespace AgentFlow.Infrastructure.Webhooks;
 /// </summary>
 public class OutputInterpreter(
     ISessionStore sessionStore,
+    IChannelProviderFactory channelFactory,
+    Storage.IBlobStorageService blobStorage,
     ILogger<OutputInterpreter> logger) : IOutputInterpreter
 {
     public async Task<ActionResult> InterpretAsync(
@@ -72,7 +74,7 @@ public class OutputInterpreter(
                             break;
 
                         case "send_whatsapp_media":
-                            HandleWhatsAppMedia(raw, field, context, agentParts);
+                            await HandleWhatsAppMediaAsync(raw, field, context, agentParts, ct);
                             break;
 
                         case "inject_context":
@@ -164,14 +166,15 @@ public class OutputInterpreter(
     }
 
     /// <summary>
-    /// FASE 3: Solo loguea el evento y agrega texto al DataForAgent.
-    /// TODO: conectar con el método existente de envío de documentos cuando se decida.
+    /// Recibe un base64 del webhook, lo sube a Azure Blob Storage para obtener una URL
+    /// pública, y lo envía como documento por WhatsApp usando el channel provider del tenant.
     /// </summary>
-    private void HandleWhatsAppMedia(
+    private async Task HandleWhatsAppMediaAsync(
         JsonElement? raw,
         OutputField field,
         OutputContext context,
-        List<string> agentParts)
+        List<string> agentParts,
+        CancellationToken ct)
     {
         if (raw is null || string.IsNullOrEmpty(field.MimeType))
         {
@@ -192,15 +195,58 @@ public class OutputInterpreter(
                 "[OutputInterpreter] send_whatsapp_media: action={Action} label={Label} mimeType={MimeType} size={Size}B to={Phone}",
                 context.ActionName, field.Label, field.MimeType, bytes.Length, context.ContactPhone);
 
-            // TODO: Integrar con el método existente de envío de documentos por WhatsApp.
-            // Por ahora solo agregamos texto al DataForAgent.
-            agentParts.Add($"{field.Label} (documento {field.MimeType}, {bytes.Length} bytes) listo para enviar");
+            // 1. Subir a Azure Blob Storage para obtener URL pública
+            var ext = field.MimeType switch
+            {
+                "application/pdf" => "pdf",
+                "image/png" => "png",
+                "image/jpeg" => "jpg",
+                _ => "bin"
+            };
+            var filename = $"webhook-media/{context.TenantId}/{DateTime.UtcNow:yyyyMMdd}/{Guid.NewGuid()}.{ext}";
+            var publicUrl = await blobStorage.UploadWhatsAppMediaAsync(filename, bytes, field.MimeType, ct);
+
+            logger.LogInformation("[OutputInterpreter] Media subida a blob: {Url}", publicUrl);
+
+            // 2. Enviar como documento por WhatsApp
+            var provider = await channelFactory.GetProviderAsync(context.TenantId, ct);
+            if (provider is not null && !string.IsNullOrEmpty(context.ContactPhone))
+            {
+                var sendResult = await provider.SendMessageAsync(new SendMessageRequest(
+                    To: context.ContactPhone,
+                    Body: field.Label ?? "Documento",
+                    MediaUrl: publicUrl,
+                    MediaType: "document",
+                    Filename: $"{field.Label ?? "documento"}.{ext}"
+                ), ct);
+
+                if (sendResult.Success)
+                {
+                    logger.LogInformation("[OutputInterpreter] Documento enviado por WhatsApp a {Phone}", context.ContactPhone);
+                    agentParts.Add($"El {field.Label} fue enviado exitosamente al cliente por WhatsApp.");
+                }
+                else
+                {
+                    logger.LogWarning("[OutputInterpreter] Error enviando documento por WhatsApp: {Error}", sendResult.Error);
+                    agentParts.Add($"No se pudo enviar el {field.Label} por WhatsApp. El cliente puede descargarlo desde: {publicUrl}");
+                }
+            }
+            else
+            {
+                // Fallback: si no hay provider, dar la URL directa
+                agentParts.Add($"Documento disponible: {publicUrl}");
+            }
         }
         catch (FormatException)
         {
             logger.LogWarning("[OutputInterpreter] Base64 corrupto en {Field} para {Action}",
                 field.FieldPath, context.ActionName);
             agentParts.Add($"Error generando {field.Label}");
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "[OutputInterpreter] Error procesando media para {Action}", context.ActionName);
+            agentParts.Add($"Error procesando {field.Label}");
         }
     }
 

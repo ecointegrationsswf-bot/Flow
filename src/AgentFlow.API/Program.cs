@@ -186,6 +186,9 @@ builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IOutputInterpreter,
 builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ActionConfigReader>();
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionExecutorService,
     AgentFlow.Infrastructure.Webhooks.ActionExecutorService>();
+// Action Trigger Protocol — Fase 0 (NoOp). En Fase 2 se reemplaza la implementación.
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionPromptBuilder,
+    AgentFlow.Infrastructure.Webhooks.ActionPromptBuilder>();
 
 // ── Tenant context ─────────────────────────────────────
 builder.Services.AddHttpContextAccessor();

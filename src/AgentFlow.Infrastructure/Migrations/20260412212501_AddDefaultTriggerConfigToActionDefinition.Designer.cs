@@ -4,6 +4,7 @@ using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace AgentFlow.Infrastructure.Migrations
 {
     [DbContext(typeof(AgentFlowDbContext))]
-    partial class AgentFlowDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260412212501_AddDefaultTriggerConfigToActionDefinition")]
+    partial class AddDefaultTriggerConfigToActionDefinition
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -37,12 +40,6 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
-
-                    b.Property<string>("DefaultTriggerConfig")
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("DefaultWebhookContract")
-                        .HasColumnType("nvarchar(max)");
 
                     b.Property<string>("Description")
                         .HasMaxLength(500)

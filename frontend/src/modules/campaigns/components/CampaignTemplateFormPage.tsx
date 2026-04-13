@@ -515,6 +515,7 @@ export function CampaignTemplateFormPage() {
                             {action.requiresWebhook && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">Webhook</span>}
                             {action.sendsEmail && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">Email</span>}
                             {action.sendsSms && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">SMS</span>}
+                            {action.defaultWebhookContract && <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">Default ⚡</span>}
                           </div>
                         </div>
                         {action.description && <p className="text-xs text-gray-500">{action.description}</p>}
@@ -565,46 +566,62 @@ export function CampaignTemplateFormPage() {
                                 {actionErrs.webhookMethod && <p className="mt-1 text-xs text-red-600">{actionErrs.webhookMethod}</p>}
                               </div>
                             </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-medium text-gray-600"><Globe className="inline h-3 w-3 mr-1" />Headers (JSON)</label>
-                              <textarea
-                                value={config.webhookHeaders ?? ''}
-                                onChange={e => updateActionConfig(action.id, 'webhookHeaders', e.target.value)}
-                                rows={2}
-                                placeholder={'{\n  "Authorization": "Bearer token..."\n}'}
-                                className={`${inputClass} font-mono text-xs`}
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-medium text-gray-600">Plantilla JSON del payload</label>
-                              <textarea
-                                value={config.webhookPayload ?? ''}
-                                onChange={e => updateActionConfig(action.id, 'webhookPayload', e.target.value)}
-                                rows={3}
-                                placeholder={'{\n  "conversationId": "{{conversationId}}",\n  "clientPhone": "{{clientPhone}}"\n}'}
-                                className={`${inputClass} font-mono text-xs`}
-                              />
-                              <p className="mt-1 text-xs text-gray-400">Usa {'{{variable}}'} para campos dinamicos.</p>
-                            </div>
+                            {!(config.inputSchema || config.outputSchema) && (
+                              <>
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-gray-600"><Globe className="inline h-3 w-3 mr-1" />Headers (JSON)</label>
+                                  <textarea
+                                    value={config.webhookHeaders ?? ''}
+                                    onChange={e => updateActionConfig(action.id, 'webhookHeaders', e.target.value)}
+                                    rows={2}
+                                    placeholder={'{\n  "Authorization": "Bearer token..."\n}'}
+                                    className={`${inputClass} font-mono text-xs`}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-gray-600">Plantilla JSON del payload</label>
+                                  <textarea
+                                    value={config.webhookPayload ?? ''}
+                                    onChange={e => updateActionConfig(action.id, 'webhookPayload', e.target.value)}
+                                    rows={3}
+                                    placeholder={'{\n  "conversationId": "{{conversationId}}",\n  "clientPhone": "{{clientPhone}}"\n}'}
+                                    className={`${inputClass} font-mono text-xs`}
+                                  />
+                                  <p className="mt-1 text-xs text-gray-400">Usa {'{{variable}}'} para campos dinamicos.</p>
+                                </div>
+                              </>
+                            )}
 
                             {/* Webhook Contract System — Builder avanzado (Fase 5) */}
                             <div className="mt-3 pt-3 border-t border-amber-200">
+                              {/* Badge de herencia: si la acción tiene DefaultWebhookContract pero este template no tiene override */}
+                              {action.defaultWebhookContract && !(config.inputSchema || config.outputSchema) && (
+                                <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-purple-50 border border-purple-200 px-3 py-2 text-[11px] text-purple-800">
+                                  <Webhook className="h-3.5 w-3.5 flex-shrink-0" />
+                                  <span>
+                                    <strong>Hereda contrato default</strong> de la accion. Si necesitas configuracion diferente para este maestro, usa el boton de abajo.
+                                  </span>
+                                </div>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => setWebhookBuilderActionId(action.id)}
                                 className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700"
                               >
                                 <Webhook className="h-3.5 w-3.5" />
-                                Configurar contrato avanzado
+                                {(config.inputSchema || config.outputSchema)
+                                  ? 'Editar contrato de este maestro'
+                                  : 'Personalizar contrato para este maestro'}
                                 {(config.inputSchema || config.outputSchema) && (
                                   <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px]">
-                                    Configurado
+                                    Override
                                   </span>
                                 )}
                               </button>
                               <p className="mt-1 text-[10px] text-gray-500">
-                                Define un contrato tipificado con InputSchema y OutputSchema para que el Cerebro
-                                ejecute el webhook automáticamente cuando el agente emita [ACTION:{action.name}].
+                                {(config.inputSchema || config.outputSchema)
+                                  ? 'Este maestro tiene su propia configuracion de webhook (override del default de la accion).'
+                                  : 'Define un contrato especifico para este maestro. Si no lo configuras, se usa el default de la accion.'}
                               </p>
                             </div>
                           </div>
@@ -760,6 +777,8 @@ export function CampaignTemplateFormPage() {
           timeoutSeconds: currentConfig.timeoutSeconds ?? 10,
           inputSchema: currentConfig.inputSchema,
           outputSchema: currentConfig.outputSchema,
+          // Action Trigger Protocol (Fase 5) — cargar TriggerConfig si ya existe
+          triggerConfig: currentConfig.triggerConfig,
         }
 
         return (
@@ -785,6 +804,8 @@ export function CampaignTemplateFormPage() {
                   timeoutSeconds: bundle.timeoutSeconds,
                   inputSchema: bundle.inputSchema,
                   outputSchema: bundle.outputSchema,
+                  // Action Trigger Protocol (Fase 5) — persistir TriggerConfig
+                  triggerConfig: bundle.triggerConfig,
                 },
               }))
               setWebhookBuilderActionId(null)

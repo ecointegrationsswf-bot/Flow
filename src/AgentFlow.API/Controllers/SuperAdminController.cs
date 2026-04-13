@@ -729,7 +729,9 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
     public record ActionDefinitionRequest(
         Guid TenantId, string Name, string? Description,
         bool RequiresWebhook, bool SendsEmail, bool SendsSms,
-        string? WebhookUrl = null, string? WebhookMethod = null);
+        string? WebhookUrl = null, string? WebhookMethod = null,
+        string? DefaultTriggerConfig = null,
+        string? DefaultWebhookContract = null);
 
     [HttpGet("actions")]
     [Authorize(Roles = "super_admin")]
@@ -741,7 +743,7 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
 
         var actions = await query
             .OrderBy(a => a.Name)
-            .Select(a => new { a.Id, a.TenantId, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.WebhookUrl, a.WebhookMethod, a.IsActive, a.CreatedAt })
+            .Select(a => new { a.Id, a.TenantId, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.WebhookUrl, a.WebhookMethod, a.IsActive, a.CreatedAt, a.DefaultTriggerConfig, a.DefaultWebhookContract })
             .ToListAsync(ct);
         return Ok(actions);
     }
@@ -767,6 +769,8 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
             SendsSms = req.SendsSms,
             WebhookUrl = req.WebhookUrl,
             WebhookMethod = req.WebhookMethod,
+            DefaultTriggerConfig = req.DefaultTriggerConfig,
+            DefaultWebhookContract = req.DefaultWebhookContract,
         };
         db.ActionDefinitions.Add(action);
         await db.SaveChangesAsync(ct);
@@ -791,6 +795,8 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         action.SendsSms = req.SendsSms;
         action.WebhookUrl = req.WebhookUrl;
         action.WebhookMethod = req.WebhookMethod;
+        action.DefaultTriggerConfig = req.DefaultTriggerConfig;
+        action.DefaultWebhookContract = req.DefaultWebhookContract;
         action.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
         return Ok(new { action.Id, action.Name });

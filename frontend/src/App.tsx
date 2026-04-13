@@ -31,6 +31,7 @@ import { PromptsPage } from '@/modules/admin/components/PromptsPage'
 import { PromptFormPage } from '@/modules/admin/components/PromptFormPage'
 import { ProfilePage } from '@/modules/profile/components/ProfilePage'
 import { BrainAgentRegistryPage } from '@/modules/brain/components/BrainAgentRegistryPage'
+import { TenantActionsPage } from '@/modules/actions/components/TenantActionsPage'
 import { ForgotPasswordPage } from '@/modules/auth/components/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/modules/auth/components/ResetPasswordPage'
 
@@ -74,6 +75,7 @@ export default function App() {
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/labels" element={<LabelsPage />} />
+          <Route path="/actions" element={<TenantActionsPage />} />
           <Route path="/brain" element={<BrainAgentRegistryPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/profile" element={<ProfilePage />} />

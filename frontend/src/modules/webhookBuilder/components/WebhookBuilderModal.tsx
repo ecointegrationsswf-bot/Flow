@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { X, ChevronLeft, ChevronRight, Save } from 'lucide-react'
+import { Step0TriggerConfig } from './Step0TriggerConfig'
 import { Step1Connection } from './Step1Connection'
 import { Step2TestEndpoint } from './Step2TestEndpoint'
 import { Step3InputSchema } from './Step3InputSchema'
@@ -29,7 +30,9 @@ const DEFAULT_BUNDLE: WebhookContractBundle = {
 }
 
 export function WebhookBuilderModal({ initial, actionName, onSave, onClose }: Props) {
-  const [step, setStep] = useState(1)
+  // Action Trigger Protocol (Fase 5): el wizard arranca en el Paso 0 (Trigger),
+  // opcional pero recomendado antes de la Conexión.
+  const [step, setStep] = useState(0)
   const [bundle, setBundle] = useState<WebhookContractBundle>({
     ...DEFAULT_BUNDLE,
     ...initial,
@@ -37,6 +40,7 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose }: Pr
   const [detectedFields, setDetectedFields] = useState<DetectedFieldDto[]>([])
 
   const steps = [
+    { num: 0, label: 'Trigger' },
     { num: 1, label: 'Conexión' },
     { num: 2, label: 'Prueba' },
     { num: 3, label: 'Input Schema' },
@@ -44,6 +48,10 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose }: Pr
   ]
 
   const canContinue = () => {
+    // Paso 0 es opcional — siempre se puede avanzar. Si hay requiresConfirmation
+    // definidos pero no clarificationPrompt, permitimos avanzar igual y mostramos
+    // el warning en el propio Step (es una recomendación, no un hard block).
+    if (step === 0) return true
     if (step === 1) return bundle.webhookUrl.trim().length > 0
     return true
   }
@@ -62,7 +70,7 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose }: Pr
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="w-full max-w-3xl rounded-xl bg-white shadow-xl flex flex-col max-h-[90vh]">
+      <div className="w-full max-w-5xl rounded-xl bg-white shadow-xl flex flex-col max-h-[90vh]">
         {/* Header */}
         <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
           <div>
@@ -109,6 +117,7 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose }: Pr
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
+          {step === 0 && <Step0TriggerConfig bundle={bundle} onChange={setBundle} actionName={actionName} />}
           {step === 1 && <Step1Connection bundle={bundle} onChange={setBundle} />}
           {step === 2 && <Step2TestEndpoint bundle={bundle} onDetectedFields={setDetectedFields} />}
           {step === 3 && <Step3InputSchema bundle={bundle} onChange={handleInputSchemaChange} />}
@@ -124,8 +133,8 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose }: Pr
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-gray-200 px-5 py-3">
           <button
-            onClick={() => setStep((s) => Math.max(1, s - 1))}
-            disabled={step === 1}
+            onClick={() => setStep((s) => Math.max(0, s - 1))}
+            disabled={step === 0}
             className="flex items-center gap-1 rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-40"
           >
             <ChevronLeft className="h-3.5 w-3.5" />

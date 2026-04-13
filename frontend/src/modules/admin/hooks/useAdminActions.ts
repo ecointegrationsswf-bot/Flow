@@ -13,6 +13,10 @@ export interface ActionDefinition {
   webhookMethod: string | null
   isActive: boolean
   createdAt: string
+  /** Action Trigger Protocol — TriggerConfig por defecto. JSON serializado. */
+  defaultTriggerConfig: string | null
+  /** Contrato webhook completo por defecto. JSON serializado del bundle. */
+  defaultWebhookContract: string | null
 }
 
 export interface ActionPayload {
@@ -24,6 +28,8 @@ export interface ActionPayload {
   sendsSms: boolean
   webhookUrl?: string | null
   webhookMethod?: string | null
+  defaultTriggerConfig?: string | null
+  defaultWebhookContract?: string | null
 }
 
 export function useAdminActions(tenantId?: string) {

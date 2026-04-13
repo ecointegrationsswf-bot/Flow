@@ -55,6 +55,26 @@ export interface WebhookEndpointConfig {
 }
 
 /**
+ * Action Trigger Protocol — Capa 1. Metadata que define cuándo y cómo el
+ * agente debe disparar una acción. Se embebe en el JSON ActionConfigs junto
+ * al resto del bundle. Todos los campos son opcionales para mantener
+ * retrocompatibilidad con acciones sin TriggerConfig.
+ *
+ * Lo consume el backend en IActionPromptBuilder para construir el bloque
+ * "ACCIONES DISPONIBLES" que se inyecta al system prompt del agente.
+ */
+export interface TriggerConfig {
+  /** Descripción en lenguaje natural. Mínimo ~20 caracteres para ser útil. */
+  description?: string
+  /** Frases reales que activan la acción. Entre 3 y 7 recomendado. */
+  triggerExamples?: string[]
+  /** Nombres de params que el agente debe confirmar antes de disparar. Referencia InputSchema.fields con sourceType=conversation. */
+  requiresConfirmation?: string[]
+  /** Pregunta sugerida que el agente puede usar cuando faltan confirmaciones. */
+  clarificationPrompt?: string
+}
+
+/**
  * Bundle completo de configuración de una acción.
  * Se guarda dentro del JSON CampaignTemplates.ActionConfigs[actionId].
  * Coexiste con los campos legacy (webhookUrl, webhookMethod, etc.) que
@@ -65,6 +85,8 @@ export interface WebhookContractBundle extends WebhookEndpointConfig {
   structure: SchemaStructure
   inputSchema?: InputSchema
   outputSchema?: OutputSchema
+  /** Action Trigger Protocol (Fase 5) — opcional, define cuándo el agente puede disparar la acción. */
+  triggerConfig?: TriggerConfig
 }
 
 // ── Test endpoint ──

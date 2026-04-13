@@ -50,6 +50,12 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
         db.Set<Message>().Add(message);
     }
 
+    public async Task AddGestionEventAsync(GestionEvent ev, CancellationToken ct = default)
+    {
+        db.Set<GestionEvent>().Add(ev);
+        await Task.CompletedTask;
+    }
+
     public async Task SaveChangesAsync(CancellationToken ct = default)
     {
         await db.SaveChangesAsync(ct);

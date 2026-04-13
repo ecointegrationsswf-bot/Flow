@@ -396,6 +396,55 @@ dotnet ef database update \
 
 ---
 
+## Action Trigger Protocol (ATP)
+
+Sistema que permite al agente IA disparar acciones configuradas en la campaña
+durante una conversación, usando tags estructurados que el backend parsea y ejecuta.
+
+### Prerequisito
+- `Tenant.WebhookContractEnabled = true`
+- Acción vinculada al maestro con `triggerConfig` configurado en el Webhook Builder (Paso 0)
+
+### Tags que emite el agente
+```
+[ACTION:SEND_PAYMENT_LINK]
+[PARAM:amount=150]
+[PARAM:reference=null]
+```
+- **[ACTION:slug]**: siempre al final de la respuesta, máximo 1 por turno. El cliente NO lo ve.
+- **[PARAM:nombre=valor]**: uno por línea, valores confirmados por el usuario. "null" literal = C# null.
+
+### Flujo en el backend
+1. `IActionPromptBuilder.GetCatalogAsync()` — construye el bloque "ACCIONES DISPONIBLES"
+   que se inyecta al system prompt, más un diccionario slug→TriggerConfig para validación.
+2. `BuildSystemPrompt()` en `AnthropicAgentRunner` apendea el bloque al final del prompt.
+3. `ExtractActionTag()` + `ExtractActionParams()` — parsean [ACTION] y [PARAM] del reply.
+4. **Validación soft-whitelist**: si el catálogo está activo y el slug no pertenece, bloquea.
+5. **Validación requiresConfirmation**: si faltan campos declarados, bloquea.
+6. `IActionExecutorService.ExecuteAsync()` — ejecuta el webhook con `CollectedParams` poblados.
+7. `LastActionResult` se persiste en Redis (consume-on-read en el siguiente turno).
+8. `GestionEvent` con `Origin="agent:action:{slug}"` se registra para auditoría.
+
+### Archivos clave del protocolo
+| Archivo | Responsabilidad |
+|---------|----------------|
+| `Domain/Webhooks/TriggerConfig.cs` | POCO con description, triggerExamples, requiresConfirmation, clarificationPrompt |
+| `Domain/Webhooks/ActionCatalog.cs` | Catálogo (bloque + diccionario) — `IsActive`, `Contains()`, `Get()` |
+| `Domain/Webhooks/LastActionResult.cs` | Resultado inter-turno con `IsFresh()` (10 min window) |
+| `Domain/Webhooks/IActionPromptBuilder.cs` | Interface: `BuildAsync()`, `GetCatalogAsync()` |
+| `Infrastructure/Webhooks/ActionPromptBuilder.cs` | Implementación con cache 5 min, feature flag, size check |
+| `Application/Modules/Webhooks/ProcessIncomingMessageCommand.cs` | Parser de tags, validaciones, wiring completo |
+| `frontend/src/modules/webhookBuilder/components/Step0TriggerConfig.tsx` | Wizard Paso 0 con preview en vivo |
+
+### Convenciones
+- Tags: `[ACTION:SLUG]` siempre en MAYÚSCULAS
+- `requiresConfirmation` referencia nombres de campos del InputSchema con `sourceType=conversation`
+- `clarificationPrompt` es sugerida al agente, no literal — el agente puede reformularla
+- `TriggerConfig` se embebe en el JSON `ActionConfigs` existente (cero migraciones de BD)
+- Cache del catálogo: `atp:catalog:{tenantId}:{campaignTemplateId}`, TTL 5 min
+
+---
+
 ## Integración con Tobroker
 
 Tobroker corre en SQL Server 2022 Enterprise. El agente de cobros puede consultar

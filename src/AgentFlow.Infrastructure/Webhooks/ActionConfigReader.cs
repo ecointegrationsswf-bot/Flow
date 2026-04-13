@@ -108,11 +108,28 @@ public class ActionConfigReader(ILogger<ActionConfigReader> logger)
                 }
             }
 
+            // Action Trigger Protocol — Fase 1: TriggerConfig opcional.
+            // Si el JSON no tiene la key o es inválido, seguimos sin él (retrocompat).
+            TriggerConfig? triggerConfig = null;
+            if (actionEl.TryGetProperty("triggerConfig", out var triggerEl) && triggerEl.ValueKind == JsonValueKind.Object)
+            {
+                try
+                {
+                    triggerConfig = JsonSerializer.Deserialize<TriggerConfig>(triggerEl.GetRawText(), JsonOpts);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning("[ActionConfigReader] triggerConfig inválido para action {ActionId}: {Message}",
+                        actionId, ex.Message);
+                }
+            }
+
             return new ActionConfigBundle
             {
                 EndpointConfig = endpointConfig,
                 InputSchema = inputSchema,
-                OutputSchema = outputSchema
+                OutputSchema = outputSchema,
+                TriggerConfig = triggerConfig
             };
         }
         catch (Exception ex)
@@ -148,4 +165,32 @@ public class ActionConfigBundle
     public WebhookEndpointConfig EndpointConfig { get; init; } = new();
     public InputSchema? InputSchema { get; init; }
     public OutputSchema? OutputSchema { get; init; }
+
+    /// <summary>
+    /// Action Trigger Protocol — Capa 1. Opcional: presente solo si el admin
+    /// configuró el "Paso 0 Trigger" en el Webhook Builder (Fase 5) o agregó
+    /// las keys manualmente al JSON ActionConfigs.
+    /// </summary>
+    public TriggerConfig? TriggerConfig { get; init; }
+}
+
+/// <summary>
+/// POCO plano para deserializar ActionDefinition.DefaultWebhookContract (JSON).
+/// Misma forma que un entry de CampaignTemplate.ActionConfigs[actionId] pero sin la
+/// anidación de WebhookEndpointConfig — todos los campos al primer nivel del JSON.
+/// </summary>
+public class ActionConfigBundleJson
+{
+    public string? WebhookUrl { get; init; }
+    public string? WebhookMethod { get; init; }
+    public string? ContentType { get; init; }
+    public string? Structure { get; init; }
+    public string? AuthType { get; init; }
+    public string? AuthValue { get; init; }
+    public string? ApiKeyHeaderName { get; init; }
+    public string? WebhookHeaders { get; init; }
+    public int? TimeoutSeconds { get; init; }
+    public InputSchema? InputSchema { get; init; }
+    public OutputSchema? OutputSchema { get; init; }
+    public TriggerConfig? TriggerConfig { get; init; }
 }

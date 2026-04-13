@@ -3,6 +3,7 @@ using System.Text;
 using AgentFlow.Infrastructure.Email;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
@@ -27,8 +28,96 @@ namespace AgentFlow.API.Controllers;
 [ApiController]
 [Route("api/webhook-test-endpoints")]
 [AllowAnonymous]
-public class WebhookTestEndpointsController(IEmailService emailService) : ControllerBase
+public class WebhookTestEndpointsController(
+    IEmailService emailService,
+    AgentFlow.Domain.Webhooks.IActionPromptBuilder actionPromptBuilder) : ControllerBase
 {
+    /// <summary>DIAGNÓSTICO TEMPORAL — probar qué produce el ActionPromptBuilder.</summary>
+    [HttpGet("diag-catalog")]
+    public async Task<IActionResult> DiagCatalog(
+        [FromQuery] Guid tenantId, [FromQuery] Guid templateId, CancellationToken ct)
+    {
+        // Diagnóstico manual para ver qué pasa paso a paso
+        var dbCtx = HttpContext.RequestServices.GetRequiredService<AgentFlow.Infrastructure.Persistence.AgentFlowDbContext>();
+
+        var tenant = await dbCtx.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.WebhookContractEnabled })
+            .FirstOrDefaultAsync(ct);
+
+        var template = await dbCtx.CampaignTemplates
+            .Where(t => t.Id == templateId && t.TenantId == tenantId)
+            .Select(t => new { t.ActionConfigs, t.ActionIds })
+            .FirstOrDefaultAsync(ct);
+
+        var allIds = new HashSet<Guid>();
+        if (template?.ActionIds is { Count: > 0 } ids)
+            foreach (var id in ids) allIds.Add(id);
+
+        var defs = await dbCtx.ActionDefinitions
+            .Where(a => a.TenantId == tenantId && allIds.Contains(a.Id) && a.IsActive)
+            .Select(a => new { a.Id, a.Name, HasContract = a.DefaultWebhookContract != null, HasTrigger = a.DefaultTriggerConfig != null })
+            .ToListAsync(ct);
+
+        var catalog = await actionPromptBuilder.GetCatalogAsync(templateId, tenantId, ct);
+
+        return Ok(new
+        {
+            step1_webhookEnabled = tenant?.WebhookContractEnabled,
+            step2_templateFound = template != null,
+            step2_actionIdsCount = allIds.Count,
+            step2_actionIds = allIds.Select(x => x.ToString()).ToList(),
+            step3_defsFound = defs.Select(d => new { d.Id, d.Name, d.HasContract, d.HasTrigger }).ToList(),
+            catalog_isActive = catalog.IsActive,
+            catalog_slugCount = catalog.BySlug.Count,
+            catalog_slugs = catalog.BySlug.Keys.ToList(),
+            catalog_blockLength = catalog.Block.Length,
+        });
+    }
+    /// <summary>DIAGNÓSTICO TEMPORAL — probar upload blob + envío WhatsApp media.</summary>
+    [HttpGet("diag-media")]
+    public async Task<IActionResult> DiagMedia(
+        [FromQuery] Guid tenantId, [FromQuery] string phone, CancellationToken ct)
+    {
+        var logs = new List<string>();
+        try
+        {
+            // 1. Generar un mini PDF de prueba
+            var pdfBytes = MinimalPdfBuilder.BuildSimpleDocument(new[] { "Test media", $"Phone: {phone}", $"Time: {DateTime.UtcNow}" });
+            logs.Add($"PDF generado: {pdfBytes.Length} bytes");
+
+            // 2. Subir a Azure Blob
+            var blobSvc = HttpContext.RequestServices.GetRequiredService<AgentFlow.Infrastructure.Storage.IBlobStorageService>();
+            var filename = $"diag-test/{Guid.NewGuid()}.pdf";
+            var url = await blobSvc.UploadWhatsAppMediaAsync(filename, pdfBytes, "application/pdf", ct);
+            logs.Add($"Blob upload OK: {url}");
+
+            // 3. Enviar por WhatsApp
+            var channelFactory = HttpContext.RequestServices.GetRequiredService<AgentFlow.Domain.Interfaces.IChannelProviderFactory>();
+            var provider = await channelFactory.GetProviderAsync(tenantId, ct);
+            if (provider is null)
+            {
+                logs.Add("ERROR: No se encontró provider para el tenant");
+                return Ok(new { success = false, logs });
+            }
+            logs.Add("Provider encontrado");
+
+            var result = await provider.SendMessageAsync(new AgentFlow.Domain.Interfaces.SendMessageRequest(
+                To: phone, Body: "Documento de prueba ATP", MediaUrl: url,
+                MediaType: "document", Filename: "test-diag.pdf"), ct);
+
+            logs.Add($"SendMessage: success={result.Success}, error={result.Error}, id={result.ExternalMessageId}");
+            return Ok(new { success = result.Success, logs, blobUrl = url });
+        }
+        catch (Exception ex)
+        {
+            logs.Add($"EXCEPTION: {ex.GetType().Name}: {ex.Message}");
+            if (ex.InnerException is not null)
+                logs.Add($"INNER: {ex.InnerException.Message}");
+            return Ok(new { success = false, logs });
+        }
+    }
+
     // ────────────────────────────────────────────────────────────────
     // 1) GENERATE PDF
     // ────────────────────────────────────────────────────────────────

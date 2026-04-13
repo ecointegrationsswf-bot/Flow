@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, MessageSquare, Megaphone, Bot, ClipboardList,
-  Settings, LogOut, PanelLeftClose, PanelLeft, Tag, User, Brain,
+  Settings, LogOut, PanelLeftClose, PanelLeft, Tag, User, Brain, Zap,
 } from 'lucide-react'
 import { useAuthStore } from '@/shared/stores/authStore'
 import { useUiStore } from '@/shared/stores/uiStore'
@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { to: '/campaigns',          icon: Megaphone,       label: 'Campanas',          permission: 'view_campaigns' },
   { to: '/agents',             icon: Bot,             label: 'Agentes IA',        permission: 'view_agents' },
   { to: '/labels',             icon: Tag,             label: 'Etiquetas',         permission: undefined },
+  { to: '/actions',            icon: Zap,             label: 'Acciones',          permission: undefined },
   { to: '/brain',              icon: Brain,           label: 'Cerebro',           permission: undefined },
   { to: '/settings',           icon: Settings,        label: 'Configuracion',     permission: undefined },
   { to: '/profile',            icon: User,            label: 'Mi Perfil',         permission: undefined },

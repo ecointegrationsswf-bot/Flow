@@ -55,9 +55,12 @@ public class PayloadBuilder : IPayloadBuilder
                 ? systemContext.Get(field.SourceKey)
                 : null,
 
+            // Para conversation: intentar sourceKey primero, luego fieldPath como fallback.
+            // El agent emite [PARAM:fieldPath=valor], pero el schema puede tener un sourceKey diferente.
             "conversation" => !string.IsNullOrEmpty(field.SourceKey)
                 ? collected.Values.GetValueOrDefault(field.SourceKey)
-                : null,
+                  ?? collected.Values.GetValueOrDefault(field.FieldPath)
+                : collected.Values.GetValueOrDefault(field.FieldPath),
 
             "static" => field.StaticValue,
 

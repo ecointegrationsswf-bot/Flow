@@ -33,6 +33,8 @@ const emptyForm: Omit<ActionPayload, 'tenantId'> = {
   sendsSms: false,
   webhookUrl: '',
   webhookMethod: 'POST',
+  defaultTriggerConfig: null,
+  defaultWebhookContract: null,
 }
 
 export function ActionsPage() {
@@ -72,10 +74,14 @@ export function ActionsPage() {
       sendsSms: a.sendsSms,
       webhookUrl: a.webhookUrl ?? '',
       webhookMethod: a.webhookMethod ?? 'POST',
+      defaultTriggerConfig: a.defaultTriggerConfig,
+      defaultWebhookContract: a.defaultWebhookContract,
     })
+    setEditingTenantId(a.tenantId)
     setError('')
     setShowModal(true)
   }
+  const [editingTenantId, setEditingTenantId] = useState('')
 
   const handleSave = async () => {
     if (!form.name.trim()) {
@@ -83,7 +89,7 @@ export function ActionsPage() {
       return
     }
     try {
-      const payload: ActionPayload = { ...form, tenantId: selectedTenantId }
+      const payload: ActionPayload = { ...form, tenantId: editingId ? editingTenantId : selectedTenantId }
       if (editingId) {
         await updateMut.mutateAsync({ id: editingId, data: payload })
       } else {
@@ -266,7 +272,7 @@ export function ActionsPage() {
               </button>
             </div>
 
-            <div className="space-y-5 px-6 py-5">
+            <div className="space-y-5 px-6 py-5 overflow-y-auto max-h-[70vh]">
               {error && (
                 <div className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600">{error}</div>
               )}
@@ -380,6 +386,7 @@ export function ActionsPage() {
                   </button>
                 </div>
               </div>
+
             </div>
 
             {/* Footer */}
@@ -402,6 +409,7 @@ export function ActionsPage() {
           </div>
         </div>
       )}
+
     </div>
   )
 }

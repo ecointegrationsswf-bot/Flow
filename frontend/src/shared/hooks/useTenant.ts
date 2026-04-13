@@ -20,6 +20,7 @@ export interface TenantInfo {
   senderEmail: string | null
   campaignMessageDelaySeconds: number
   brainEnabled: boolean
+  webhookContractEnabled: boolean
 }
 
 export function useTenant() {
@@ -73,6 +74,15 @@ export function useUpdateBrainEnabled() {
   return useMutation({
     mutationFn: (brainEnabled: boolean) =>
       api.put('/auth/tenant/brain', { brainEnabled }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateWebhookContract() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.put('/auth/tenant/webhook-contract', { enabled }).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
   })
 }

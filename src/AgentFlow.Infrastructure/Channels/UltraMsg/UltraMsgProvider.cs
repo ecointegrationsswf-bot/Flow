@@ -41,7 +41,7 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
 
         var json = await response.Content.ReadAsStringAsync(ct);
         var doc  = JsonDocument.Parse(json);
-        var id   = doc.RootElement.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+        var id   = doc.RootElement.TryGetProperty("id", out var idProp) ? (idProp.ValueKind == System.Text.Json.JsonValueKind.String ? idProp.GetString() : idProp.ToString()) : null;
         return new SendResult(true, id);
     }
 
@@ -63,7 +63,7 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
 
         var json = await response.Content.ReadAsStringAsync(ct);
         var doc  = JsonDocument.Parse(json);
-        var id   = doc.RootElement.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+        var id   = doc.RootElement.TryGetProperty("id", out var idProp) ? (idProp.ValueKind == System.Text.Json.JsonValueKind.String ? idProp.GetString() : idProp.ToString()) : null;
         return new SendResult(true, id);
     }
 
@@ -86,7 +86,9 @@ public class UltraMsgProvider(HttpClient http, UltraMsgOptions options) : IChann
 
         var json = await response.Content.ReadAsStringAsync(ct);
         var doc  = JsonDocument.Parse(json);
-        var id   = doc.RootElement.TryGetProperty("id", out var idProp) ? idProp.GetString() : null;
+        var id   = doc.RootElement.TryGetProperty("id", out var idProp)
+            ? (idProp.ValueKind == System.Text.Json.JsonValueKind.String ? idProp.GetString() : idProp.ToString())
+            : null;
         return new SendResult(true, id);
     }
 

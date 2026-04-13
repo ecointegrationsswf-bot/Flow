@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react'
 import { Loader2, Save, Mail, Brain, Clock, MessageSquare } from 'lucide-react'
 import { ToggleLeft, ToggleRight } from 'lucide-react'
-import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone, useUpdateCampaignDelay, useUpdateBrainEnabled } from '@/shared/hooks/useTenant'
+import { Webhook } from 'lucide-react'
+import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone, useUpdateCampaignDelay, useUpdateBrainEnabled, useUpdateWebhookContract } from '@/shared/hooks/useTenant'
 
 const TIMEZONES = [
   { value: 'America/Panama',      label: 'America/Panama (UTC-5)' },
@@ -50,6 +51,7 @@ export function TenantSettingsTab() {
   const updateTimezone = useUpdateTenantTimezone()
   const updateDelay = useUpdateCampaignDelay()
   const updateBrain = useUpdateBrainEnabled()
+  const updateWebhookContract = useUpdateWebhookContract()
 
   const [sendGridApiKey, setSendGridApiKey] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
@@ -402,6 +404,42 @@ export function TenantSettingsTab() {
         )}
         {updateBrain.isSuccess && (
           <p className="mt-2 text-sm text-green-600">Configuracion del Cerebro actualizada.</p>
+        )}
+      </div>
+
+      {/* Seccion: Webhook Contract / Action Trigger Protocol */}
+      <div className="rounded-lg bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Webhook className="h-5 w-5 text-purple-600" />
+          <h2 className="text-base font-semibold text-gray-900">Webhook Contract System</h2>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-4">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Activar Webhook Contract y Action Trigger Protocol</p>
+            <p className="text-xs text-gray-500 mt-1 max-w-md">
+              Cuando esta activo, las acciones configuradas en los maestros de campana pueden ejecutar
+              webhooks externos y el agente IA puede disparar acciones automaticamente durante las conversaciones.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => updateWebhookContract.mutate(!tenant?.webhookContractEnabled)}
+            disabled={updateWebhookContract.isPending}
+            className="transition-colors"
+          >
+            {tenant?.webhookContractEnabled ? (
+              <ToggleRight className="h-8 w-8 text-purple-600" />
+            ) : (
+              <ToggleLeft className="h-8 w-8 text-gray-300" />
+            )}
+          </button>
+        </div>
+        {updateWebhookContract.isError && (
+          <p className="mt-2 text-sm text-red-600">{(updateWebhookContract.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
+        )}
+        {updateWebhookContract.isSuccess && (
+          <p className="mt-2 text-sm text-green-600">Configuracion de Webhook Contract actualizada.</p>
         )}
       </div>
     </div>

@@ -32,6 +32,32 @@ public class ActionDefinition
     /// </summary>
     public string? RequiredParams { get; set; }
 
+    /// <summary>
+    /// Action Trigger Protocol — TriggerConfig por defecto a nivel de tenant.
+    /// JSON serializado de TriggerConfig (description, triggerExamples, requiresConfirmation, clarificationPrompt).
+    /// Si un CampaignTemplate tiene su propio triggerConfig en ActionConfigs, el del template gana.
+    /// Si no, este default se hereda automáticamente en todos los maestros que incluyan esta acción.
+    /// NULL = la acción no se inyecta al prompt del agente a menos que el template la configure.
+    /// NOTA: Si DefaultWebhookContract está configurado y contiene triggerConfig, ese tiene prioridad
+    /// sobre este campo (el contract es más completo). Este campo se mantiene por retrocompat.
+    /// </summary>
+    public string? DefaultTriggerConfig { get; set; }
+
+    /// <summary>
+    /// Contrato webhook completo por defecto a nivel de tenant. JSON serializado con el mismo
+    /// formato que un entry de CampaignTemplate.ActionConfigs[actionId]:
+    /// { webhookUrl, webhookMethod, contentType, structure, authType, authValue, apiKeyHeaderName,
+    ///   webhookHeaders, timeoutSeconds, inputSchema, outputSchema, triggerConfig }
+    ///
+    /// Si un CampaignTemplate tiene su propia config en ActionConfigs para esta acción, el template gana.
+    /// Si no, este default se hereda automáticamente en TODOS los maestros del tenant.
+    ///
+    /// Cada tenant configura su propio DefaultWebhookContract — la misma acción (ej: SEND_TEST_EMAIL)
+    /// puede tener URL, schemas y trigger diferentes en cada tenant.
+    /// NULL = no hay default, el maestro debe configurar el webhook individualmente.
+    /// </summary>
+    public string? DefaultWebhookContract { get; set; }
+
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }

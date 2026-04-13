@@ -2,6 +2,7 @@ using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using MediatR;
+using Microsoft.Extensions.Logging;
 
 namespace AgentFlow.Application.Modules.Webhooks;
 
@@ -54,7 +55,9 @@ public class ProcessIncomingMessageHandler(
     IBrainService brainService,
     IAgentRegistry agentRegistry,
     ICampaignRepository campaignRepo,
-    AgentFlow.Domain.Webhooks.IActionExecutorService actionExecutor
+    AgentFlow.Domain.Webhooks.IActionExecutorService actionExecutor,
+    AgentFlow.Domain.Webhooks.IActionPromptBuilder actionPromptBuilder,
+    Microsoft.Extensions.Logging.ILogger<ProcessIncomingMessageHandler> logger
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
     public async Task<ProcessIncomingMessageResult> Handle(
@@ -351,6 +354,11 @@ public class ProcessIncomingMessageHandler(
         AgentResponse? agentResponse = null;
         string replyText = "";
 
+        // Action Trigger Protocol Fase 4: slot a nivel de método para el nuevo
+        // LastActionResult producido por este turno (si se ejecutó una acción).
+        // Se lee al final, en el SetAsync de la sesión. null si no hubo acción.
+        AgentFlow.Domain.Webhooks.LastActionResult? lastActionForPersist = null;
+
         if (!conversation.IsHumanHandled)
         {
             var agentId = dispatch.SelectedAgentId ?? conversation.ActiveAgentId;
@@ -472,8 +480,29 @@ public class ProcessIncomingMessageHandler(
                     }
                 }
 
+                // Action Trigger Protocol Fase 4: cargar sesión previa para saber si hay
+                // un LastActionResult pendiente del turno anterior que el agente deba ver.
+                // Si existe y es fresco, se inyecta al prompt en ESTE turno y luego se limpia
+                // (consume-on-read) — si una nueva acción fire ahora, la reemplaza.
+                AgentFlow.Domain.Webhooks.LastActionResult? lastActionForPrompt = null;
                 try
                 {
+                    var prevSession = await sessions.GetAsync(cmd.TenantId, cmd.FromPhone, ct);
+                    if (prevSession?.LastActionResult is { } prevLast && prevLast.IsFresh())
+                        lastActionForPrompt = prevLast;
+                }
+                catch { /* si Redis falla, seguimos sin inyectar — retrocompat */ }
+
+                try
+                {
+                    // Action Trigger Protocol — Capa 2: carga el catálogo (bloque + diccionario
+                    // slug→TriggerConfig) una sola vez. El bloque se inyecta al system prompt; el
+                    // diccionario se usa después para validar el [ACTION] que emita el agente.
+                    var actionCatalog = await actionPromptBuilder.GetCatalogAsync(
+                        campaignTemplateId: brainCampaignTemplateId ?? campaignTemplate?.Id,
+                        tenantId: cmd.TenantId,
+                        ct: ct);
+
                     agentResponse = await agentRunner.RunAsync(new AgentRunRequest(
                         Agent: agent, Conversation: conversation,
                         IncomingMessage: cmd.Message, RecentHistory: recentHistorySnapshot,
@@ -481,7 +510,9 @@ public class ProcessIncomingMessageHandler(
                         MediaUrl: (cmd.MediaType == "image" || cmd.MediaType == "document") ? cmd.MediaUrl : null,
                         MediaType: cmd.MediaType,
                         AttentionDays: attentionDays,
-                        AttentionStartTime: attentionStart, AttentionEndTime: attentionEnd
+                        AttentionStartTime: attentionStart, AttentionEndTime: attentionEnd,
+                        ActionsBlock: actionCatalog.Block,
+                        LastActionResult: lastActionForPrompt
                     ), ct);
                     replyText = agentResponse.ReplyText;
 
@@ -492,46 +523,120 @@ public class ProcessIncomingMessageHandler(
                     var actionSlug = ExtractActionTag(replyText);
                     if (!string.IsNullOrEmpty(actionSlug))
                     {
-                        // Limpiar el tag del texto visible al cliente
-                        replyText = RemoveActionTag(replyText);
+                        // Action Trigger Protocol — Fase 3: extraer params [PARAM:k=v] y limpiar
+                        // todos los tags ([ACTION] y [PARAM]) del texto visible al cliente.
+                        var parsedParams = ExtractActionParams(replyText);
+                        replyText = RemoveAllActionTags(replyText);
 
-                        try
+                        // ── Validación 1 — soft whitelist ──
+                        // Si el catálogo está activo (el tenant usa Action Trigger Protocol)
+                        // y el slug emitido por el agente NO está en el catálogo, bloqueamos
+                        // la ejecución. Si el catálogo está vacío (tenant legacy), dejamos pasar
+                        // y el ActionExecutorService hará su propia validación de template.
+                        var shouldExecute = true;
+                        if (actionCatalog.IsActive && !actionCatalog.Contains(actionSlug))
                         {
-                            var actionResult = await actionExecutor.ExecuteAsync(
-                                actionSlug: actionSlug,
-                                tenantId: cmd.TenantId,
-                                campaignTemplateId: brainCampaignTemplateId
-                                    ?? (campaignTemplate?.Id),
-                                contactPhone: cmd.FromPhone,
-                                conversationId: conversation.Id,
-                                collectedParams: AgentFlow.Domain.Webhooks.CollectedParams.Empty(),
-                                agentSlug: agent.Name,
-                                ct: ct);
+                            logger.LogWarning(
+                                "[ATP] Slug {ActionSlug} fuera del catálogo — ejecución bloqueada. Permitidos: [{AllowedSlugs}]",
+                                actionSlug, string.Join(",", actionCatalog.BySlug.Keys));
+                            shouldExecute = false;
+                        }
 
-                            // Si la acción devolvió datos para el agente, apendicarlos al replyText
-                            if (actionResult.Success && !string.IsNullOrEmpty(actionResult.DataForAgent))
+                        // ── Validación 2 — requiresConfirmation ──
+                        // Si la acción tiene campos que el agente debía confirmar y alguno
+                        // falta en los [PARAM:...], no ejecutamos — el agente debió pedir
+                        // la confirmación antes. El texto del agente (ya limpio) se envía
+                        // igual, asumiendo que contenía la pregunta de aclaración.
+                        if (shouldExecute && actionCatalog.Get(actionSlug) is { RequiresConfirmation: { Count: > 0 } required })
+                        {
+                            var missing = required
+                                .Where(f => !parsedParams.TryGetValue(f, out var v) || string.IsNullOrEmpty(v))
+                                .ToList();
+                            if (missing.Count > 0)
                             {
-                                replyText = string.IsNullOrEmpty(replyText)
-                                    ? actionResult.DataForAgent
-                                    : $"{replyText}\n\n{actionResult.DataForAgent}";
-                            }
-                            // Si falló con mensaje controlado, usarlo como respuesta
-                            else if (!actionResult.Success && !string.IsNullOrEmpty(actionResult.ErrorMessage))
-                            {
-                                replyText = string.IsNullOrEmpty(replyText)
-                                    ? actionResult.ErrorMessage
-                                    : $"{replyText}\n\n{actionResult.ErrorMessage}";
-                            }
-
-                            // Si la acción pidió escalar, forzar ShouldEscalate en la respuesta
-                            if (actionResult.ShouldEscalate)
-                            {
-                                agentResponse = agentResponse with { ShouldEscalate = true };
+                                logger.LogWarning(
+                                    "[ATP] Slug {ActionSlug} disparado sin confirmar campos: [{MissingFields}] — ejecución bloqueada",
+                                    actionSlug, string.Join(",", missing));
+                                shouldExecute = false;
                             }
                         }
-                        catch (Exception ex)
+
+                        if (shouldExecute)
                         {
-                            Console.WriteLine($"[ActionExecutor] Error ejecutando {actionSlug}: {ex.Message}");
+                            try
+                            {
+                                var collectedParams = new AgentFlow.Domain.Webhooks.CollectedParams
+                                {
+                                    Values = parsedParams
+                                };
+
+                                var actionResult = await actionExecutor.ExecuteAsync(
+                                    actionSlug: actionSlug,
+                                    tenantId: cmd.TenantId,
+                                    campaignTemplateId: brainCampaignTemplateId
+                                        ?? (campaignTemplate?.Id),
+                                    contactPhone: cmd.FromPhone,
+                                    conversationId: conversation.Id,
+                                    collectedParams: collectedParams,
+                                    agentSlug: agent.Name,
+                                    ct: ct);
+
+                                // Si la acción devolvió datos para el agente, apendicarlos al replyText
+                                if (actionResult.Success && !string.IsNullOrEmpty(actionResult.DataForAgent))
+                                {
+                                    replyText = string.IsNullOrEmpty(replyText)
+                                        ? actionResult.DataForAgent
+                                        : $"{replyText}\n\n{actionResult.DataForAgent}";
+                                }
+                                // Si falló con mensaje controlado, usarlo como respuesta
+                                else if (!actionResult.Success && !string.IsNullOrEmpty(actionResult.ErrorMessage))
+                                {
+                                    replyText = string.IsNullOrEmpty(replyText)
+                                        ? actionResult.ErrorMessage
+                                        : $"{replyText}\n\n{actionResult.ErrorMessage}";
+                                }
+
+                                // Si la acción pidió escalar, forzar ShouldEscalate en la respuesta
+                                if (actionResult.ShouldEscalate)
+                                {
+                                    agentResponse = agentResponse with { ShouldEscalate = true };
+                                }
+
+                                // Action Trigger Protocol Fase 4: si la acción se ejecutó con éxito,
+                                // persistir el resultado en Redis para que esté disponible en el
+                                // siguiente turno (Flujo D) y auditar la ejecución con GestionEvent.
+                                if (actionResult.Success)
+                                {
+                                    lastActionForPersist = new AgentFlow.Domain.Webhooks.LastActionResult(
+                                        Slug: actionSlug,
+                                        DataForAgent: actionResult.DataForAgent,
+                                        ExecutedAt: DateTime.UtcNow);
+
+                                    try
+                                    {
+                                        var notes = actionResult.DataForAgent ?? $"Acción {actionSlug} ejecutada.";
+                                        if (notes.Length > 400) notes = notes[..400];
+
+                                        await conversations.AddGestionEventAsync(new AgentFlow.Domain.Entities.GestionEvent
+                                        {
+                                            Id = Guid.NewGuid(),
+                                            ConversationId = conversation.Id,
+                                            Result = AgentFlow.Domain.Enums.GestionResult.Pending,
+                                            Origin = $"agent:action:{actionSlug.ToLowerInvariant()}",
+                                            Notes = notes,
+                                            OccurredAt = DateTime.UtcNow
+                                        }, ct);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        logger.LogWarning(ex, "[ATP] No se pudo registrar GestionEvent para {ActionSlug}", actionSlug);
+                                    }
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                logger.LogError(ex, "[ATP] Error ejecutando acción {ActionSlug}", actionSlug);
+                            }
                         }
                     }
                 }
@@ -629,7 +734,12 @@ public class ProcessIncomingMessageHandler(
                 ActiveAgentSlug: brainAgentSlug,
                 IntentHistory: null,
                 ValidationState: null,
-                EscalatedAt: null
+                EscalatedAt: null,
+                // Action Trigger Protocol Fase 4 — consume-on-read:
+                // Si este turno produjo un nuevo LastActionResult, persistirlo.
+                // Si no, el valor queda null — el del turno anterior (que ya se
+                // inyectó al prompt en este turno) no se propaga a otro más.
+                LastActionResult: lastActionForPersist
             ), TimeSpan.FromHours(72), ct);
         }
         catch { }
@@ -650,6 +760,12 @@ public class ProcessIncomingMessageHandler(
     private static readonly System.Text.RegularExpressions.Regex ActionTagRegex =
         new(@"\[ACTION:([A-Z_][A-Z0-9_]*)\]", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
+    // Action Trigger Protocol — Fase 3: [PARAM:nombre=valor]
+    // Permite: letras, dígitos y guiones bajos en el nombre; cualquier cosa que no sea ']' en el valor.
+    // El valor "null" (literal) se interpreta como C# null en ExtractActionParams.
+    private static readonly System.Text.RegularExpressions.Regex ParamTagRegex =
+        new(@"\[PARAM:(\w+)=([^\]]*)\]", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     /// <summary>
     /// Extrae el slug de una acción del texto del agente.
     /// Formato esperado: [ACTION:SEND_PAYMENT_LINK]
@@ -663,11 +779,50 @@ public class ProcessIncomingMessageHandler(
     }
 
     /// <summary>
+    /// Action Trigger Protocol — Fase 3.
+    /// Extrae todos los [PARAM:nombre=valor] del texto del agente. El valor "null"
+    /// (literal, sin comillas) se interpreta como C# null. Los valores se pasan tal
+    /// cual al PayloadBuilder, que aplicará coerción por dataType del InputSchema.
+    /// </summary>
+    private static Dictionary<string, string?> ExtractActionParams(string? text)
+    {
+        var result = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(text)) return result;
+
+        foreach (System.Text.RegularExpressions.Match m in ParamTagRegex.Matches(text))
+        {
+            var name = m.Groups[1].Value;
+            var value = m.Groups[2].Value.Trim();
+            // Placeholder "<valor confirmado>" que el agente podría dejar si no reemplazó: lo tratamos como vacío.
+            if (value.StartsWith('<') && value.EndsWith('>'))
+                value = string.Empty;
+            result[name] = string.Equals(value, "null", StringComparison.OrdinalIgnoreCase) || value.Length == 0
+                ? null
+                : value;
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Elimina el tag [ACTION:xxx] del texto para que el cliente no lo vea.
+    /// Nota: conservado por retrocompat. Nuevos callers deben usar RemoveAllActionTags.
     /// </summary>
     private static string RemoveActionTag(string text)
     {
         if (string.IsNullOrEmpty(text)) return text;
         return ActionTagRegex.Replace(text, "").Trim();
+    }
+
+    /// <summary>
+    /// Action Trigger Protocol — Fase 3.
+    /// Limpia del texto visible al cliente tanto [ACTION:xxx] como todos los [PARAM:k=v].
+    /// </summary>
+    private static string RemoveAllActionTags(string text)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        var noAction = ActionTagRegex.Replace(text, "");
+        var noParams = ParamTagRegex.Replace(noAction, "");
+        return noParams.Trim();
     }
 }
