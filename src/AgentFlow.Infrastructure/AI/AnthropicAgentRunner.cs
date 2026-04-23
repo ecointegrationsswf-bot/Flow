@@ -218,6 +218,7 @@ public class AnthropicAgentRunner(
         // en cache entre turnos de la misma campaña.
         if (req.ReferenceDocuments is { Count: > 0 })
         {
+            Console.WriteLine($"[RefDocs] Intentando cargar {req.ReferenceDocuments.Count} documento(s) de referencia");
             var refContent = new List<ContentBase>();
             var loadedNames = new List<string>();
 
@@ -249,7 +250,12 @@ public class AnthropicAgentRunner(
                 var namesList = string.Join(", ", loadedNames);
                 refContent.Add(new TextContent
                 {
-                    Text = $"Estos documentos ({loadedNames.Count}) son material de referencia del maestro de campaña: {namesList}. Úsalos como contexto para responder al cliente cuando sean relevantes. No los menciones explícitamente salvo que el cliente pregunte por sus contenidos."
+                    Text =
+                        $"A continuación se adjuntan {loadedNames.Count} documento(s) PDF como material de referencia oficial del maestro de campaña ({namesList}). " +
+                        "INSTRUCCIONES SOBRE ESTOS DOCUMENTOS:\n" +
+                        "1. Cuando el cliente haga cualquier pregunta cuya respuesta esté dentro de estos documentos, RESPÓNDELA usando la información del documento, aunque parezca no relacionada con la campaña. Ese es el propósito de cargarlos.\n" +
+                        "2. Cita datos concretos del documento (nombres, fechas, cifras, definiciones) con naturalidad, sin decir 'según el documento' ni leer literalmente.\n" +
+                        "3. Si la pregunta no tiene respuesta en los documentos ni en el contexto de la campaña, dilo con honestidad y reconduce al tema principal."
                 });
 
                 messages.Add(new Anthropic.SDK.Messaging.Message
@@ -392,9 +398,13 @@ public class AnthropicAgentRunner(
 
         try
         {
+            // Encode espacios y otros caracteres no-URL-safe en el path antes de descargar.
+            // Azure a veces devuelve la URL con espacios literales y HttpClient
+            // no los codifica automáticamente.
+            var safeUrl = EncodeBlobUrl(blobUrl);
             var http = httpClientFactory.CreateClient();
             http.Timeout = TimeSpan.FromSeconds(30);
-            var bytes = await http.GetByteArrayAsync(blobUrl, ct);
+            var bytes = await http.GetByteArrayAsync(safeUrl, ct);
 
             // Verificar magic bytes de PDF (%PDF-)
             if (bytes.Length < 4 ||
@@ -412,6 +422,26 @@ public class AnthropicAgentRunner(
         {
             Console.WriteLine($"[RefDocs] Error descargando {blobUrl}: {ex.Message}");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Codifica un blob URL preservando scheme/host y encodeando solo los segmentos del path.
+    /// Necesario porque Azure puede devolver URLs con espacios literales que HttpClient
+    /// no codifica automáticamente al hacer GetByteArrayAsync.
+    /// </summary>
+    private static string EncodeBlobUrl(string rawUrl)
+    {
+        try
+        {
+            var u = new Uri(rawUrl);
+            var encodedPath = string.Join('/', u.AbsolutePath.Split('/')
+                .Select(seg => string.IsNullOrEmpty(seg) ? seg : Uri.EscapeDataString(Uri.UnescapeDataString(seg))));
+            return $"{u.Scheme}://{u.Host}{(u.IsDefaultPort ? "" : ":" + u.Port)}{encodedPath}{u.Query}";
+        }
+        catch
+        {
+            return rawUrl;
         }
     }
 

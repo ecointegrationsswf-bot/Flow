@@ -15,6 +15,10 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+// Base URL del API — en producción es el dominio del backend (distinto al del frontend).
+// El iframe del PdfViewer NO pasa por axios, así que hay que construir la URL absoluta.
+const apiBase = (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/$/, '')
+
 export function CampaignTemplateDocumentsSection({ templateId }: { templateId: string }) {
   const tenantId = useAuthStore((s) => s.tenantId)
   const { data: docs, isLoading } = useCampaignTemplateDocuments(templateId)
@@ -168,12 +172,12 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
         onClose={() => setPreviewDoc(null)}
         previewUrl={
           previewDoc
-            ? `/api/campaign-templates/${templateId}/documents/${previewDoc.id}/preview?tenantId=${tenantId}`
+            ? `${apiBase}/campaign-templates/${templateId}/documents/${previewDoc.id}/preview?tenantId=${tenantId}`
             : ''
         }
         downloadUrl={
           previewDoc
-            ? `/api/campaign-templates/${templateId}/documents/${previewDoc.id}/download?tenantId=${tenantId}`
+            ? `${apiBase}/campaign-templates/${templateId}/documents/${previewDoc.id}/download?tenantId=${tenantId}`
             : ''
         }
         fileName={previewDoc?.fileName ?? ''}
