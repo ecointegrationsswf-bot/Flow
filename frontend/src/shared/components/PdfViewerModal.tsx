@@ -1,13 +1,19 @@
 import { useEffect, useRef, useState } from 'react'
-import { X, Download, ZoomIn, ZoomOut, Maximize2, Loader2 } from 'lucide-react'
+import { X, Download, ZoomIn, ZoomOut, Maximize2, Loader2, AlertCircle } from 'lucide-react'
+import { api } from '@/shared/api/client'
 
 interface PdfViewerModalProps {
   open: boolean
   onClose: () => void
-  /** URL para ver el PDF (inline) */
-  previewUrl: string
-  /** URL para descargar el PDF */
-  downloadUrl: string
+  /**
+   * Path relativo al API base para obtener el PDF (preview inline).
+   * El modal se encarga de hacer fetch via axios (con auth + tenant header),
+   * crear un blob URL y pasarlo al iframe. Esto evita problemas de cross-origin
+   * y mixed content que tiene un iframe apuntando directo al backend.
+   */
+  previewPath: string
+  /** Path para descarga como attachment (mismo patrón que previewPath). */
+  downloadPath: string
   fileName: string
   fileSize?: string
 }
@@ -15,26 +21,63 @@ interface PdfViewerModalProps {
 export function PdfViewerModal({
   open,
   onClose,
-  previewUrl,
-  downloadUrl,
+  previewPath,
+  downloadPath,
   fileName,
   fileSize,
 }: PdfViewerModalProps) {
   const dialogRef = useRef<HTMLDialogElement>(null)
   const [loading, setLoading] = useState(true)
   const [scale, setScale] = useState(100)
+  const [blobUrl, setBlobUrl] = useState<string>('')
+  const [error, setError] = useState<string>('')
 
   useEffect(() => {
     const el = dialogRef.current
     if (!el) return
     if (open && !el.open) {
       setLoading(true)
+      setError('')
       setScale(100)
       el.showModal()
     } else if (!open && el.open) {
       el.close()
     }
   }, [open])
+
+  // Cuando se abre con un nuevo path, descargamos el PDF via axios (lleva auth
+  // + tenant header) y lo convertimos a blob URL. El iframe lo consume desde
+  // el mismo origin y sin problemas de esquema.
+  useEffect(() => {
+    if (!open || !previewPath) return
+    let cancelled = false
+    let currentBlobUrl = ''
+
+    setLoading(true)
+    setError('')
+    setBlobUrl('')
+
+    api
+      .get(previewPath, { responseType: 'blob' })
+      .then((res) => {
+        if (cancelled) return
+        const blob = new Blob([res.data], { type: 'application/pdf' })
+        currentBlobUrl = URL.createObjectURL(blob)
+        setBlobUrl(currentBlobUrl)
+        setLoading(false)
+      })
+      .catch((err) => {
+        if (cancelled) return
+        console.error('[PdfViewer] error descargando PDF', err)
+        setError('No se pudo cargar el documento. Intenta descargarlo.')
+        setLoading(false)
+      })
+
+    return () => {
+      cancelled = true
+      if (currentBlobUrl) URL.revokeObjectURL(currentBlobUrl)
+    }
+  }, [open, previewPath])
 
   // Cerrar con Escape
   useEffect(() => {
@@ -45,13 +88,21 @@ export function PdfViewerModal({
     return () => window.removeEventListener('keydown', handler)
   }, [open, onClose])
 
-  const handleDownload = () => {
-    const a = document.createElement('a')
-    a.href = downloadUrl
-    a.download = fileName
-    document.body.appendChild(a)
-    a.click()
-    document.body.removeChild(a)
+  const handleDownload = async () => {
+    try {
+      const res = await api.get(downloadPath, { responseType: 'blob' })
+      const blob = new Blob([res.data], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fileName
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch (e) {
+      console.error('[PdfViewer] error descargando', e)
+    }
   }
 
   const zoomIn = () => setScale((s) => Math.min(s + 25, 200))
@@ -137,20 +188,29 @@ export function PdfViewerModal({
               </div>
             </div>
           )}
-          <div
-            className="flex min-h-full items-start justify-center p-4"
-            style={{ transform: `scale(${scale / 100})`, transformOrigin: 'top center' }}
-          >
-            <iframe
-              src={previewUrl}
-              title={fileName}
-              className="h-[calc(100vh-60px)] w-full max-w-4xl rounded bg-white shadow-2xl"
-              style={{
-                minHeight: scale > 100 ? `${100 / (scale / 100)}vh` : undefined,
-              }}
-              onLoad={() => setLoading(false)}
-            />
-          </div>
+          {error && !loading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-gray-900">
+              <div className="flex flex-col items-center gap-3 text-center">
+                <AlertCircle className="h-8 w-8 text-red-500" />
+                <p className="text-sm text-gray-300">{error}</p>
+              </div>
+            </div>
+          )}
+          {!loading && !error && blobUrl && (
+            <div
+              className="flex min-h-full items-start justify-center p-4"
+              style={{ transform: `scale(${scale / 100})`, transformOrigin: 'top center' }}
+            >
+              <iframe
+                src={blobUrl}
+                title={fileName}
+                className="h-[calc(100vh-60px)] w-full max-w-4xl rounded bg-white shadow-2xl"
+                style={{
+                  minHeight: scale > 100 ? `${100 / (scale / 100)}vh` : undefined,
+                }}
+              />
+            </div>
+          )}
         </div>
       </div>
     </dialog>

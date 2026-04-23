@@ -7,7 +7,6 @@ import {
 } from '@/shared/hooks/useCampaignTemplateDocuments'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { PdfViewerModal } from '@/shared/components/PdfViewerModal'
-import { useAuthStore } from '@/shared/stores/authStore'
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
@@ -15,12 +14,7 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-// Base URL del API — en producción es el dominio del backend (distinto al del frontend).
-// El iframe del PdfViewer NO pasa por axios, así que hay que construir la URL absoluta.
-const apiBase = (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/$/, '')
-
 export function CampaignTemplateDocumentsSection({ templateId }: { templateId: string }) {
-  const tenantId = useAuthStore((s) => s.tenantId)
   const { data: docs, isLoading } = useCampaignTemplateDocuments(templateId)
   const uploadMutation = useUploadCampaignTemplateDocument(templateId)
   const deleteMutation = useDeleteCampaignTemplateDocument(templateId)
@@ -170,14 +164,14 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
       <PdfViewerModal
         open={!!previewDoc}
         onClose={() => setPreviewDoc(null)}
-        previewUrl={
+        previewPath={
           previewDoc
-            ? `${apiBase}/campaign-templates/${templateId}/documents/${previewDoc.id}/preview?tenantId=${tenantId}`
+            ? `/campaign-templates/${templateId}/documents/${previewDoc.id}/preview`
             : ''
         }
-        downloadUrl={
+        downloadPath={
           previewDoc
-            ? `${apiBase}/campaign-templates/${templateId}/documents/${previewDoc.id}/download?tenantId=${tenantId}`
+            ? `/campaign-templates/${templateId}/documents/${previewDoc.id}/download`
             : ''
         }
         fileName={previewDoc?.fileName ?? ''}

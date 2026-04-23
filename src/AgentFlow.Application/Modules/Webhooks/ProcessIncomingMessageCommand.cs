@@ -63,6 +63,7 @@ public class ProcessIncomingMessageHandler(
     public async Task<ProcessIncomingMessageResult> Handle(
         ProcessIncomingMessageCommand cmd, CancellationToken ct)
     {
+        Console.WriteLine($"[WH-INBOUND] tenant={cmd.TenantId} from={cmd.FromPhone} msg=\"{cmd.Message?.Substring(0, Math.Min(80, cmd.Message?.Length ?? 0))}\"");
         // ── BRAIN GATE: si el tenant tiene el Cerebro activado, usar BrainService ──
         var tenant = await agents.GetTenantByIdAsync(cmd.TenantId, ct);
         if (tenant?.BrainEnabled == true)
@@ -510,6 +511,8 @@ public class ProcessIncomingMessageHandler(
                             .Select(d => new AgentFlow.Domain.Interfaces.ReferenceDocument(d.FileName, d.BlobUrl))
                             .ToList()
                         : null;
+
+                    Console.WriteLine($"[WH-REFDOCS] template={campaignTemplate?.Id} templateName={campaignTemplate?.Name} docs={campaignTemplate?.Documents?.Count ?? -1} refDocsPassed={referenceDocs?.Count ?? 0}");
 
                     agentResponse = await agentRunner.RunAsync(new AgentRunRequest(
                         Agent: agent, Conversation: conversation,
