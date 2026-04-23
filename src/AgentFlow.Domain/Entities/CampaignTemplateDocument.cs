@@ -1,9 +1,14 @@
 namespace AgentFlow.Domain.Entities;
 
-public class AgentDocument
+/// <summary>
+/// Documento de referencia (PDF) asociado a un maestro de campaña.
+/// Los PDFs se persisten en Azure Blob Storage y el agente los usa como
+/// contexto al responder mensajes de la campaña.
+/// </summary>
+public class CampaignTemplateDocument
 {
     public Guid Id { get; set; }
-    public Guid AgentDefinitionId { get; set; }
+    public Guid CampaignTemplateId { get; set; }
     public Guid TenantId { get; set; }
     public string FileName { get; set; } = string.Empty;
     public string BlobUrl { get; set; } = string.Empty;
@@ -11,5 +16,5 @@ public class AgentDocument
     public long FileSizeBytes { get; set; }
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
 
-    public AgentDefinition AgentDefinition { get; set; } = null!;
+    public CampaignTemplate CampaignTemplate { get; set; } = null!;
 }

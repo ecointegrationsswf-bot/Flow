@@ -86,4 +86,7 @@ public class CampaignTemplate
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+
+    // Documentos de referencia (PDFs) — el agente los usa como contexto al responder.
+    public List<CampaignTemplateDocument> Documents { get; set; } = [];
 }

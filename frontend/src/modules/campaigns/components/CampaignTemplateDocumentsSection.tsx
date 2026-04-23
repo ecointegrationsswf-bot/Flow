@@ -1,6 +1,10 @@
 import { useCallback, useRef, useState } from 'react'
 import { FileText, Upload, Trash2, AlertCircle, Eye } from 'lucide-react'
-import { useAgentDocuments, useUploadDocument, useDeleteDocument } from '@/shared/hooks/useAgentDocuments'
+import {
+  useCampaignTemplateDocuments,
+  useUploadCampaignTemplateDocument,
+  useDeleteCampaignTemplateDocument,
+} from '@/shared/hooks/useCampaignTemplateDocuments'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { PdfViewerModal } from '@/shared/components/PdfViewerModal'
 import { useAuthStore } from '@/shared/stores/authStore'
@@ -11,11 +15,11 @@ function formatSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
-export function AgentDocumentsSection({ agentId }: { agentId: string }) {
+export function CampaignTemplateDocumentsSection({ templateId }: { templateId: string }) {
   const tenantId = useAuthStore((s) => s.tenantId)
-  const { data: docs, isLoading } = useAgentDocuments(agentId)
-  const uploadMutation = useUploadDocument(agentId)
-  const deleteMutation = useDeleteDocument(agentId)
+  const { data: docs, isLoading } = useCampaignTemplateDocuments(templateId)
+  const uploadMutation = useUploadCampaignTemplateDocument(templateId)
+  const deleteMutation = useDeleteCampaignTemplateDocument(templateId)
 
   const fileRef = useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -49,7 +53,7 @@ export function AgentDocumentsSection({ agentId }: { agentId: string }) {
     <section className="rounded-lg bg-white p-5 shadow-sm">
       <h2 className="mb-4 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
       <p className="mb-4 text-xs text-gray-500">
-        Sube archivos PDF que el agente usara como contexto para responder. Maximo 10 MB por archivo.
+        Sube archivos PDF que el agente usara como contexto para responder en esta campana. Maximo 10 MB por archivo.
       </p>
 
       {/* Drop zone */}
@@ -154,7 +158,7 @@ export function AgentDocumentsSection({ agentId }: { agentId: string }) {
         </ul>
       ) : (
         <p className="mt-4 text-center text-xs text-gray-400">
-          No hay documentos asociados a este agente.
+          No hay documentos asociados a este maestro de campana.
         </p>
       )}
 
@@ -164,12 +168,12 @@ export function AgentDocumentsSection({ agentId }: { agentId: string }) {
         onClose={() => setPreviewDoc(null)}
         previewUrl={
           previewDoc
-            ? `/api/agents/${agentId}/documents/${previewDoc.id}/preview?tenantId=${tenantId}`
+            ? `/api/campaign-templates/${templateId}/documents/${previewDoc.id}/preview?tenantId=${tenantId}`
             : ''
         }
         downloadUrl={
           previewDoc
-            ? `/api/agents/${agentId}/documents/${previewDoc.id}/download?tenantId=${tenantId}`
+            ? `/api/campaign-templates/${templateId}/documents/${previewDoc.id}/download?tenantId=${tenantId}`
             : ''
         }
         fileName={previewDoc?.fileName ?? ''}

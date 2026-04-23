@@ -1,13 +1,12 @@
 import { useNavigate, useParams } from 'react-router-dom'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft, FileText } from 'lucide-react'
+import { ArrowLeft } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { useAgent, useCreateAgent, useUpdateAgent } from '@/shared/hooks/useAgents'
 import { useWhatsAppLines } from '@/shared/hooks/useWhatsAppLines'
 import { agentSchema, agentDefaults, type AgentFormData } from '../schemas/agentSchema'
-import { AgentDocumentsSection } from './AgentDocumentsSection'
 import type { ChannelType } from '@/shared/types'
 
 const channelOptions: ChannelType[] = ['WhatsApp', 'Email', 'Sms']
@@ -123,19 +122,6 @@ export function AgentFormPage() {
             </div>
           </div>
         </section>
-
-        {/* Seccion 2.5: Documentos de referencia */}
-        {isEdit && id ? (
-          <AgentDocumentsSection agentId={id} />
-        ) : (
-          <section className="rounded-lg bg-white p-5 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <FileText className="h-4 w-4" />
-              <p>Guarda el agente primero para poder adjuntar documentos PDF.</p>
-            </div>
-          </section>
-        )}
 
         {/* Seccion 3: Canales y horario */}
         <section className="rounded-lg bg-white p-5 shadow-sm">

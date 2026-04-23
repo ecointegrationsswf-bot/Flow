@@ -2,27 +2,32 @@ using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Persistence;
 using AgentFlow.Infrastructure.Storage;
-using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
+/// <summary>
+/// Endpoints para gestionar los PDFs de referencia de un maestro de campaña.
+/// Los documentos se almacenan en Azure Blob Storage bajo la ruta
+/// {tenantId}/campaign-templates/{templateId}/{Guid}_{fileName}.
+/// El agente los usa como contexto al responder mensajes de la campaña.
+/// </summary>
 [ApiController]
 // [Authorize(Roles = "Admin,Supervisor")] // TODO: habilitar cuando auth esté configurado
-[Route("api/agents/{agentId:guid}/documents")]
-public class AgentDocumentsController(
+[Route("api/campaign-templates/{templateId:guid}/documents")]
+public class CampaignTemplateDocumentsController(
     ITenantContext tenantCtx,
     AgentFlowDbContext db,
     IBlobStorageService blobStorage) : ControllerBase
 {
     [HttpGet]
-    public async Task<IActionResult> List(Guid agentId, CancellationToken ct)
+    public async Task<IActionResult> List(Guid templateId, CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
 
-        var docs = await db.AgentDocuments
-            .Where(d => d.AgentDefinitionId == agentId && d.TenantId == tenantId)
+        var docs = await db.CampaignTemplateDocuments
+            .Where(d => d.CampaignTemplateId == templateId && d.TenantId == tenantId)
             .OrderByDescending(d => d.UploadedAt)
             .Select(d => new
             {
@@ -40,28 +45,28 @@ public class AgentDocumentsController(
 
     [HttpPost]
     [RequestSizeLimit(10 * 1024 * 1024)] // 10 MB
-    public async Task<IActionResult> Upload(Guid agentId, IFormFile file, CancellationToken ct)
+    public async Task<IActionResult> Upload(Guid templateId, IFormFile file, CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
 
         if (file.ContentType != "application/pdf")
             return BadRequest(new { error = "Solo se permiten archivos PDF." });
 
-        var agent = await db.AgentDefinitions
-            .FirstOrDefaultAsync(a => a.Id == agentId && a.TenantId == tenantId, ct);
+        var template = await db.CampaignTemplates
+            .FirstOrDefaultAsync(t => t.Id == templateId && t.TenantId == tenantId, ct);
 
-        if (agent is null)
-            return NotFound(new { error = "Agente no encontrado." });
+        if (template is null)
+            return NotFound(new { error = "Maestro de campaña no encontrado." });
 
-        var blobPath = $"{tenantId}/{agentId}/{Guid.NewGuid()}_{file.FileName}";
+        var blobPath = $"{tenantId}/campaign-templates/{templateId}/{Guid.NewGuid()}_{file.FileName}";
 
         await using var stream = file.OpenReadStream();
         var blobUrl = await blobStorage.UploadAsync(blobPath, stream, file.ContentType, ct);
 
-        var doc = new AgentDocument
+        var doc = new CampaignTemplateDocument
         {
             Id = Guid.NewGuid(),
-            AgentDefinitionId = agentId,
+            CampaignTemplateId = templateId,
             TenantId = tenantId,
             FileName = file.FileName,
             BlobUrl = blobUrl,
@@ -70,7 +75,7 @@ public class AgentDocumentsController(
             UploadedAt = DateTime.UtcNow,
         };
 
-        db.AgentDocuments.Add(doc);
+        db.CampaignTemplateDocuments.Add(doc);
         await db.SaveChangesAsync(ct);
 
         return Ok(new
@@ -84,16 +89,14 @@ public class AgentDocumentsController(
         });
     }
 
-    /// <summary>
-    /// Sirve el PDF para visualizacion en el navegador (inline).
-    /// </summary>
+    /// <summary>Sirve el PDF para visualización en el navegador (inline).</summary>
     [HttpGet("{docId:guid}/preview")]
-    public async Task<IActionResult> Preview(Guid agentId, Guid docId, CancellationToken ct)
+    public async Task<IActionResult> Preview(Guid templateId, Guid docId, CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
 
-        var doc = await db.AgentDocuments
-            .FirstOrDefaultAsync(d => d.Id == docId && d.AgentDefinitionId == agentId && d.TenantId == tenantId, ct);
+        var doc = await db.CampaignTemplateDocuments
+            .FirstOrDefaultAsync(d => d.Id == docId && d.CampaignTemplateId == templateId && d.TenantId == tenantId, ct);
 
         if (doc is null)
             return NotFound(new { error = "Documento no encontrado." });
@@ -105,16 +108,14 @@ public class AgentDocumentsController(
         return File(content, contentType);
     }
 
-    /// <summary>
-    /// Descarga el PDF como attachment.
-    /// </summary>
+    /// <summary>Descarga el PDF como attachment.</summary>
     [HttpGet("{docId:guid}/download")]
-    public async Task<IActionResult> Download(Guid agentId, Guid docId, CancellationToken ct)
+    public async Task<IActionResult> Download(Guid templateId, Guid docId, CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
 
-        var doc = await db.AgentDocuments
-            .FirstOrDefaultAsync(d => d.Id == docId && d.AgentDefinitionId == agentId && d.TenantId == tenantId, ct);
+        var doc = await db.CampaignTemplateDocuments
+            .FirstOrDefaultAsync(d => d.Id == docId && d.CampaignTemplateId == templateId && d.TenantId == tenantId, ct);
 
         if (doc is null)
             return NotFound(new { error = "Documento no encontrado." });
@@ -126,12 +127,12 @@ public class AgentDocumentsController(
     }
 
     [HttpDelete("{docId:guid}")]
-    public async Task<IActionResult> Delete(Guid agentId, Guid docId, CancellationToken ct)
+    public async Task<IActionResult> Delete(Guid templateId, Guid docId, CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
 
-        var doc = await db.AgentDocuments
-            .FirstOrDefaultAsync(d => d.Id == docId && d.AgentDefinitionId == agentId && d.TenantId == tenantId, ct);
+        var doc = await db.CampaignTemplateDocuments
+            .FirstOrDefaultAsync(d => d.Id == docId && d.CampaignTemplateId == templateId && d.TenantId == tenantId, ct);
 
         if (doc is null)
             return NotFound(new { error = "Documento no encontrado." });
@@ -139,7 +140,7 @@ public class AgentDocumentsController(
         var blobPath = ExtractBlobPath(doc.BlobUrl);
         await blobStorage.DeleteAsync(blobPath, ct);
 
-        db.AgentDocuments.Remove(doc);
+        db.CampaignTemplateDocuments.Remove(doc);
         await db.SaveChangesAsync(ct);
 
         return NoContent();
@@ -152,16 +153,15 @@ public class AgentDocumentsController(
     /// </summary>
     private static string ExtractBlobPath(string blobUrl)
     {
-        // URL: https://account.blob.core.windows.net/container/tenant/agent/file.pdf
         const string marker = ".blob.core.windows.net/";
         var markerIdx = blobUrl.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
         if (markerIdx < 0) return blobUrl;
 
-        var afterHost = blobUrl[(markerIdx + marker.Length)..]; // container/tenant/agent/file.pdf
+        var afterHost = blobUrl[(markerIdx + marker.Length)..];
         var slashIdx = afterHost.IndexOf('/');
         if (slashIdx < 0) return afterHost;
 
-        var blobPath = afterHost[(slashIdx + 1)..]; // tenant/agent/file.pdf
+        var blobPath = afterHost[(slashIdx + 1)..];
         return Uri.UnescapeDataString(blobPath);
     }
 }

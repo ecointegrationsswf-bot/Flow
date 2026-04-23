@@ -140,7 +140,7 @@ export interface AppUser {
   lastLoginAt?: string
 }
 
-export interface AgentDocument {
+export interface CampaignTemplateDocument {
   id: string
   fileName: string
   blobUrl: string

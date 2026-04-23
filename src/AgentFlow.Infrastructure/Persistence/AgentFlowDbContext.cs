@@ -13,7 +13,7 @@ public class AgentFlowDbContext(DbContextOptions<AgentFlowDbContext> options) : 
     public DbSet<Message> Messages => Set<Message>();
     public DbSet<GestionEvent> GestionEvents => Set<GestionEvent>();
     public DbSet<AppUser> AppUsers => Set<AppUser>();
-    public DbSet<AgentDocument> AgentDocuments => Set<AgentDocument>();
+    public DbSet<CampaignTemplateDocument> CampaignTemplateDocuments => Set<CampaignTemplateDocument>();
     public DbSet<ConversationLabel> ConversationLabels => Set<ConversationLabel>();
     public DbSet<WhatsAppLine> WhatsAppLines => Set<WhatsAppLine>();
     public DbSet<SuperAdmin> SuperAdmins => Set<SuperAdmin>();

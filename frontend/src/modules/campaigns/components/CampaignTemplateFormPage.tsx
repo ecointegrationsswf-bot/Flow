@@ -22,6 +22,7 @@ import { ArrowLeft, Plus, X, Clock, Zap, FileText, Webhook, Mail, MessageSquare,
 import { useAgents } from '@/shared/hooks/useAgents'
 import { useLabels } from '@/shared/hooks/useLabels'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
+import { CampaignTemplateDocumentsSection } from './CampaignTemplateDocumentsSection'
 import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
 import {
   useCampaignTemplate,
@@ -748,6 +749,19 @@ export function CampaignTemplateFormPage() {
             </div>
           )}
         </section>
+
+        {/* Seccion 8: Documentos de referencia */}
+        {isEdit && id ? (
+          <CampaignTemplateDocumentsSection templateId={id} />
+        ) : (
+          <section className="rounded-lg bg-white p-5 shadow-sm">
+            <h2 className="mb-2 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
+            <div className="flex items-center gap-2 text-xs text-gray-500">
+              <FileText className="h-4 w-4" />
+              <p>Guarda el maestro primero para poder adjuntar documentos PDF.</p>
+            </div>
+          </section>
+        )}
 
         {/* Actions */}
         <div className="flex justify-end gap-3">
