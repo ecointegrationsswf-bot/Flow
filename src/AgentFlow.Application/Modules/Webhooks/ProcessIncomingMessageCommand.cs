@@ -503,6 +503,14 @@ public class ProcessIncomingMessageHandler(
                         tenantId: cmd.TenantId,
                         ct: ct);
 
+                    // PDFs de referencia del maestro de campaña — se inyectan al prompt
+                    // para que el agente los use como contexto al responder.
+                    var referenceDocs = campaignTemplate?.Documents is { Count: > 0 }
+                        ? campaignTemplate.Documents
+                            .Select(d => new AgentFlow.Domain.Interfaces.ReferenceDocument(d.FileName, d.BlobUrl))
+                            .ToList()
+                        : null;
+
                     agentResponse = await agentRunner.RunAsync(new AgentRunRequest(
                         Agent: agent, Conversation: conversation,
                         IncomingMessage: cmd.Message, RecentHistory: recentHistorySnapshot,
@@ -512,7 +520,8 @@ public class ProcessIncomingMessageHandler(
                         AttentionDays: attentionDays,
                         AttentionStartTime: attentionStart, AttentionEndTime: attentionEnd,
                         ActionsBlock: actionCatalog.Block,
-                        LastActionResult: lastActionForPrompt
+                        LastActionResult: lastActionForPrompt,
+                        ReferenceDocuments: referenceDocs
                     ), ct);
                     replyText = agentResponse.ReplyText;
 

@@ -3,6 +3,7 @@ using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Interfaces;
 using Anthropic.SDK;
 using Anthropic.SDK.Messaging;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace AgentFlow.Infrastructure.AI;
 
@@ -18,8 +19,16 @@ public record AnthropicSettings(bool HasGlobalKey);
 public class AnthropicAgentRunner(
     AnthropicClient anthropic,
     AnthropicSettings settings,
-    System.Net.Http.IHttpClientFactory httpClientFactory) : IAgentRunner
+    System.Net.Http.IHttpClientFactory httpClientFactory,
+    IMemoryCache cache) : IAgentRunner
 {
+    // Caché de PDFs de referencia descargados. Clave: BlobUrl. TTL 30 min.
+    // Evita descargar el mismo PDF del maestro de campaña en cada mensaje.
+    private static readonly TimeSpan RefDocCacheTtl = TimeSpan.FromMinutes(30);
+    private const long RefDocMaxBytes = 10L * 1024 * 1024;   // 10 MB por PDF
+    private const int RefDocMaxCount = 5;                    // tope defensivo por turno
+
+
     public async Task<AgentResponse> RunAsync(AgentRunRequest req, CancellationToken ct = default)
     {
         // Si el tenant tiene su propia API key, crear un cliente dedicado para esta petición.
@@ -200,14 +209,72 @@ public class AnthropicAgentRunner(
     private async Task<List<Anthropic.SDK.Messaging.Message>> BuildMessagesAsync(
         AgentRunRequest req, CancellationToken ct)
     {
+        var messages = new List<Anthropic.SDK.Messaging.Message>();
+
+        // ── PDFs de referencia del maestro de campaña ─────────────────────
+        // Se inyectan como un "turno fijo" al inicio: user con los PDFs +
+        // assistant que reconoce haberlos leído. Así el agente los tiene en
+        // contexto durante toda la conversación y Claude puede reusar el prefijo
+        // en cache entre turnos de la misma campaña.
+        if (req.ReferenceDocuments is { Count: > 0 })
+        {
+            var refContent = new List<ContentBase>();
+            var loadedNames = new List<string>();
+
+            var docsToLoad = req.ReferenceDocuments.Take(RefDocMaxCount);
+            foreach (var refDoc in docsToLoad)
+            {
+                var bytes = await GetReferenceDocumentBytesAsync(refDoc.BlobUrl, ct);
+                if (bytes is null || bytes.Length == 0) continue;
+                if (bytes.Length > RefDocMaxBytes)
+                {
+                    Console.WriteLine($"[RefDocs] Omitido {refDoc.FileName} ({bytes.Length / 1024}KB > límite)");
+                    continue;
+                }
+
+                refContent.Add(new DocumentContent
+                {
+                    Source = new DocumentSource
+                    {
+                        Type      = SourceType.base64,
+                        MediaType = "application/pdf",
+                        Data      = Convert.ToBase64String(bytes)
+                    }
+                });
+                loadedNames.Add(refDoc.FileName);
+            }
+
+            if (refContent.Count > 0)
+            {
+                var namesList = string.Join(", ", loadedNames);
+                refContent.Add(new TextContent
+                {
+                    Text = $"Estos documentos ({loadedNames.Count}) son material de referencia del maestro de campaña: {namesList}. Úsalos como contexto para responder al cliente cuando sean relevantes. No los menciones explícitamente salvo que el cliente pregunte por sus contenidos."
+                });
+
+                messages.Add(new Anthropic.SDK.Messaging.Message
+                {
+                    Role = RoleType.User,
+                    Content = refContent
+                });
+                messages.Add(new Anthropic.SDK.Messaging.Message
+                {
+                    Role = RoleType.Assistant,
+                    Content = [new TextContent { Text = "Entendido. He revisado los documentos de referencia y los tendré en cuenta para responder al cliente." }]
+                });
+
+                Console.WriteLine($"[RefDocs] Inyectados {loadedNames.Count} PDFs al contexto: {namesList}");
+            }
+        }
+
         // Historial extendido a 20 mensajes para mantener contexto en conversaciones largas
-        var messages = req.RecentHistory
+        messages.AddRange(req.RecentHistory
             .TakeLast(20)
             .Select(m => new Anthropic.SDK.Messaging.Message
             {
                 Role    = m.IsFromAgent ? RoleType.Assistant : RoleType.User,
                 Content = [new TextContent { Text = StripMediaTag(m.Content) }]
-            }).ToList();
+            }));
 
         // Mensaje actual — construir el bloque de contenido según el tipo de media
         var userContent = new List<ContentBase>();
@@ -309,6 +376,43 @@ public class AnthropicAgentRunner(
         });
 
         return messages;
+    }
+
+    /// <summary>
+    /// Descarga (con cache de 30 min) los bytes de un PDF de referencia desde Azure Blob.
+    /// Devuelve null si la descarga falla — el flujo sigue sin inyectar ese documento.
+    /// </summary>
+    private async Task<byte[]?> GetReferenceDocumentBytesAsync(string blobUrl, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(blobUrl)) return null;
+        var key = $"refdoc:{blobUrl}";
+
+        if (cache.TryGetValue<byte[]>(key, out var cached) && cached is not null)
+            return cached;
+
+        try
+        {
+            var http = httpClientFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(30);
+            var bytes = await http.GetByteArrayAsync(blobUrl, ct);
+
+            // Verificar magic bytes de PDF (%PDF-)
+            if (bytes.Length < 4 ||
+                bytes[0] != 0x25 || bytes[1] != 0x50 ||
+                bytes[2] != 0x44 || bytes[3] != 0x46)
+            {
+                Console.WriteLine($"[RefDocs] {blobUrl} no es un PDF válido, omitiendo");
+                return null;
+            }
+
+            cache.Set(key, bytes, RefDocCacheTtl);
+            return bytes;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[RefDocs] Error descargando {blobUrl}: {ex.Message}");
+            return null;
+        }
     }
 
     /// <summary>Limpia el tag [media:URL] del contenido antes de enviarlo al historial del LLM.</summary>

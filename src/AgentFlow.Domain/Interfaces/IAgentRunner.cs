@@ -25,8 +25,16 @@ public record AgentRunRequest(
     string? AttentionStartTime = null,                  // "HH:mm"
     string? AttentionEndTime = null,                    // "HH:mm"
     string? ActionsBlock = null,                        // Action Trigger Protocol — bloque "ACCIONES DISPONIBLES" preconstruido por IActionPromptBuilder
-    LastActionResult? LastActionResult = null           // Action Trigger Protocol Fase 4 — resultado de acción previa para inyectar al prompt
+    LastActionResult? LastActionResult = null,          // Action Trigger Protocol Fase 4 — resultado de acción previa para inyectar al prompt
+    List<ReferenceDocument>? ReferenceDocuments = null  // PDFs del maestro de campaña que el agente usa como contexto
 );
+
+/// <summary>
+/// Documento de referencia (PDF) que se inyecta al prompt del agente.
+/// Se descarga de BlobUrl, se convierte a base64 y se adjunta como DocumentContent
+/// al inicio del array de mensajes — Claude lo tiene en contexto durante todo el turno.
+/// </summary>
+public record ReferenceDocument(string FileName, string BlobUrl);
 
 public record AgentResponse(
     string ReplyText,
