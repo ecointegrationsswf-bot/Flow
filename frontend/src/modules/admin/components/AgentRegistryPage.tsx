@@ -243,12 +243,16 @@ export function AgentRegistryPage() {
                 <label className="mb-1 block text-sm font-medium text-gray-700">Capacidades (lenguaje natural para Claude) *</label>
                 <textarea
                   value={form.capabilities}
-                  onChange={(e) => setForm({ ...form, capabilities: e.target.value })}
-                  rows={3}
+                  onChange={(e) => setForm({ ...form, capabilities: e.target.value.slice(0, 4000) })}
+                  rows={8}
+                  maxLength={4000}
                   placeholder="Gestiona cobros de seguros, negocia pagos, informa saldos pendientes y fechas de vencimiento."
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
-                <p className="mt-1 text-xs text-gray-400">El clasificador del Cerebro usa esta descripcion para decidir a que agente rutear cada mensaje.</p>
+                <div className="mt-1 flex items-start justify-between gap-3">
+                  <p className="text-xs text-gray-400">El clasificador del Cerebro usa esta descripcion para decidir a que agente rutear cada mensaje.</p>
+                  <p className="shrink-0 text-[10px] text-gray-400">{form.capabilities.length} / 4000</p>
+                </div>
               </div>
 
               <div>

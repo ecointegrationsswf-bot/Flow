@@ -13,7 +13,7 @@ public class AgentRegistryEntryConfiguration : IEntityTypeConfiguration<AgentReg
 
         b.Property(r => r.Slug).HasMaxLength(50).IsRequired();
         b.Property(r => r.Name).HasMaxLength(100).IsRequired();
-        b.Property(r => r.Capabilities).HasMaxLength(500).IsRequired();
+        b.Property(r => r.Capabilities).HasMaxLength(4000).IsRequired();
 
         b.HasOne(r => r.Tenant).WithMany().HasForeignKey(r => r.TenantId).OnDelete(DeleteBehavior.Cascade);
         b.HasOne(r => r.CampaignTemplate).WithMany().HasForeignKey(r => r.CampaignTemplateId).OnDelete(DeleteBehavior.NoAction);
