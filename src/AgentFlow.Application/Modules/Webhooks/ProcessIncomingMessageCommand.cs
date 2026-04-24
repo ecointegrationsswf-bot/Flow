@@ -369,13 +369,17 @@ public class ProcessIncomingMessageHandler(
                 agent = await agents.GetByIdAsync(agentId.Value, ct);
             agent ??= await agents.GetFirstActiveByTenantAsync(cmd.TenantId, ct);
 
-            // Resolver templateId: del Cerebro directo, o desde conversation.CampaignId
-            Guid? templateIdToLoad = brainCampaignTemplateId;
-            if (templateIdToLoad is null && conversation.CampaignId.HasValue)
+            // Resolver templateId: PRIORIDAD al template de la campaña activa porque
+            // ese contexto es el más específico del cliente (system prompt, PDFs de
+            // referencia, horarios, etc.). Solo si no hay campaña se usa el template
+            // que el Cerebro/AgentRegistry mapeó al slug (flujo inbound libre).
+            Guid? templateIdToLoad = null;
+            if (conversation.CampaignId.HasValue)
             {
                 var campaign = await conversations.GetCampaignAsync(conversation.CampaignId.Value, ct);
                 templateIdToLoad = campaign?.CampaignTemplateId;
             }
+            templateIdToLoad ??= brainCampaignTemplateId;
 
             CampaignTemplate? campaignTemplate = templateIdToLoad.HasValue
                 ? await agents.GetCampaignTemplateByIdAsync(templateIdToLoad.Value, ct)
