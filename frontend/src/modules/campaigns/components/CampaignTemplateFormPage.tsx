@@ -270,13 +270,53 @@ export function CampaignTemplateFormPage() {
 
   const hasConfigErrors = Object.keys(configErrors).length > 0
 
+  const tabs = [
+    { key: 'labels' as const, label: 'Etiquetas', icon: Tag, badge: selectedLabelIds.length },
+    { key: 'actions' as const, label: 'Acciones', icon: Zap, badge: selectedActionIds.length, hasError: hasConfigErrors },
+    { key: 'prompt' as const, label: 'Prompt', icon: FileText, badge: selectedPromptIds.length },
+    { key: 'documents' as const, label: 'Documentos', icon: Paperclip },
+  ]
+
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">{isEdit ? 'Editar Maestro' : 'Nuevo Maestro de Campana'}</h1>
         <button onClick={() => navigate('/campaign-templates')} className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900">
           <ArrowLeft className="h-4 w-4" /> Volver
         </button>
+      </div>
+
+      {/* ─── Tabs en el encabezado: Etiquetas | Acciones | Prompt | Documentos ─── */}
+      <div className="mb-6 rounded-lg bg-white shadow-sm">
+        <div className="flex border-b border-gray-200 overflow-x-auto">
+          {tabs.map(tab => {
+            const Icon = tab.icon
+            const isActive = activeTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
+                  isActive
+                    ? 'border-blue-600 text-blue-700 bg-blue-50/50'
+                    : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                <Icon className={`h-4 w-4 ${isActive ? 'text-blue-600' : 'text-gray-400'}`} />
+                <span>{tab.label}</span>
+                {'badge' in tab && tab.badge ? (
+                  <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                    {tab.badge}
+                  </span>
+                ) : null}
+                {'hasError' in tab && tab.hasError ? (
+                  <span className="ml-1 h-2 w-2 rounded-full bg-red-500" title="Hay campos con error" />
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
@@ -436,43 +476,8 @@ export function CampaignTemplateFormPage() {
           </section>
         )}
 
-        {/* ─── Tabs: Etiquetas | Acciones | Prompt | Documentos ─── */}
-        <div className="rounded-lg bg-white shadow-sm overflow-hidden">
-          <div className="flex border-b border-gray-200 overflow-x-auto">
-            {([
-              { key: 'labels', label: 'Etiquetas', icon: Tag, badge: selectedLabelIds.length },
-              { key: 'actions', label: 'Acciones', icon: Zap, badge: selectedActionIds.length, hasError: hasConfigErrors },
-              { key: 'prompt', label: 'Prompt', icon: FileText, badge: selectedPromptIds.length },
-              { key: 'documents', label: 'Documentos', icon: Paperclip },
-            ] as const).map(tab => {
-              const Icon = tab.icon
-              const isActive = activeTab === tab.key
-              return (
-                <button
-                  key={tab.key}
-                  type="button"
-                  onClick={() => setActiveTab(tab.key)}
-                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
-                    isActive
-                      ? 'border-blue-600 text-blue-700 bg-blue-50/50'
-                      : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
-                  }`}
-                >
-                  <Icon className={`h-4 w-4 ${isActive ? 'text-blue-600' : 'text-gray-400'}`} />
-                  <span>{tab.label}</span>
-                  {'badge' in tab && tab.badge ? (
-                    <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
-                      {tab.badge}
-                    </span>
-                  ) : null}
-                  {'hasError' in tab && tab.hasError ? (
-                    <span className="ml-1 h-2 w-2 rounded-full bg-red-500" title="Hay campos con error" />
-                  ) : null}
-                </button>
-              )
-            })}
-          </div>
-
+        {/* ─── Contenido del tab activo ─── */}
+        <div className="rounded-lg bg-white shadow-sm">
           <div className="p-5">
             {/* ─── TAB: Etiquetas ─── */}
             {activeTab === 'labels' && (
