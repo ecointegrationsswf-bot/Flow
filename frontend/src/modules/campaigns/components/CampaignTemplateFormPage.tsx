@@ -18,7 +18,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ArrowLeft, Plus, X, Clock, Zap, FileText, Webhook, Mail, MessageSquare, ChevronDown, ChevronUp, Globe } from 'lucide-react'
+import { ArrowLeft, Plus, X, Clock, Zap, FileText, Webhook, Mail, MessageSquare, ChevronDown, ChevronUp, Globe, Tag, Paperclip } from 'lucide-react'
 import { useAgents } from '@/shared/hooks/useAgents'
 import { useLabels } from '@/shared/hooks/useLabels'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
@@ -95,6 +95,8 @@ export function CampaignTemplateFormPage() {
   const [outOfContextPolicy, setOutOfContextPolicy] = useState(existing?.outOfContextPolicy ?? 'Contain')
   // Webhook Contract Builder — modal state (Fase 5)
   const [webhookBuilderActionId, setWebhookBuilderActionId] = useState<string | null>(null)
+  // Tab activa — agrupa Etiquetas / Acciones / Prompt / Documentos
+  const [activeTab, setActiveTab] = useState<'labels' | 'actions' | 'prompt' | 'documents'>('labels')
 
   // Sync all state when existing template loads (edit mode)
   useEffect(() => {
@@ -434,8 +436,47 @@ export function CampaignTemplateFormPage() {
           </section>
         )}
 
-        {/* Seccion 4: Etiquetas */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
+        {/* ─── Tabs: Etiquetas | Acciones | Prompt | Documentos ─── */}
+        <div className="rounded-lg bg-white shadow-sm overflow-hidden">
+          <div className="flex border-b border-gray-200 overflow-x-auto">
+            {([
+              { key: 'labels', label: 'Etiquetas', icon: Tag, badge: selectedLabelIds.length },
+              { key: 'actions', label: 'Acciones', icon: Zap, badge: selectedActionIds.length, hasError: hasConfigErrors },
+              { key: 'prompt', label: 'Prompt', icon: FileText, badge: selectedPromptIds.length },
+              { key: 'documents', label: 'Documentos', icon: Paperclip },
+            ] as const).map(tab => {
+              const Icon = tab.icon
+              const isActive = activeTab === tab.key
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => setActiveTab(tab.key)}
+                  className={`flex items-center gap-2 px-5 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
+                    isActive
+                      ? 'border-blue-600 text-blue-700 bg-blue-50/50'
+                      : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                  }`}
+                >
+                  <Icon className={`h-4 w-4 ${isActive ? 'text-blue-600' : 'text-gray-400'}`} />
+                  <span>{tab.label}</span>
+                  {'badge' in tab && tab.badge ? (
+                    <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                      {tab.badge}
+                    </span>
+                  ) : null}
+                  {'hasError' in tab && tab.hasError ? (
+                    <span className="ml-1 h-2 w-2 rounded-full bg-red-500" title="Hay campos con error" />
+                  ) : null}
+                </button>
+              )
+            })}
+          </div>
+
+          <div className="p-5">
+            {/* ─── TAB: Etiquetas ─── */}
+            {activeTab === 'labels' && (
+        <div>
           <h2 className="mb-4 text-sm font-semibold text-gray-900">Etiquetas de seguimiento</h2>
           <p className="mb-3 text-xs text-gray-500">Selecciona las etiquetas que se usaran para clasificar los resultados de la campana.</p>
           {loadingLabels ? (
@@ -463,10 +504,12 @@ export function CampaignTemplateFormPage() {
               {selectedLabelIds.length > 0 && <p className="mt-2 text-xs text-blue-600">{selectedLabelIds.length} etiqueta{selectedLabelIds.length > 1 ? 's' : ''} seleccionada{selectedLabelIds.length > 1 ? 's' : ''}</p>}
             </div>
           )}
-        </section>
+        </div>
+            )}
 
-        {/* Seccion 5: Acciones vinculadas */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
+            {/* ─── TAB: Acciones ─── */}
+            {activeTab === 'actions' && (
+        <div>
           <div className="mb-4 flex items-center gap-2">
             <Zap className="h-5 w-5 text-amber-500" />
             <h2 className="text-sm font-semibold text-gray-900">Acciones vinculadas</h2>
@@ -714,10 +757,12 @@ export function CampaignTemplateFormPage() {
               )}
             </div>
           )}
-        </section>
+        </div>
+            )}
 
-        {/* Seccion 7: Prompts vinculados */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
+            {/* ─── TAB: Prompt ─── */}
+            {activeTab === 'prompt' && (
+        <div>
           <div className="mb-4 flex items-center gap-2">
             <FileText className="h-5 w-5 text-indigo-500" />
             <h2 className="text-sm font-semibold text-gray-900">Prompts vinculados</h2>
@@ -748,20 +793,25 @@ export function CampaignTemplateFormPage() {
               {selectedPromptIds.length > 0 && <p className="mt-2 text-xs text-indigo-600">Prompt seleccionado</p>}
             </div>
           )}
-        </section>
+        </div>
+            )}
 
-        {/* Seccion 8: Documentos de referencia */}
-        {isEdit && id ? (
-          <CampaignTemplateDocumentsSection templateId={id} />
-        ) : (
-          <section className="rounded-lg bg-white p-5 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <FileText className="h-4 w-4" />
-              <p>Guarda el maestro primero para poder adjuntar documentos PDF.</p>
-            </div>
-          </section>
-        )}
+            {/* ─── TAB: Documentos ─── */}
+            {activeTab === 'documents' && (
+              isEdit && id ? (
+                <CampaignTemplateDocumentsSection templateId={id} />
+              ) : (
+                <div>
+                  <h2 className="mb-2 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <FileText className="h-4 w-4" />
+                    <p>Guarda el maestro primero para poder adjuntar documentos PDF.</p>
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+        </div>
 
         {/* Actions */}
         <div className="flex justify-end gap-3">

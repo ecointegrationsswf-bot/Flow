@@ -48,7 +48,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
   )
 
   return (
-    <section className="rounded-lg bg-white p-5 shadow-sm">
+    <div>
       <h2 className="mb-4 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
       <p className="mb-4 text-xs text-gray-500">
         Sube archivos PDF que el agente usara como contexto para responder en esta campana. Maximo 10 MB por archivo.
@@ -191,6 +191,6 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
         confirmLabel="Eliminar"
         variant="danger"
       />
-    </section>
+    </div>
   )
 }
