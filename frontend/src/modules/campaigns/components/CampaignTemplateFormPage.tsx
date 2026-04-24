@@ -95,8 +95,8 @@ export function CampaignTemplateFormPage() {
   const [outOfContextPolicy, setOutOfContextPolicy] = useState(existing?.outOfContextPolicy ?? 'Contain')
   // Webhook Contract Builder — modal state (Fase 5)
   const [webhookBuilderActionId, setWebhookBuilderActionId] = useState<string | null>(null)
-  // Tab activa — agrupa Etiquetas / Acciones / Prompt / Documentos
-  const [activeTab, setActiveTab] = useState<'labels' | 'actions' | 'prompt' | 'documents'>('labels')
+  // Tab activa — General / Etiquetas / Acciones / Prompt / Documentos
+  const [activeTab, setActiveTab] = useState<'general' | 'labels' | 'actions' | 'prompt' | 'documents'>('general')
 
   // Sync all state when existing template loads (edit mode)
   useEffect(() => {
@@ -270,7 +270,12 @@ export function CampaignTemplateFormPage() {
 
   const hasConfigErrors = Object.keys(configErrors).length > 0
 
+  // Valida si hay errores en los campos generales (nombre, agente, etc.) para
+  // marcar el tab "General" con indicador rojo cuando el form falla validación.
+  const hasGeneralErrors = !!(errors.name || errors.agentDefinitionId || errors.sendFrom || errors.sendUntil)
+
   const tabs = [
+    { key: 'general' as const, label: 'General', icon: Globe, hasError: hasGeneralErrors },
     { key: 'labels' as const, label: 'Etiquetas', icon: Tag, badge: selectedLabelIds.length },
     { key: 'actions' as const, label: 'Acciones', icon: Zap, badge: selectedActionIds.length, hasError: hasConfigErrors },
     { key: 'prompt' as const, label: 'Prompt', icon: FileText, badge: selectedPromptIds.length },
@@ -320,6 +325,9 @@ export function CampaignTemplateFormPage() {
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+        {/* ─── TAB: General (Identificación + horarios + seguimientos + cierre + política) ─── */}
+        {activeTab === 'general' && <>
+
         {/* Seccion 1: Identificacion */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-semibold text-gray-900">Identificacion</h2>
@@ -476,7 +484,11 @@ export function CampaignTemplateFormPage() {
           </section>
         )}
 
-        {/* ─── Contenido del tab activo ─── */}
+        </>}
+        {/* ─── /TAB General ─── */}
+
+        {/* ─── Contenido de los tabs Etiquetas / Acciones / Prompt / Documentos ─── */}
+        {activeTab !== 'general' && (
         <div className="rounded-lg bg-white shadow-sm">
           <div className="p-5">
             {/* ─── TAB: Etiquetas ─── */}
@@ -817,6 +829,8 @@ export function CampaignTemplateFormPage() {
             )}
           </div>
         </div>
+        )}
+        {/* ─── /tab content ─── */}
 
         {/* Actions */}
         <div className="flex justify-end gap-3">
