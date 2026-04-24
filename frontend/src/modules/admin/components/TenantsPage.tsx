@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { Building2, Plus, Users, Pencil, Power } from 'lucide-react'
+import { Building2, Plus, Users, Pencil, Power, ListChecks } from 'lucide-react'
 import { useAdminTenants, useUpdateTenant, type AdminTenant } from '@/modules/admin/hooks/useAdminTenants'
 import { TenantFormModal } from './TenantFormModal'
 import { TenantUsersModal } from './TenantUsersModal'
+import { TenantAssignmentsModal } from './TenantAssignmentsModal'
 
 export function TenantsPage() {
   const { data: tenants, isLoading } = useAdminTenants()
@@ -11,6 +12,7 @@ export function TenantsPage() {
   const [showForm, setShowForm] = useState(false)
   const [editTenant, setEditTenant] = useState<AdminTenant | null>(null)
   const [usersTenant, setUsersTenant] = useState<AdminTenant | null>(null)
+  const [assignmentsTenant, setAssignmentsTenant] = useState<AdminTenant | null>(null)
 
   const handleToggleActive = (tenant: AdminTenant) => {
     if (!confirm(tenant.isActive
@@ -93,6 +95,13 @@ export function TenantsPage() {
                         <Users className="h-4 w-4" />
                       </button>
                       <button
+                        onClick={() => setAssignmentsTenant(t)}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-indigo-600 transition-colors"
+                        title="Asignar prompts y acciones"
+                      >
+                        <ListChecks className="h-4 w-4" />
+                      </button>
+                      <button
                         onClick={() => handleToggleActive(t)}
                         className={`rounded-lg p-1.5 hover:bg-gray-100 transition-colors ${
                           t.isActive ? 'text-gray-400 hover:text-red-600' : 'text-gray-400 hover:text-green-600'
@@ -121,6 +130,13 @@ export function TenantsPage() {
         <TenantUsersModal
           tenant={usersTenant}
           onClose={() => setUsersTenant(null)}
+        />
+      )}
+
+      {assignmentsTenant && (
+        <TenantAssignmentsModal
+          tenant={assignmentsTenant}
+          onClose={() => setAssignmentsTenant(null)}
         />
       )}
     </div>

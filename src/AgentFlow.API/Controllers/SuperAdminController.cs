@@ -245,6 +245,61 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         return Ok(agents);
     }
 
+    /// <summary>
+    /// Devuelve las asignaciones del tenant (prompts globales asignados + acciones
+    /// per-tenant ya scopadas). Usado por el modal "Asignaciones" del admin panel.
+    /// </summary>
+    [HttpGet("tenants/{tenantId:guid}/assignments")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantAssignments(Guid tenantId, CancellationToken ct)
+    {
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        var actions = await db.ActionDefinitions
+            .Where(a => a.TenantId == tenantId)
+            .OrderBy(a => a.Name)
+            .Select(a => new { a.Id, a.Name, a.Description, a.IsActive, a.RequiresWebhook, a.SendsEmail, a.SendsSms })
+            .ToListAsync(ct);
+
+        return Ok(new
+        {
+            assignedPromptIds = tenant.AssignedPromptIds,
+            actions
+        });
+    }
+
+    public record AssignPromptsRequest(List<Guid> PromptIds);
+
+    /// <summary>
+    /// Reemplaza la lista de PromptTemplates asignados al tenant. Si la lista
+    /// queda vacía el tenant vuelve a ver todos los prompts activos (retrocompat).
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/assigned-prompts")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> SetAssignedPrompts(Guid tenantId, [FromBody] AssignPromptsRequest req, CancellationToken ct)
+    {
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        var ids = req.PromptIds?.Distinct().ToList() ?? [];
+
+        // Validar que los IDs correspondan a prompts que existen
+        if (ids.Count > 0)
+        {
+            var existingCount = await db.Set<PromptTemplate>()
+                .Where(p => ids.Contains(p.Id))
+                .CountAsync(ct);
+            if (existingCount != ids.Count)
+                return BadRequest(new { error = "Uno o más PromptTemplates no existen." });
+        }
+
+        tenant.AssignedPromptIds = ids;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { assignedPromptIds = tenant.AssignedPromptIds });
+    }
+
     [HttpGet("tenants/{tenantId:guid}/users")]
     [Authorize(Roles = "super_admin")]
     public async Task<IActionResult> GetTenantUsers(Guid tenantId, CancellationToken ct)

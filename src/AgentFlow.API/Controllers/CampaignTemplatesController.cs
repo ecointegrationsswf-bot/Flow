@@ -186,12 +186,31 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         return Ok(actions);
     }
 
-    /// <summary>Lista los prompt templates activos (globales, definidos en admin) para vincular a maestros.</summary>
+    /// <summary>
+    /// Lista los prompt templates activos visibles para este tenant. Los prompts son
+    /// un catálogo global; el super admin asigna por tenant desde
+    /// /api/admin/tenants/{id}/assigned-prompts. Si el tenant no tiene ninguno
+    /// asignado (lista vacía), ve todos los prompts activos (retrocompat).
+    /// </summary>
     [HttpGet("available-prompts")]
     public async Task<IActionResult> AvailablePrompts(CancellationToken ct)
     {
-        var prompts = await db.Set<PromptTemplate>()
-            .Where(p => p.IsActive)
+        var tenantId = tenantCtx.TenantId;
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedPromptIds })
+            .FirstOrDefaultAsync(ct);
+
+        var assignedIds = tenant?.AssignedPromptIds ?? [];
+
+        var query = db.Set<PromptTemplate>().Where(p => p.IsActive);
+
+        // Si el tenant tiene asignaciones explícitas, filtramos. Si no, devolvemos todo
+        // (comportamiento retro-compatible: tenants existentes no pierden acceso).
+        if (assignedIds.Count > 0)
+            query = query.Where(p => assignedIds.Contains(p.Id));
+
+        var prompts = await query
             .OrderBy(p => p.Name)
             .Select(p => new { p.Id, p.Name, p.Description, CategoryName = p.Category != null ? p.Category.Name : null })
             .ToListAsync(ct);

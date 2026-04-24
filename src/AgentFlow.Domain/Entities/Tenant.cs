@@ -56,6 +56,14 @@ public class Tenant
     /// </summary>
     public bool WebhookContractEnabled { get; set; }
 
+    /// <summary>
+    /// Lista de IDs de PromptTemplates asignados a este tenant. Los prompts son un
+    /// catálogo global; esta columna JSON restringe qué prompts son visibles en
+    /// el formulario del maestro de campaña del tenant.
+    /// Si la lista está vacía, el tenant ve TODOS los prompts activos (retrocompat).
+    /// </summary>
+    public List<Guid> AssignedPromptIds { get; set; } = [];
+
     public ICollection<AgentDefinition> Agents { get; set; } = [];
     public ICollection<Campaign> Campaigns { get; set; } = [];
     public ICollection<AppUser> Users { get; set; } = [];

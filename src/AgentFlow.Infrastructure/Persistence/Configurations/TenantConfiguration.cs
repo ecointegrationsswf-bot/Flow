@@ -1,6 +1,7 @@
 using AgentFlow.Domain.Entities;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
+using System.Text.Json;
 
 namespace AgentFlow.Infrastructure.Persistence.Configurations;
 
@@ -24,6 +25,16 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         b.Property(t => t.SendGridApiKey).HasMaxLength(500);
         b.Property(t => t.SenderEmail).HasMaxLength(200);
         b.Property(t => t.CampaignMessageDelaySeconds).HasDefaultValue(10);
+
+        // AssignedPromptIds: JSON serializado. Si está vacío el tenant ve todos los prompts (retrocompat).
+        b.Property(t => t.AssignedPromptIds)
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => string.IsNullOrWhiteSpace(v)
+                    ? new List<Guid>()
+                    : JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
+            ).HasColumnType("nvarchar(max)");
+
         b.HasMany(t => t.Agents).WithOne(a => a.Tenant).HasForeignKey(a => a.TenantId);
         b.HasMany(t => t.Campaigns).WithOne(c => c.Tenant).HasForeignKey(c => c.TenantId);
     }
