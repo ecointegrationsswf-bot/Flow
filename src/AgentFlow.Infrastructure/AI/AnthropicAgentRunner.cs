@@ -4,6 +4,7 @@ using AgentFlow.Domain.Interfaces;
 using Anthropic.SDK;
 using Anthropic.SDK.Messaging;
 using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.Logging;
 
 namespace AgentFlow.Infrastructure.AI;
 
@@ -20,13 +21,18 @@ public class AnthropicAgentRunner(
     AnthropicClient anthropic,
     AnthropicSettings settings,
     System.Net.Http.IHttpClientFactory httpClientFactory,
-    IMemoryCache cache) : IAgentRunner
+    IMemoryCache cache,
+    Microsoft.Extensions.Logging.ILogger<AnthropicAgentRunner> log) : IAgentRunner
 {
     // Caché de PDFs de referencia descargados. Clave: BlobUrl. TTL 30 min.
     // Evita descargar el mismo PDF del maestro de campaña en cada mensaje.
     private static readonly TimeSpan RefDocCacheTtl = TimeSpan.FromMinutes(30);
     private const long RefDocMaxBytes = 10L * 1024 * 1024;   // 10 MB por PDF
     private const int RefDocMaxCount = 5;                    // tope defensivo por turno
+
+    // Umbral de alerta — Claude Sonnet 4.x soporta 200k tokens de contexto.
+    // Si el system prompt se acerca a este límite perdemos margen para historial y PDFs.
+    private const int PromptTokenWarnThreshold = 150_000;
 
 
     public async Task<AgentResponse> RunAsync(AgentRunRequest req, CancellationToken ct = default)
@@ -51,6 +57,16 @@ public class AnthropicAgentRunner(
 
         var systemPrompt = BuildSystemPrompt(req);
         var messages     = await BuildMessagesAsync(req, ct);
+
+        // Alerta si el system prompt es muy grande — estimación gruesa: 4 chars ≈ 1 token.
+        // No bloquea la llamada (Anthropic la cortará si excede), pero da señal temprana.
+        var estSystemTokens = systemPrompt.Length / 4;
+        if (estSystemTokens > PromptTokenWarnThreshold)
+        {
+            log.LogWarning(
+                "System prompt grande: tenant={TenantId} conversation={ConversationId} agent={AgentId} estTokens={EstTokens} chars={Chars}. Acercándose al límite de contexto (200k).",
+                req.Conversation.TenantId, req.Conversation.Id, req.Agent.Id, estSystemTokens, systemPrompt.Length);
+        }
 
         // SDK v5: System es List<SystemMessage>; Stream=false requerido para llamada síncrona
         var response = await client.Messages.GetClaudeMessageAsync(
@@ -183,6 +199,40 @@ public class AnthropicAgentRunner(
             sb.AppendLine(req.ActionsBlock);
         }
 
+        // ── DOCUMENTOS DE REFERENCIA — bloque de reglas y lista ────────────
+        // Construido por DocumentReferencePromptBuilder en la capa de aplicación.
+        // Si el maestro no tiene PDFs adjuntos el bloque es string.Empty y el
+        // prompt queda idéntico al comportamiento anterior (no-regresión).
+        if (!string.IsNullOrEmpty(req.ReferenceDocumentsBlock))
+        {
+            sb.AppendLine();
+            sb.AppendLine(req.ReferenceDocumentsBlock);
+
+            // Ancla operativa final: se renderiza al cierre del system prompt
+            // — el modelo la procesa como "última instrucción antes de leer el
+            // turno del cliente". Reduce drásticamente la tasa de declinaciones
+            // prematuras cuando la conversación lleva muchos turnos y los PDFs
+            // están "lejos" en el contexto.
+            sb.AppendLine();
+            sb.AppendLine("### CHECKLIST OBLIGATORIO ANTES DE TU PRÓXIMA RESPUESTA");
+            sb.AppendLine("Antes de redactar tu respuesta al último mensaje del cliente, ejecuta");
+            sb.AppendLine("internamente este chequeo:");
+            sb.AppendLine("[ ] ¿La pregunta del cliente toca algún tema cubierto por los documentos");
+            sb.AppendLine("    adjuntos (productos, redes, hospitales, beneficios, ubicaciones,");
+            sb.AppendLine("    teléfonos, direcciones, coberturas, exclusiones, plazos, etc.)?");
+            sb.AppendLine("[ ] Si SÍ → recorre TODAS las secciones del documento (no solo la primera");
+            sb.AppendLine("    que parezca relevante) antes de decidir si la información existe.");
+            sb.AppendLine("[ ] Si encontraste el dato → respóndelo con precisión literal (nombres,");
+            sb.AppendLine("    teléfonos y direcciones tal cual aparecen).");
+            sb.AppendLine("[ ] Si NO encontraste el dato tras búsqueda exhaustiva → solo entonces");
+            sb.AppendLine("    puedes declinar y ofrecer escalar.");
+            sb.AppendLine();
+            sb.AppendLine("REGLA DURA: Está PROHIBIDO emitir frases como \"no tengo información");
+            sb.AppendLine("confiable\", \"no cuento con esos datos\" o \"te recomiendo verificar");
+            sb.AppendLine("directamente\" cuando la respuesta efectivamente está en un documento");
+            sb.AppendLine("adjunto. Esa falla genera desconfianza inmediata en el cliente.");
+        }
+
         return sb.ToString();
     }
 
@@ -220,7 +270,7 @@ public class AnthropicAgentRunner(
         {
             Console.WriteLine($"[RefDocs] Intentando cargar {req.ReferenceDocuments.Count} documento(s) de referencia");
             var refContent = new List<ContentBase>();
-            var loadedNames = new List<string>();
+            var loadedDescriptions = new List<string>(); // "{nombre} — {descripción}"
 
             var docsToLoad = req.ReferenceDocuments.Take(RefDocMaxCount);
             foreach (var refDoc in docsToLoad)
@@ -242,20 +292,31 @@ public class AnthropicAgentRunner(
                         Data      = Convert.ToBase64String(bytes)
                     }
                 });
-                loadedNames.Add(refDoc.FileName);
+                var desc = string.IsNullOrWhiteSpace(refDoc.Description) ? "(sin descripción)" : refDoc.Description;
+                loadedDescriptions.Add($"{refDoc.FileName} — {desc}");
             }
 
             if (refContent.Count > 0)
             {
-                var namesList = string.Join(", ", loadedNames);
+                // Las 9 reglas detalladas ya van en el system prompt (ReferenceDocumentsBlock).
+                // Aquí damos un anclaje que (a) asocia cada PDF con su descripción y
+                // (b) refuerza el protocolo de BÚSQUEDA EXHAUSTIVA antes de declinar.
+                // El "Entendido" del assistant ahora reproduce el compromiso operativo
+                // — al estar en el contexto, el modelo lo trata como propio en turnos
+                // posteriores y reduce la tendencia a declinar prematuramente.
+                var listing = string.Join("\n", loadedDescriptions.Select((s, i) => $"{i + 1}. {s}"));
                 refContent.Add(new TextContent
                 {
                     Text =
-                        $"A continuación se adjuntan {loadedNames.Count} documento(s) PDF como material de referencia oficial del maestro de campaña ({namesList}). " +
-                        "INSTRUCCIONES SOBRE ESTOS DOCUMENTOS:\n" +
-                        "1. Cuando el cliente haga cualquier pregunta cuya respuesta esté dentro de estos documentos, RESPÓNDELA usando la información del documento, aunque parezca no relacionada con la campaña. Ese es el propósito de cargarlos.\n" +
-                        "2. Cita datos concretos del documento (nombres, fechas, cifras, definiciones) con naturalidad, sin decir 'según el documento' ni leer literalmente.\n" +
-                        "3. Si la pregunta no tiene respuesta en los documentos ni en el contexto de la campaña, dilo con honestidad y reconduce al tema principal."
+                        $"Adjunto {loadedDescriptions.Count} documento(s) PDF de referencia oficial de la campaña. " +
+                        "Estos documentos son tu fuente autorizada para responder preguntas del cliente sobre productos, " +
+                        "coberturas, beneficios, redes, ubicaciones, teléfonos, direcciones, plazos y procedimientos.\n\n" +
+                        "Antes de responder cualquier pregunta cuyo tema pueda estar cubierto por un documento, " +
+                        "DEBES recorrer el documento completo (todas sus secciones, tablas y anexos) según el protocolo " +
+                        "de búsqueda exhaustiva definido en el system prompt. Está PROHIBIDO declinar diciendo 'no tengo " +
+                        "información confiable' sin haber buscado primero — declinar cuando la respuesta sí está en el " +
+                        "documento es una falla grave.\n\n" +
+                        "Listado de documentos disponibles:\n" + listing
                 });
 
                 messages.Add(new Anthropic.SDK.Messaging.Message
@@ -266,10 +327,15 @@ public class AnthropicAgentRunner(
                 messages.Add(new Anthropic.SDK.Messaging.Message
                 {
                     Role = RoleType.Assistant,
-                    Content = [new TextContent { Text = "Entendido. He revisado los documentos de referencia y los tendré en cuenta para responder al cliente." }]
+                    Content = [new TextContent { Text =
+                        "Confirmado. Revisé los documentos adjuntos y los tengo disponibles como fuente autorizada. " +
+                        "Antes de responder cualquier pregunta del cliente recorreré exhaustivamente las secciones " +
+                        "relevantes (provincias, productos, beneficios, tablas, etc.) y solo declinaré si tras la " +
+                        "búsqueda completa la información no está. Citaré nombres, teléfonos y direcciones tal cual " +
+                        "aparecen en el documento, sin exponerlo como fuente al cliente." }]
                 });
 
-                Console.WriteLine($"[RefDocs] Inyectados {loadedNames.Count} PDFs al contexto: {namesList}");
+                Console.WriteLine($"[RefDocs] Inyectados {loadedDescriptions.Count} PDFs al contexto");
             }
         }
 

@@ -57,6 +57,7 @@ public class ProcessIncomingMessageHandler(
     ICampaignRepository campaignRepo,
     AgentFlow.Domain.Webhooks.IActionExecutorService actionExecutor,
     AgentFlow.Domain.Webhooks.IActionPromptBuilder actionPromptBuilder,
+    IDocumentReferencePromptBuilder documentReferencePromptBuilder,
     Microsoft.Extensions.Logging.ILogger<ProcessIncomingMessageHandler> logger
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
@@ -86,36 +87,14 @@ public class ProcessIncomingMessageHandler(
     private async Task<ProcessIncomingMessageResult> HandleWithBrain(
         ProcessIncomingMessageCommand cmd, Tenant tenant, CancellationToken ct)
     {
-        // ── OPTIMIZACIÓN: Skip del clasificador si hay sesión activa reciente ──
-        // Si el cliente está mid-conversación con un agente (< 30 min de inactividad),
-        // reutilizamos el mismo agentSlug sin llamar al LLM clasificador.
-        // Ahorra ~12 segundos por mensaje en el 80% de los casos.
-        BrainDecision? decision = null;
-        try
-        {
-            var session = await sessions.GetAsync(cmd.TenantId, cmd.FromPhone, ct);
-            if (session is not null
-                && !string.IsNullOrEmpty(session.ActiveAgentSlug)
-                && session.BrainState == BrainSessionState.Active_AI
-                && DateTime.UtcNow - session.LastActivityAt < TimeSpan.FromMinutes(30))
-            {
-                // Reutilizar decisión previa — sin clasificar
-                decision = new BrainDecision(
-                    AgentSlug: session.ActiveAgentSlug,
-                    Intent: session.AgentType ?? "continuation",
-                    SessionState: BrainSessionState.Active_AI,
-                    ValidationPending: false,
-                    MessageToClient: null);
-            }
-        }
-        catch { /* Redis no disponible — continuar con clasificación normal */ }
-
-        // ── 1. Si no hubo shortcut, clasificar normalmente ──
-        if (decision is null)
-        {
-            decision = await brainService.RouteAsync(new BrainRequest(
-                cmd.TenantId, cmd.FromPhone, cmd.Message, cmd.Channel.ToString(), null), ct);
-        }
+        // ── CLASIFICACIÓN POR TURNO ──
+        // El Cerebro se ejecuta en CADA mensaje entrante. Antes había un shortcut
+        // que reutilizaba la decisión de Redis si la sesión tenía < 30 min de
+        // inactividad, pero eso impedía que el Cerebro detectara cambios de tema
+        // (ej: conversación de cobros que deriva a reclamos). La corrección:
+        // reclasificar siempre — Anthropic prompt caching amortiza el costo del LLM.
+        var decision = await brainService.RouteAsync(new BrainRequest(
+            cmd.TenantId, cmd.FromPhone, cmd.Message, cmd.Channel.ToString(), null), ct);
 
         // ── 2. Estado terminal → silencio ──
         if (decision.SessionState == BrainSessionState.HumanClosed)
@@ -371,15 +350,29 @@ public class ProcessIncomingMessageHandler(
 
             // Resolver templateId: PRIORIDAD al template de la campaña activa porque
             // ese contexto es el más específico del cliente (system prompt, PDFs de
-            // referencia, horarios, etc.). Solo si no hay campaña se usa el template
-            // que el Cerebro/AgentRegistry mapeó al slug (flujo inbound libre).
+            // referencia, horarios, etc.).
+            //
+            // PRIORIDAD DEL MAESTRO A CARGAR:
+            // 1) Si el Cerebro reenrutó a un agente del AgentRegistry
+            //    (brainCampaignTemplateId tiene valor), usar el maestro de ESE agente.
+            //    Así el prompt, PDFs y configuración corresponden al agente que
+            //    realmente va a responder — no al maestro de la campaña original.
+            //    Ej: conversación nace de campaña "Cobros" pero el cliente pregunta
+            //    por reclamos → Cerebro activa agente "reclamos" → cargamos el
+            //    maestro "Reclamos" con sus PDFs médicos.
+            // 2) Si no hubo reenrutado del Cerebro pero la conversación tiene
+            //    CampaignId (outbound histórico), usar el maestro de esa campaña.
+            // 3) Inbound libre sin Cerebro ni campaña → null.
             Guid? templateIdToLoad = null;
-            if (conversation.CampaignId.HasValue)
+            if (brainCampaignTemplateId.HasValue)
+            {
+                templateIdToLoad = brainCampaignTemplateId;
+            }
+            else if (conversation.CampaignId.HasValue)
             {
                 var campaign = await conversations.GetCampaignAsync(conversation.CampaignId.Value, ct);
                 templateIdToLoad = campaign?.CampaignTemplateId;
             }
-            templateIdToLoad ??= brainCampaignTemplateId;
 
             CampaignTemplate? campaignTemplate = templateIdToLoad.HasValue
                 ? await agents.GetCampaignTemplateByIdAsync(templateIdToLoad.Value, ct)
@@ -508,15 +501,39 @@ public class ProcessIncomingMessageHandler(
                         tenantId: cmd.TenantId,
                         ct: ct);
 
-                    // PDFs de referencia del maestro de campaña — se inyectan al prompt
-                    // para que el agente los use como contexto al responder.
-                    var referenceDocs = campaignTemplate?.Documents is { Count: > 0 }
-                        ? campaignTemplate.Documents
-                            .Select(d => new AgentFlow.Domain.Interfaces.ReferenceDocument(d.FileName, d.BlobUrl))
-                            .ToList()
-                        : null;
+                    // PDFs de referencia — modo TENANT-WIDE.
+                    // Antes: solo se cargaban los PDFs del maestro activo, lo que dejaba al
+                    // agente "Cobros" sin acceso a los PDFs subidos al maestro "Reclamos"
+                    // aunque ambos pertenecieran al mismo corredor. Esto producía
+                    // alucinaciones (direcciones inventadas, declinaciones falsas) cuando el
+                    // Cerebro enrutaba a un agente cuyo maestro no tenía documentos.
+                    //
+                    // Ahora: el builder carga TODOS los PDFs del tenant, priorizando los del
+                    // maestro activo. Tope defensivo de 5 PDFs por turno (TenantDocsCap).
+                    // Feature flag Tenant.ReferenceDocumentsEnabled controla la inyección.
+                    var refDocsEnabled = tenant?.ReferenceDocumentsEnabled == true;
+                    List<AgentFlow.Domain.Interfaces.ReferenceDocument>? referenceDocs = null;
+                    string? referenceDocsBlock = null;
 
-                    Console.WriteLine($"[WH-REFDOCS] template={campaignTemplate?.Id} templateName={campaignTemplate?.Name} docs={campaignTemplate?.Documents?.Count ?? -1} refDocsPassed={referenceDocs?.Count ?? 0}");
+                    if (refDocsEnabled)
+                    {
+                        var prioritizeId = brainCampaignTemplateId ?? campaignTemplate?.Id;
+                        var tenantDocs = await documentReferencePromptBuilder.GetTenantDocumentsAsync(
+                            prioritizeId, cmd.TenantId, ct);
+
+                        if (tenantDocs.Count > 0)
+                        {
+                            referenceDocs = tenantDocs.ToList();
+                            referenceDocsBlock = await documentReferencePromptBuilder.BuildTextBlockAsync(
+                                prioritizeId, cmd.TenantId, ct);
+
+                            logger.LogInformation(
+                                "ReferenceDocs (tenant-wide) inyectados: tenant={TenantId} prioritize={PrioritizeId} docs={DocCount} blockChars={BlockChars}",
+                                cmd.TenantId, prioritizeId, referenceDocs.Count, referenceDocsBlock?.Length ?? 0);
+                        }
+                    }
+
+                    Console.WriteLine($"[WH-REFDOCS] tenant={cmd.TenantId} prioritize={brainCampaignTemplateId ?? campaignTemplate?.Id} refDocsPassed={referenceDocs?.Count ?? 0} blockLen={referenceDocsBlock?.Length ?? 0}");
 
                     agentResponse = await agentRunner.RunAsync(new AgentRunRequest(
                         Agent: agent, Conversation: conversation,
@@ -528,7 +545,8 @@ public class ProcessIncomingMessageHandler(
                         AttentionStartTime: attentionStart, AttentionEndTime: attentionEnd,
                         ActionsBlock: actionCatalog.Block,
                         LastActionResult: lastActionForPrompt,
-                        ReferenceDocuments: referenceDocs
+                        ReferenceDocuments: referenceDocs,
+                        ReferenceDocumentsBlock: referenceDocsBlock
                     ), ct);
                     replyText = agentResponse.ReplyText;
 
