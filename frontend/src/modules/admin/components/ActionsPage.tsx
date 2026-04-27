@@ -275,6 +275,7 @@ export function ActionsPage() {
                   <option value="SEND_PAYMENT_LINK">Enviar enlace de pago</option>
                   <option value="SEND_DOCUMENT">Enviar documento</option>
                   <option value="LABEL_CONVERSATIONS">Etiquetar conversaciones</option>
+                  <option value="SEND_LABELING_SUMMARY">Enviar resumen etiquetado</option>
                 </select>
               </div>
 

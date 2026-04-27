@@ -33,6 +33,10 @@ public static class CampaignAutomationSeeder
                 "LABEL_CONVERSATIONS",
                 "Acción interna del job de etiquetado IA. Recorre las conversaciones cerradas no etiquetadas y llama a Claude para clasificarlas según las labels asociadas al maestro. Tras etiquetar dispara el evento ConversationLabeled — el admin puede programar webhooks de resultado al cliente como Scheduled Jobs aparte."
             ),
+            (
+                "SEND_LABELING_SUMMARY",
+                "Acción interna del job que genera el reporte Excel de etiquetado y lo envía por email al usuario que cargó las campañas. Sube el archivo al container 'sumary' de Azure Blob. Programar 1 hora después del job de etiquetado."
+            ),
         };
 
         var existingActions = await db.ActionDefinitions

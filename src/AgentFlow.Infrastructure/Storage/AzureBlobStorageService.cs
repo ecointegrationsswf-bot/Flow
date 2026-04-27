@@ -54,4 +54,14 @@ public class AzureBlobStorageService : IBlobStorageService
         var contentType = response.Value.Details.ContentType ?? "application/octet-stream";
         return (response.Value.Content, contentType);
     }
+
+    public async Task<string> UploadToContainerAsync(string containerName, string path, byte[] content, string contentType, CancellationToken ct = default)
+    {
+        var container = new BlobContainerClient(_connStr, containerName);
+        await container.CreateIfNotExistsAsync(PublicAccessType.Blob, cancellationToken: ct);
+        var blob = container.GetBlobClient(path);
+        using var ms = new MemoryStream(content);
+        await blob.UploadAsync(ms, new BlobHttpHeaders { ContentType = contentType }, cancellationToken: ct);
+        return blob.Uri.ToString();
+    }
 }

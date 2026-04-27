@@ -56,5 +56,13 @@ public class Campaign
     /// </summary>
     public OutOfContextPolicy OutOfContextPolicy { get; set; } = OutOfContextPolicy.Contain;
 
+    /// <summary>
+    /// UTC. Última vez que se envió el email con el resumen etiquetado al usuario que
+    /// cargó la campaña. Se usa para idempotencia: el SendLabelingSummaryExecutor solo
+    /// reenvía si alguna conversación tiene LabeledAt > LabelingSummarySentAt.
+    /// NULL = nunca se ha enviado.
+    /// </summary>
+    public DateTime? LabelingSummarySentAt { get; set; }
+
     public ICollection<CampaignContact> Contacts { get; set; } = [];
 }

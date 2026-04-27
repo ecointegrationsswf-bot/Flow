@@ -419,4 +419,147 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         </html>
         """;
     }
+
+    public async Task SendLabelingSummaryAsync(
+        string toEmail,
+        string fullName,
+        string excelUrl,
+        IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
+        CancellationToken ct = default)
+    {
+        var subject = "TalkIA — Resumen del etiquetado";
+        var html = BuildLabelingSummaryTemplate(fullName, excelUrl, campaigns);
+        await SendAsync(toEmail, fullName, subject, html, ct);
+    }
+
+    private static string BuildLabelingSummaryTemplate(
+        string fullName, string excelUrl,
+        IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns)
+    {
+        var sb = new System.Text.StringBuilder();
+        var totalConv = 0;
+        var totalEtiq = 0;
+        foreach (var c in campaigns)
+        {
+            totalEtiq += c.CountsByLabel.Values.Sum();
+            totalConv += c.CountsByLabel.Values.Sum() + c.Unlabeled;
+        }
+
+        // Bloque por campaña: nombre + lista de etiquetas con conteo
+        var campaignRows = new System.Text.StringBuilder();
+        foreach (var c in campaigns)
+        {
+            campaignRows.Append($"""
+            <tr>
+              <td style="padding:14px 18px;border-top:1px solid #e2e8f0;">
+                <div style="font-weight:600;color:#0f172a;font-size:14px;margin-bottom:6px;">{System.Net.WebUtility.HtmlEncode(c.CampaignName)}</div>
+            """);
+            if (c.CountsByLabel.Count == 0)
+            {
+                campaignRows.Append("""
+                <div style="font-size:12px;color:#64748b;">Sin conversaciones etiquetadas todavía.</div>
+                """);
+            }
+            else
+            {
+                foreach (var (label, count) in c.CountsByLabel.OrderByDescending(kv => kv.Value))
+                {
+                    campaignRows.Append($"""
+                    <div style="display:flex;justify-content:space-between;font-size:13px;color:#334155;margin:2px 0;">
+                      <span style="color:#475569;">• {System.Net.WebUtility.HtmlEncode(label)}</span>
+                      <span style="font-weight:600;color:#0f172a;">{count}</span>
+                    </div>
+                    """);
+                }
+                if (c.Unlabeled > 0)
+                {
+                    campaignRows.Append($"""
+                    <div style="display:flex;justify-content:space-between;font-size:12px;color:#94a3b8;margin:2px 0;font-style:italic;">
+                      <span>• Sin etiqueta</span>
+                      <span>{c.Unlabeled}</span>
+                    </div>
+                    """);
+                }
+            }
+            campaignRows.Append("</td></tr>");
+        }
+
+        sb.Append($"""
+        <!DOCTYPE html>
+        <html>
+        <head><meta charset="utf-8"></head>
+        <body style="margin:0;padding:0;background-color:#f4f5f7;font-family:'Segoe UI',Roboto,Arial,sans-serif;">
+          <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7;padding:40px 0;">
+            <tr><td align="center">
+              <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+                <!-- Header -->
+                <tr>
+                  <td style="background:linear-gradient(135deg,#1e40af 0%,#3b82f6 100%);padding:32px 40px;text-align:center;">
+                    <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;letter-spacing:-0.3px;">Resumen del etiquetado IA</h1>
+                    <p style="margin:8px 0 0;color:#dbeafe;font-size:14px;">TalkIA · {DateTime.UtcNow.AddHours(-5):dddd dd 'de' MMMM, yyyy}</p>
+                  </td>
+                </tr>
+
+                <!-- Saludo -->
+                <tr><td style="padding:28px 40px 0;">
+                  <h2 style="margin:0 0 8px;color:#0f172a;font-size:18px;">Hola {System.Net.WebUtility.HtmlEncode(fullName)},</h2>
+                  <p style="margin:0 0 20px;color:#475569;font-size:14px;line-height:1.6;">
+                    Procesamos las conversaciones de tus campañas y asignamos etiquetas con IA.
+                    A continuación tienes el detalle por campaña, y al final un botón para descargar
+                    el reporte completo en Excel.
+                  </p>
+                </td></tr>
+
+                <!-- Totales -->
+                <tr><td style="padding:0 40px 16px;">
+                  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;border-radius:10px;padding:14px 18px;">
+                    <tr>
+                      <td style="font-size:13px;color:#475569;">Conversaciones etiquetadas</td>
+                      <td style="font-size:18px;font-weight:700;color:#1e40af;text-align:right;">{totalEtiq}</td>
+                    </tr>
+                    <tr>
+                      <td style="font-size:12px;color:#64748b;">Total de conversaciones (incluye sin etiqueta)</td>
+                      <td style="font-size:13px;color:#64748b;text-align:right;">{totalConv}</td>
+                    </tr>
+                    <tr>
+                      <td style="font-size:12px;color:#64748b;">Campañas en el reporte</td>
+                      <td style="font-size:13px;color:#64748b;text-align:right;">{campaigns.Count}</td>
+                    </tr>
+                  </table>
+                </td></tr>
+
+                <!-- Detalle por campaña -->
+                <tr><td style="padding:8px 40px 8px;">
+                  <h3 style="margin:0 0 4px;font-size:14px;color:#1e293b;text-transform:uppercase;letter-spacing:0.4px;">Detalle por campaña</h3>
+                  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;background:#ffffff;">
+                    {campaignRows}
+                  </table>
+                </td></tr>
+
+                <!-- CTA -->
+                <tr><td align="center" style="padding:28px 40px 8px;">
+                  <a href="{System.Net.WebUtility.HtmlEncode(excelUrl)}"
+                     style="display:inline-block;background-color:#1d4ed8;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 32px;border-radius:8px;">
+                    📊 Descargar reporte (Excel)
+                  </a>
+                  <p style="margin:14px 0 0;font-size:11px;color:#94a3b8;">
+                    El archivo está disponible para descarga directa desde Azure.
+                  </p>
+                </td></tr>
+
+                <!-- Footer -->
+                <tr><td style="padding:24px 40px 32px;text-align:center;border-top:1px solid #e2e8f0;margin-top:16px;">
+                  <p style="margin:0;font-size:11px;color:#94a3b8;">
+                    Este es un mensaje automático de TalkIA. No respondas a este correo.
+                  </p>
+                </td></tr>
+              </table>
+            </td></tr>
+          </table>
+        </body>
+        </html>
+        """);
+
+        return sb.ToString();
+    }
 }

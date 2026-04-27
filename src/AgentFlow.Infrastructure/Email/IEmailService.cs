@@ -15,4 +15,15 @@ public interface IEmailService
         string? policyNumber,
         List<(string Who, string Text)> messages,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Envía el resumen del etiquetado IA al usuario que cargó las campañas.
+    /// Incluye conteo por etiqueta + botón "Ver resumen" → Excel en Azure Blob.
+    /// </summary>
+    Task SendLabelingSummaryAsync(
+        string toEmail,
+        string fullName,
+        string excelUrl,
+        IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
+        CancellationToken ct = default);
 }

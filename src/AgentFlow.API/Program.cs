@@ -138,6 +138,10 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.ConversationLabelingJob>();
 
+// Fase 3 executor — slug SEND_LABELING_SUMMARY (Excel + Azure Blob + email).
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.SendLabelingSummaryExecutor>();
+
 builder.Services.AddHostedService<AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
@@ -726,6 +730,9 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'LabeledAt')
             BEGIN ALTER TABLE Conversations ADD LabeledAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LabelingSummarySentAt')
+            BEGIN ALTER TABLE Campaigns ADD LabelingSummarySentAt datetime2 NULL; END");
         // Si quedaron residuos de iteraciones previas, los dropeamos para mantener el schema limpio.
         db.Database.ExecuteSqlRaw(@"
             IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'LabelingJobHourUtc')

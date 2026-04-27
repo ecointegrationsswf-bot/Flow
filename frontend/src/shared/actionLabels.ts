@@ -18,6 +18,7 @@ export const ACTION_FRIENDLY_NAMES: Record<string, string> = {
   FOLLOW_UP_MESSAGE: 'Seguimiento automático',
   AUTO_CLOSE_CAMPAIGN: 'Cierre automático de campaña',
   LABEL_CONVERSATIONS: 'Etiquetar conversaciones',
+  SEND_LABELING_SUMMARY: 'Enviar resumen etiquetado',
 }
 
 export function getActionFriendlyName(slug: string | null | undefined): string {
