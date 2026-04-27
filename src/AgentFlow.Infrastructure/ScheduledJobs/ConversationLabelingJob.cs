@@ -17,7 +17,12 @@ namespace AgentFlow.Infrastructure.ScheduledJobs;
 /// Cron configurado en /admin/scheduled-jobs (la expresión cron del job es el
 /// horario; típicamente "0 23 * * *" para 11pm UTC). Cuando el Worker dispara
 /// el job, este executor recorre TODOS los maestros del sistema que tengan al
-/// menos una etiqueta asignada y clasifica sus conversaciones cerradas pendientes.
+/// menos una etiqueta asignada y clasifica las conversaciones candidatas.
+///
+/// Criterio de candidatura (independiente del Status de la conversación):
+///   1. Sin etiqueta              → LabelId IS NULL
+///   2. Con etiqueta pero el cliente escribió después → LastActivityAt > LabeledAt
+/// Las que ya están etiquetadas y NO tuvieron actividad nueva quedan como están.
 ///
 /// Responsabilidad ÚNICA: asignar etiqueta. NO envía webhooks de resultado.
 /// El envío al cliente se modela como una ActionDefinition + ScheduledWebhookJob
@@ -105,14 +110,19 @@ Formato exacto:
                 continue;
             }
 
-            // Conversaciones cerradas, sin etiquetar, de campañas que usan este maestro.
+            // Conversaciones candidatas a etiquetar/re-etiquetar:
+            // - LabelId IS NULL (nunca etiquetadas) o
+            // - LastActivityAt > LabeledAt (el cliente escribió tras el último etiquetado).
+            // El Status NO se filtra: una conversación Active puede etiquetarse y luego
+            // re-etiquetarse cuando llegan más mensajes. Ordenamos por LastActivityAt
+            // ascendente para atender primero las que llevan más tiempo sin re-clasificar.
             var pending = await db.Conversations
                 .Where(c => c.TenantId == tpl.TenantId
-                            && c.Status == ConversationStatus.Closed
-                            && c.LabelId == null
                             && c.CampaignId != null
+                            && (c.LabelId == null
+                                || (c.LabeledAt != null && c.LastActivityAt > c.LabeledAt))
                             && db.Campaigns.Any(camp => camp.Id == c.CampaignId && camp.CampaignTemplateId == tpl.Id))
-                .OrderBy(c => c.ClosedAt)
+                .OrderBy(c => c.LastActivityAt)
                 .Take(MaxConversationsPerRun)
                 .Select(c => c.Id)
                 .ToListAsync(ct);
