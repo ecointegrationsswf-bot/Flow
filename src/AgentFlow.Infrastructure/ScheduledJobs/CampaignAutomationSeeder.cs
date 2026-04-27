@@ -26,6 +26,10 @@ public static class CampaignAutomationSeeder
                 "AUTO_CLOSE_CAMPAIGN",
                 "Acción interna que cierra todas las conversaciones activas de una campaña al cumplirse CampaignTemplate.AutoCloseHours. No invocar manualmente."
             ),
+            (
+                "LABEL_CONVERSATIONS",
+                "Acción interna del job diario de etiquetado IA. Recorre las conversaciones cerradas no etiquetadas, llama a Claude para clasificarlas según las labels asociadas al maestro y dispara el webhook de resultado al cliente. Configurada por hora UTC en CampaignTemplate.LabelingJobHourUtc."
+            ),
         };
 
         var existing = await db.ActionDefinitions
@@ -56,5 +60,48 @@ public static class CampaignAutomationSeeder
             await db.SaveChangesAsync(ct);
             logger.LogInformation("CampaignAutomationSeeder: insertadas {Count} ActionDefinitions globales.", inserted);
         }
+
+        // Fase 3: garantizar que existe un único ScheduledWebhookJob Cron horario
+        // que dispare LABEL_CONVERSATIONS. El executor decide internamente qué
+        // maestros corresponden a la hora UTC actual via CampaignTemplate.LabelingJobHourUtc.
+        await EnsureLabelingCronJobAsync(db, logger, ct);
+    }
+
+    private static async Task EnsureLabelingCronJobAsync(AgentFlowDbContext db, ILogger logger, CancellationToken ct)
+    {
+        var labelAction = await db.ActionDefinitions
+            .Where(a => a.TenantId == null && a.Name == "LABEL_CONVERSATIONS")
+            .Select(a => (Guid?)a.Id)
+            .FirstOrDefaultAsync(ct);
+        if (labelAction is null) return;
+
+        var alreadyHasCron = await db.ScheduledWebhookJobs
+            .AnyAsync(j => j.ActionDefinitionId == labelAction.Value
+                           && j.TriggerType == "Cron"
+                           && j.Scope == "AllTenants", ct);
+        if (alreadyHasCron) return;
+
+        // Cron "0 * * * *" → al minuto 0 de cada hora UTC.
+        var cron = "0 * * * *";
+        var next = ComputeNextHourTopUtc(DateTime.UtcNow);
+
+        db.ScheduledWebhookJobs.Add(new ScheduledWebhookJob
+        {
+            Id = Guid.NewGuid(),
+            ActionDefinitionId = labelAction.Value,
+            TriggerType = "Cron",
+            CronExpression = cron,
+            Scope = "AllTenants",
+            IsActive = true,
+            NextRunAt = next,
+        });
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("CampaignAutomationSeeder: creado job Cron horario LABEL_CONVERSATIONS (NextRunAt={Next}).", next);
+    }
+
+    private static DateTime ComputeNextHourTopUtc(DateTime fromUtc)
+    {
+        // Próximo "0 * * * *" en UTC.
+        return new DateTime(fromUtc.Year, fromUtc.Month, fromUtc.Day, fromUtc.Hour, 0, 0, DateTimeKind.Utc).AddHours(1);
     }
 }

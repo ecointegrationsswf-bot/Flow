@@ -144,4 +144,116 @@ public class SystemContextBuilder(AgentFlowDbContext db) : ISystemContextBuilder
 
         return ctx;
     }
+
+    public async Task<SystemContext> BuildResultContextAsync(Guid conversationId, CancellationToken ct = default)
+    {
+        // 1. Cargar conversación + label en una sola query.
+        var convInfo = await db.Conversations
+            .Where(c => c.Id == conversationId)
+            .Select(c => new
+            {
+                c.Id, c.TenantId, c.CampaignId, c.ClientPhone, c.ClientName,
+                c.Status, c.ClosedAt, c.IsHumanHandled,
+                c.LabelId, c.LabeledAt,
+                LabelName = c.Label != null ? c.Label.Name : null,
+                LabelKeywords = c.Label != null ? c.Label.Keywords : null,
+                MessageCount = c.Messages.Count,
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (convInfo is null)
+        {
+            // Sin conversación → contexto vacío. El caller decide qué hacer.
+            return new SystemContext();
+        }
+
+        // 2. Reutilizar BuildAsync para los sourceKeys básicos (tenant/campaign/contact).
+        var ctx = await BuildAsync(
+            convInfo.TenantId, convInfo.CampaignId, convInfo.ClientPhone, convInfo.Id, null, ct);
+
+        // 3. Sobreescribir/agregar los keys específicos del resultado.
+        ctx.Set("conversation.closedAt", convInfo.ClosedAt?.ToString("O"));
+        ctx.Set("conversation.messageCount", convInfo.MessageCount.ToString());
+        ctx.Set("conversation.closeReason", DeriveCloseReason(convInfo.Status, convInfo.IsHumanHandled));
+
+        if (convInfo.LabelId.HasValue && !string.IsNullOrEmpty(convInfo.LabelName))
+        {
+            ctx.Set("conversation.label.name", convInfo.LabelName);
+            ctx.Set("conversation.label.slug", Slugify(convInfo.LabelName));
+            ctx.Set("conversation.label.keywords", convInfo.LabelKeywords is null ? null : string.Join(", ", convInfo.LabelKeywords));
+            ctx.Set("conversation.label.labeledAt", convInfo.LabeledAt?.ToString("O"));
+        }
+
+        // 4. campaign.externalRef → primer registro del ContactDataJson con clave que
+        //    parezca identificador externo (clientId / nroPoliza / cedula / externalId).
+        //    Permite que el cliente correlacione la conversación con su sistema sin schema rígido.
+        if (convInfo.CampaignId.HasValue)
+        {
+            var contactJson = await db.CampaignContacts
+                .Where(cc => cc.CampaignId == convInfo.CampaignId && cc.PhoneNumber == convInfo.ClientPhone)
+                .Select(cc => cc.ContactDataJson)
+                .FirstOrDefaultAsync(ct);
+
+            if (!string.IsNullOrEmpty(contactJson))
+            {
+                var externalRef = ExtractExternalRef(contactJson);
+                if (externalRef is not null)
+                {
+                    ctx.Set("contact.externalId", externalRef);
+                    ctx.Set("campaign.externalRef", externalRef);
+                }
+            }
+        }
+
+        return ctx;
+    }
+
+    private static string DeriveCloseReason(AgentFlow.Domain.Enums.ConversationStatus status, bool isHumanHandled)
+    {
+        return status switch
+        {
+            AgentFlow.Domain.Enums.ConversationStatus.Closed when isHumanHandled => "AgentClose",
+            AgentFlow.Domain.Enums.ConversationStatus.Closed => "AutoClose",
+            AgentFlow.Domain.Enums.ConversationStatus.EscalatedToHuman => "EscalatedClose",
+            _ => "Open",
+        };
+    }
+
+    private static string Slugify(string input)
+    {
+        var lowered = input.ToLowerInvariant().Trim();
+        var sb = new System.Text.StringBuilder(lowered.Length);
+        foreach (var ch in lowered)
+        {
+            if (char.IsLetterOrDigit(ch)) sb.Append(ch);
+            else if (ch == ' ' || ch == '-' || ch == '_') sb.Append('_');
+        }
+        return sb.ToString().Trim('_');
+    }
+
+    private static string? ExtractExternalRef(string contactJson)
+    {
+        try
+        {
+            var records = System.Text.Json.JsonSerializer
+                .Deserialize<List<Dictionary<string, System.Text.Json.JsonElement>>>(contactJson);
+            if (records is not { Count: > 0 }) return null;
+
+            var first = records[0];
+            // Heurística: probar claves comunes de identificador externo en orden de prioridad.
+            string[] candidates = ["externalId", "clientId", "nroPoliza", "policyNumber", "cedula", "documentId", "keyValue"];
+            foreach (var key in candidates)
+            {
+                if (first.TryGetValue(key, out var val))
+                {
+                    var s = val.ValueKind == System.Text.Json.JsonValueKind.String
+                        ? val.GetString()
+                        : val.ToString();
+                    if (!string.IsNullOrEmpty(s)) return s;
+                }
+            }
+        }
+        catch { /* JSON inválido — ignorar */ }
+        return null;
+    }
 }

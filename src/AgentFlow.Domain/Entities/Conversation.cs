@@ -37,6 +37,17 @@ public class Conversation
     public DateTime? ClosedAt { get; set; }
     public DateTime LastActivityAt { get; set; } = DateTime.UtcNow;
 
+    // ── Fase 3 — Etiquetado IA + Webhook de resultado ─────────────────────
+    /// <summary>Etiqueta asignada por el clasificador IA. NULL = aún sin etiquetar.</summary>
+    public Guid? LabelId { get; set; }
+    public ConversationLabel? Label { get; set; }
+    /// <summary>UTC. Cuándo el clasificador asignó la etiqueta.</summary>
+    public DateTime? LabeledAt { get; set; }
+    /// <summary>UTC. Cuándo se envió el webhook de resultado al endpoint del cliente. NULL = no enviado.</summary>
+    public DateTime? ResultWebhookSentAt { get; set; }
+    /// <summary>HTTP status code del último intento de envío del webhook resultado. NULL = no intentado.</summary>
+    public int? ResultWebhookStatus { get; set; }
+
     public ICollection<Message> Messages { get; set; } = [];
     public ICollection<GestionEvent> GestionEvents { get; set; } = [];
 }

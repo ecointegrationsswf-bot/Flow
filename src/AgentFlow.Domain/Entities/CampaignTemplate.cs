@@ -54,6 +54,25 @@ public class CampaignTemplate
     /// </summary>
     public string? AutoCloseMessage { get; set; }
 
+    // ── Fase 3 — Etiquetado IA + Webhook de resultado ─────────────────────
+    /// <summary>
+    /// Hora UTC (0-23) en que el job diario clasifica las conversaciones cerradas
+    /// no etiquetadas de campañas que usan este maestro. NULL = etiquetado deshabilitado.
+    /// </summary>
+    public int? LabelingJobHourUtc { get; set; }
+
+    /// <summary>
+    /// Endpoint del cliente que recibe el resultado de cada conversación etiquetada.
+    /// NULL = no se envía webhook (solo se asigna etiqueta internamente).
+    /// </summary>
+    public string? ResultWebhookUrl { get; set; }
+
+    /// <summary>
+    /// JSON OutputSchema (formato Webhook Contract System) que define los campos
+    /// del payload enviado al cliente. NULL = se envía un payload mínimo por defecto.
+    /// </summary>
+    public string? ResultOutputSchema { get; set; }
+
     // Etiquetas de seguimiento (IDs del maestro de etiquetas)
     public List<Guid> LabelIds { get; set; } = [];
 
