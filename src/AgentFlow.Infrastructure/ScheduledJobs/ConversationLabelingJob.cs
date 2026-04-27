@@ -43,6 +43,7 @@ namespace AgentFlow.Infrastructure.ScheduledJobs;
 public class ConversationLabelingJob(
     AgentFlowDbContext db,
     AnthropicClient anthropic,
+    AgentFlow.Infrastructure.AI.AnthropicSettings anthropicSettings,
     IWebhookEventDispatcher eventDispatcher,
     ILogger<ConversationLabelingJob> log) : IScheduledJobExecutor
 {
@@ -52,7 +53,6 @@ public class ConversationLabelingJob(
     private const int ClassifierMaxTokens = 300;
     private const decimal ClassifierTemperature = 0.0m;
     private const int MaxConversationsPerRun = 200;
-    private const int MaxParallel = 10;
 
     private const string SystemPromptText = """
 Eres un clasificador de conversaciones de atención al cliente.
@@ -94,9 +94,27 @@ Formato exacto:
         var totalLabeled = 0;
         var totalFailed = 0;
 
+        // Cache de AnthropicClient por tenant — evita reconstruir el cliente
+        // por cada conversación. Si el tenant no tiene LlmApiKey y no hay key
+        // global, el tenant entero se omite con warning.
+        var clientByTenant = new Dictionary<Guid, AnthropicClient?>();
+
         foreach (var tpl in templates)
         {
             if (ct.IsCancellationRequested) break;
+
+            // Resolver el AnthropicClient del tenant (con su LlmApiKey si la tiene).
+            if (!clientByTenant.TryGetValue(tpl.TenantId, out var tenantClient))
+            {
+                tenantClient = await ResolveTenantClientAsync(tpl.TenantId, ct);
+                clientByTenant[tpl.TenantId] = tenantClient;
+            }
+            if (tenantClient is null)
+            {
+                log.LogWarning("Labeling: tenant {Tenant} sin AnthropicClient disponible — maestro {Tpl} omitido.",
+                    tpl.TenantId, tpl.Id);
+                continue;
+            }
 
             // Resolver labels del tenant que el maestro tiene asignadas.
             var labels = await db.ConversationLabels
@@ -113,9 +131,7 @@ Formato exacto:
             // Conversaciones candidatas a etiquetar/re-etiquetar:
             // - LabelId IS NULL (nunca etiquetadas) o
             // - LastActivityAt > LabeledAt (el cliente escribió tras el último etiquetado).
-            // El Status NO se filtra: una conversación Active puede etiquetarse y luego
-            // re-etiquetarse cuando llegan más mensajes. Ordenamos por LastActivityAt
-            // ascendente para atender primero las que llevan más tiempo sin re-clasificar.
+            // El Status NO se filtra.
             var pending = await db.Conversations
                 .Where(c => c.TenantId == tpl.TenantId
                             && c.CampaignId != null
@@ -130,28 +146,23 @@ Formato exacto:
             if (pending.Count == 0) continue;
             log.LogInformation("Labeling: {N} conversaciones para maestro {Tpl}.", pending.Count, tpl.Id);
 
-            // Procesar con paralelismo controlado.
-            using var sem = new SemaphoreSlim(MaxParallel);
-            var tasks = pending.Select(async convId =>
+            // Procesamiento SECUENCIAL — el DbContext es scoped al job y no
+            // soporta queries concurrentes. Cada Claude call tarda ~1-3s, así
+            // que para 200 conversaciones es 5-10 min, aceptable para un job nocturno.
+            var labelTuples = labels.Select(l => (l.Id, l.Name, l.Keywords)).ToList();
+            foreach (var convId in pending)
             {
-                await sem.WaitAsync(ct);
+                if (ct.IsCancellationRequested) break;
+                bool labeled;
                 try
                 {
-                    return await ProcessConversationAsync(
-                        convId, tpl.TenantId,
-                        labels.Select(l => (l.Id, l.Name, l.Keywords)).ToList(), ct);
+                    labeled = await ProcessConversationAsync(tenantClient, convId, tpl.TenantId, labelTuples, ct);
                 }
                 catch (Exception ex)
                 {
                     log.LogError(ex, "Labeling: error procesando conversación {Conv}.", convId);
-                    return false;
+                    labeled = false;
                 }
-                finally { sem.Release(); }
-            });
-
-            var results = await Task.WhenAll(tasks);
-            foreach (var labeled in results)
-            {
                 totalProcessed++;
                 if (labeled) totalLabeled++; else totalFailed++;
             }
@@ -167,10 +178,31 @@ Formato exacto:
     }
 
     /// <summary>
+    /// Resuelve el AnthropicClient adecuado para un tenant. Prioriza la LlmApiKey
+    /// del tenant; fallback a la key global. Si ninguna está disponible devuelve null.
+    /// </summary>
+    private async Task<AnthropicClient?> ResolveTenantClientAsync(Guid tenantId, CancellationToken ct)
+    {
+        var apiKey = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => t.LlmApiKey)
+            .FirstOrDefaultAsync(ct);
+
+        if (!string.IsNullOrEmpty(apiKey))
+            return new AnthropicClient(apiKey);
+
+        if (anthropicSettings.HasGlobalKey)
+            return anthropic;
+
+        return null;
+    }
+
+    /// <summary>
     /// Etiqueta UNA conversación. Devuelve true si quedó etiquetada, false si falló.
     /// Tras etiquetar exitosamente, dispara el evento ConversationLabeled.
     /// </summary>
     private async Task<bool> ProcessConversationAsync(
+        AnthropicClient client,
         Guid conversationId, Guid tenantId,
         List<(Guid Id, string Name, List<string> Keywords)> labels,
         CancellationToken ct)
@@ -196,7 +228,7 @@ Formato exacto:
         LabelingResult? parsed;
         try
         {
-            var response = await anthropic.Messages.GetClaudeMessageAsync(new MessageParameters
+            var response = await client.Messages.GetClaudeMessageAsync(new MessageParameters
             {
                 Model = ClassifierModel,
                 MaxTokens = ClassifierMaxTokens,
