@@ -11,19 +11,10 @@ import {
 } from '../hooks/useAdminActions'
 import { useAdminTenants } from '../hooks/useAdminTenants'
 
-const ACTION_FRIENDLY_NAMES: Record<string, string> = {
-  'SEND_EMAIL_RESUME': 'Enviar email con resumen',
-  'TRANSFER_CHAT': 'Escalar a humano',
-  'SEND_MESSAGE': 'Enviar mensaje',
-  'SEND_RESUME': 'Enviar resumen',
-  'PREMIUM': 'Premium',
-  'CLOSE_CONVERSATION': 'Cerrar conversacion',
-  'ESCALATE_TO_HUMAN': 'Escalar a ejecutivo',
-  'SEND_PAYMENT_LINK': 'Enviar enlace de pago',
-  'SEND_DOCUMENT': 'Enviar documento',
-}
-
-const getFriendlyName = (name: string) => ACTION_FRIENDLY_NAMES[name] ?? name
+// Reusamos el catálogo único de friendly names — incluye también las acciones
+// internas del Campaign Automation Worker (FOLLOW_UP_MESSAGE, AUTO_CLOSE_CAMPAIGN,
+// LABEL_CONVERSATIONS) para que se muestren consistentes en toda la app.
+import { getActionFriendlyName } from '@/shared/actionLabels'
 
 const emptyForm: Omit<ActionPayload, 'tenantId'> = {
   name: '',
@@ -155,7 +146,7 @@ export function ActionsPage() {
                   <td className="px-4 py-3">
                     <div>
                       <span className="inline-flex items-center gap-1.5 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                        {getFriendlyName(a.name)}
+                        {getActionFriendlyName(a.name)}
                       </span>
                       <p className="mt-0.5 text-[10px] text-gray-400">{a.name}</p>
                     </div>

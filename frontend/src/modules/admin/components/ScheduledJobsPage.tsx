@@ -8,6 +8,7 @@ import {
   useScheduledJobs, useDeleteScheduledJob, useRunScheduledJobNow,
   type ScheduledJob,
 } from '@/modules/admin/hooks/useScheduledJobs'
+import { getActionFriendlyName } from '@/shared/actionLabels'
 import { ScheduledJobFormModal } from './ScheduledJobFormModal'
 import { ScheduledJobHistoryModal } from './ScheduledJobHistoryModal'
 
@@ -21,7 +22,7 @@ export function ScheduledJobsPage() {
   const [historyJobId, setHistoryJobId] = useState<string | null>(null)
 
   const handleDelete = async (job: ScheduledJob) => {
-    if (!confirm(`¿Eliminar el job "${job.actionName ?? job.id}"? El historial también se borrará.`)) return
+    if (!confirm(`¿Eliminar el job "${getActionFriendlyName(job.actionName) || job.id}"? El historial también se borrará.`)) return
     await deleteJob.mutateAsync(job.id)
   }
 
@@ -94,7 +95,12 @@ export function ScheduledJobsPage() {
             <tbody className="divide-y divide-gray-800 text-sm text-gray-200">
               {jobs!.map((j) => (
                 <tr key={j.id} className="bg-gray-950 hover:bg-gray-900">
-                  <td className="px-3 py-2 font-medium">{j.actionName ?? j.actionDefinitionId.slice(0, 8)}</td>
+                  <td className="px-3 py-2 font-medium">
+                    <div>{getActionFriendlyName(j.actionName) || j.actionDefinitionId.slice(0, 8)}</div>
+                    {j.actionName && (
+                      <div className="text-[10px] text-gray-500 font-mono">{j.actionName}</div>
+                    )}
+                  </td>
                   <td className="px-3 py-2">
                     <TriggerCell job={j} />
                   </td>

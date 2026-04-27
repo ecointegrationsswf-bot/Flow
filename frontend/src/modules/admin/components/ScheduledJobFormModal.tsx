@@ -5,6 +5,7 @@ import {
   previewCron, TRIGGER_EVENTS,
   type ScheduledJob, type TriggerType, type JobScope, type CronPreview,
 } from '@/modules/admin/hooks/useScheduledJobs'
+import { getActionFriendlyName } from '@/shared/actionLabels'
 
 interface Props {
   job: ScheduledJob | null
@@ -93,7 +94,7 @@ export function ScheduledJobFormModal({ job, onClose }: Props) {
             <option value="">— Selecciona —</option>
             {actions?.map((a) => (
               <option key={a.id} value={a.id}>
-                {a.name} {!a.isActive && '(inactiva)'}
+                {getActionFriendlyName(a.name)} {!a.isActive && '(inactiva)'}
               </option>
             ))}
           </select>
