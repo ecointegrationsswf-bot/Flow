@@ -108,7 +108,9 @@ export function ScheduledJobsPage() {
                     <ScopeBadge scope={j.scope} />
                   </td>
                   <td className="px-3 py-2 text-gray-400">
-                    {j.nextRunAt ? format(new Date(j.nextRunAt), 'dd/MM/yyyy HH:mm') : '—'}
+                    {j.nextRunAt
+                      ? new Date(j.nextRunAt).toLocaleString('es-PA', { timeZone: 'America/Panama', hour12: false, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+                      : '—'}
                   </td>
                   <td className="px-3 py-2">
                     <StatusCell job={j} onClickHistory={() => setHistoryJobId(j.id)} />

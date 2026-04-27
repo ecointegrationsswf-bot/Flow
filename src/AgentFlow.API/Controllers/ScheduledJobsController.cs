@@ -156,7 +156,7 @@ public class ScheduledJobsController(
             var next = new List<DateTime>();
             for (int i = 0; i < 5; i++)
             {
-                var n = cron.GetNextOccurrence(now, TimeZoneInfo.Utc);
+                var n = cron.GetNextOccurrence(now, AgentFlow.Infrastructure.ScheduledJobs.PanamaTimeZone.Instance);
                 if (n is null) break;
                 next.Add(n.Value);
                 now = n.Value;
@@ -207,7 +207,8 @@ public class ScheduledJobsController(
         try
         {
             var cron = CronExpression.Parse(r.CronExpression!);
-            return cron.GetNextOccurrence(DateTime.UtcNow, TimeZoneInfo.Utc);
+            // La cron se interpreta en hora Panamá; Cronos devuelve el próximo run en UTC.
+            return cron.GetNextOccurrence(DateTime.UtcNow, AgentFlow.Infrastructure.ScheduledJobs.PanamaTimeZone.Instance);
         }
         catch
         {

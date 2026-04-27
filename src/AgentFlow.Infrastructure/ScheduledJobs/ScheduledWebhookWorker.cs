@@ -178,7 +178,9 @@ public class ScheduledWebhookWorker(
         try
         {
             var cron = CronExpression.Parse(job.CronExpression);
-            return cron.GetNextOccurrence(from, TimeZoneInfo.Utc);
+            // La expresión cron se interpreta en hora Panamá (UTC-5) para que el
+            // admin no tenga que calcular UTC. Cronos devuelve el próximo run en UTC.
+            return cron.GetNextOccurrence(from, PanamaTimeZone.Instance);
         }
         catch (Exception ex)
         {

@@ -19,7 +19,7 @@ export function ScheduledJobFormModal({ job, onClose }: Props) {
 
   const [actionDefinitionId, setActionId] = useState(job?.actionDefinitionId ?? '')
   const [triggerType, setTriggerType] = useState<TriggerType>(job?.triggerType ?? 'Cron')
-  const [cronExpression, setCron] = useState(job?.cronExpression ?? '0 23 * * *')
+  const [cronExpression, setCron] = useState(job?.cronExpression ?? '0 18 * * *')
   const [triggerEvent, setEvent] = useState(job?.triggerEvent ?? 'CampaignStarted')
   const [delayMinutes, setDelay] = useState<number>(job?.delayMinutes ?? 60)
   const [scope, setScope] = useState<JobScope>(job?.scope ?? 'AllTenants')
@@ -114,7 +114,7 @@ export function ScheduledJobFormModal({ job, onClose }: Props) {
 
         {triggerType === 'Cron' && (
           <>
-            <Field label="Expresión cron (UTC, formato 5 campos)">
+            <Field label="Expresión cron (hora Panamá, formato 5 campos)">
               <input
                 type="text"
                 value={cronExpression}
@@ -224,15 +224,24 @@ function CronPreviewBox({ preview }: { preview: CronPreview | null }) {
       </div>
     )
   }
+  // El backend devuelve los próximos runs en UTC. Los convertimos a hora Panamá
+  // para que el admin vea la hora real en que va a correr (la cron expression
+  // ya se interpreta en zona Panamá del lado del backend).
+  const fmtPanama = (utcIso: string) => {
+    const d = new Date(utcIso)
+    const date = d.toLocaleDateString('es-PA', { timeZone: 'America/Panama', year: 'numeric', month: '2-digit', day: '2-digit' })
+    const time = d.toLocaleTimeString('es-PA', { timeZone: 'America/Panama', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    return `${date} ${time}`
+  }
   return (
     <div className="rounded-md border border-gray-800 bg-gray-950 p-2 text-xs">
       <div className="mb-1 flex items-center gap-1.5 text-green-400">
         <CheckCircle2 className="h-3.5 w-3.5" />
-        <span>Próximas 5 ejecuciones (UTC):</span>
+        <span>Próximas 5 ejecuciones (hora Panamá):</span>
       </div>
       <ul className="space-y-0.5 text-gray-400">
         {preview.nextOccurrencesUtc?.map((d) => (
-          <li key={d} className="font-mono">· {d.replace('T', ' ').replace('Z', '')}</li>
+          <li key={d} className="font-mono">· {fmtPanama(d)}</li>
         ))}
       </ul>
     </div>

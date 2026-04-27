@@ -50,7 +50,7 @@ export function ScheduledJobHistoryModal({ jobId, onClose }: Props) {
                 {execs.map((e) => (
                   <tr key={e.id}>
                     <td className="px-2 py-1.5 font-mono text-xs text-gray-400">
-                      {format(new Date(e.startedAt), 'dd/MM HH:mm:ss')}
+                      {new Date(e.startedAt).toLocaleString('es-PA', { timeZone: 'America/Panama', hour12: false, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     </td>
                     <td className="px-2 py-1.5">
                       <ExecStatus status={e.status} />
@@ -82,7 +82,7 @@ export function ScheduledJobHistoryModal({ jobId, onClose }: Props) {
                   key={e.id}
                   className="overflow-x-auto rounded border border-red-900/40 bg-red-950/30 p-2 text-xs text-red-300"
                 >
-                  [{format(new Date(e.startedAt), 'HH:mm:ss')}] {e.errorDetail}
+                  [{new Date(e.startedAt).toLocaleTimeString('es-PA', { timeZone: 'America/Panama', hour12: false })}] {e.errorDetail}
                 </pre>
               ))}
             </div>
