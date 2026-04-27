@@ -34,7 +34,10 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         await SendAsync(toEmail, fullName, subject, html, ct);
     }
 
-    private async Task SendAsync(string toEmail, string toName, string subject, string htmlContent, CancellationToken ct)
+    private async Task SendAsync(
+        string toEmail, string toName, string subject, string htmlContent,
+        CancellationToken ct,
+        IEnumerable<string>? bccEmails = null)
     {
         try
         {
@@ -42,6 +45,20 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
             var from = new EmailAddress(FromEmail, FromName);
             var to = new EmailAddress(toEmail, toName);
             var msg = MailHelper.CreateSingleEmail(from, to, subject, null, htmlContent);
+
+            // BCC silencioso (típicamente a super admins). El destinatario principal
+            // no ve estas direcciones — SendGrid las añade en sobres SMTP separados.
+            if (bccEmails is not null)
+            {
+                foreach (var bcc in bccEmails
+                    .Where(e => !string.IsNullOrWhiteSpace(e)
+                                && !string.Equals(e, toEmail, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    msg.AddBcc(new EmailAddress(bcc));
+                }
+            }
+
             await client.SendEmailAsync(msg, ct);
         }
         catch (Exception ex)
@@ -425,11 +442,12 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         string fullName,
         string excelUrl,
         IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
+        IEnumerable<string>? bccEmails = null,
         CancellationToken ct = default)
     {
         var subject = "TalkIA — Resumen del etiquetado";
         var html = BuildLabelingSummaryTemplate(fullName, excelUrl, campaigns);
-        await SendAsync(toEmail, fullName, subject, html, ct);
+        await SendAsync(toEmail, fullName, subject, html, ct, bccEmails);
     }
 
     private static string BuildLabelingSummaryTemplate(

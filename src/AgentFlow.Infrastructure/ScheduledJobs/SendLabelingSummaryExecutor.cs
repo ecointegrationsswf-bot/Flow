@@ -40,6 +40,12 @@ public class SendLabelingSummaryExecutor(
     public async Task<JobRunResult> ExecuteAsync(
         ScheduledWebhookJob job, ScheduledJobContext ctx, CancellationToken ct)
     {
+        // 0. Emails de super admins activos para BCC silencioso en cada envío.
+        var superAdminEmails = await db.SuperAdmins
+            .Where(s => s.IsActive && !string.IsNullOrEmpty(s.Email))
+            .Select(s => s.Email)
+            .ToListAsync(ct);
+
         // 1. Detectar campañas con cambios desde el último envío.
         // Una campaña tiene cambios si alguna de sus conversaciones tiene
         // LabeledAt > LabelingSummarySentAt (o el timestamp es NULL = nunca enviado).
@@ -95,9 +101,10 @@ public class SendLabelingSummaryExecutor(
                     ContainerName, blobPath, excelBytes,
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ct);
 
-                // 5. Enviar email.
+                // 5. Enviar email (con copia oculta a todos los super admins activos).
                 await emailService.SendLabelingSummaryAsync(
-                    user.Email, user.FullName, url, perCampaignSummary, ct);
+                    user.Email, user.FullName, url, perCampaignSummary,
+                    bccEmails: superAdminEmails, ct: ct);
 
                 // 6. Marcar campañas como enviadas (en lote).
                 await db.Campaigns
