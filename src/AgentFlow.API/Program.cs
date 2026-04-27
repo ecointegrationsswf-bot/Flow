@@ -575,6 +575,15 @@ try
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Campaigns/AppUsers columns: {ex.Message}"); }
 
+    // ── ActionDefinitions.IsProcess (Fase 3 — acciones internas) ──────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionDefinitions') AND name = 'IsProcess')
+            BEGIN ALTER TABLE ActionDefinitions ADD IsProcess bit NOT NULL DEFAULT 0; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] ActionDefinitions.IsProcess: {ex.Message}"); }
+
     // ── Tabla ActionDefinitions (migración AddActionDefinitions) ──────────
     try
     {

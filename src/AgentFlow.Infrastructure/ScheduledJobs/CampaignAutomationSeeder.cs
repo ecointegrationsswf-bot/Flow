@@ -16,6 +16,9 @@ public static class CampaignAutomationSeeder
 {
     public static async Task SeedAsync(AgentFlowDbContext db, ILogger logger, CancellationToken ct = default)
     {
+        // Acciones internas del Campaign Automation Worker. Todas son IsProcess=true:
+        // no requieren webhook saliente, email o SMS. La lógica vive en un
+        // IScheduledJobExecutor del backend.
         var required = new (string Name, string Description)[]
         {
             (
@@ -28,19 +31,29 @@ public static class CampaignAutomationSeeder
             ),
             (
                 "LABEL_CONVERSATIONS",
-                "Acción interna del job diario de etiquetado IA. Recorre las conversaciones cerradas no etiquetadas, llama a Claude para clasificarlas según las labels asociadas al maestro y dispara el webhook de resultado al cliente. Configurada por hora UTC en CampaignTemplate.LabelingJobHourUtc."
+                "Acción interna del job de etiquetado IA. Recorre las conversaciones cerradas no etiquetadas y llama a Claude para clasificarlas según las labels asociadas al maestro. Tras etiquetar dispara el evento ConversationLabeled — el admin puede programar webhooks de resultado al cliente como Scheduled Jobs aparte."
             ),
         };
 
-        var existing = await db.ActionDefinitions
+        var existingActions = await db.ActionDefinitions
             .Where(a => a.TenantId == null)
-            .Select(a => a.Name)
-            .ToListAsync(ct);
+            .ToDictionaryAsync(a => a.Name, ct);
 
         var inserted = 0;
+        var updated = 0;
         foreach (var (name, description) in required)
         {
-            if (existing.Contains(name)) continue;
+            if (existingActions.TryGetValue(name, out var existing))
+            {
+                // Si ya existe pero IsProcess sigue en false (instalación previa al campo),
+                // lo marcamos como proceso ahora — son acciones internas por definición.
+                if (!existing.IsProcess)
+                {
+                    existing.IsProcess = true;
+                    updated++;
+                }
+                continue;
+            }
 
             db.ActionDefinitions.Add(new ActionDefinition
             {
@@ -50,15 +63,16 @@ public static class CampaignAutomationSeeder
                 Description = description,
                 IsActive = true,
                 RequiresWebhook = false,    // las invoca el Worker, no requiere webhook saliente directo
+                IsProcess = true,           // acción interna del backend
                 CreatedAt = DateTime.UtcNow
             });
             inserted++;
         }
 
-        if (inserted > 0)
+        if (inserted > 0 || updated > 0)
         {
             await db.SaveChangesAsync(ct);
-            logger.LogInformation("CampaignAutomationSeeder: insertadas {Count} ActionDefinitions globales.", inserted);
+            logger.LogInformation("CampaignAutomationSeeder: insertadas {Inserted}, actualizadas {Updated} ActionDefinitions globales.", inserted, updated);
         }
 
         // Fase 3: garantizar que existe un único ScheduledWebhookJob Cron horario

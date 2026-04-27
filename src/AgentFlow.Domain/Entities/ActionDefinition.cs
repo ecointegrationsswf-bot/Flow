@@ -19,6 +19,14 @@ public class ActionDefinition
     public bool RequiresWebhook { get; set; }
     public bool SendsEmail { get; set; }
     public bool SendsSms { get; set; }
+
+    /// <summary>
+    /// Marca la acción como un proceso INTERNO ejecutado por el ScheduledWebhookWorker
+    /// — no requiere webhook saliente, ni email, ni SMS. La lógica vive en un
+    /// IScheduledJobExecutor del backend (ej: LABEL_CONVERSATIONS clasifica con IA).
+    /// El admin la programa desde /admin/scheduled-jobs como cualquier otra acción.
+    /// </summary>
+    public bool IsProcess { get; set; }
     public string? WebhookUrl { get; set; }
     public string? WebhookMethod { get; set; } // GET, POST, PUT
 

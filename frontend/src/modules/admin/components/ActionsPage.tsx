@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Pencil, Trash2, Webhook, Mail, MessageSquare, ToggleLeft, ToggleRight, X, Loader2, Globe } from 'lucide-react'
+import { Plus, Pencil, Trash2, Webhook, Mail, MessageSquare, ToggleLeft, ToggleRight, X, Loader2, Globe, Cog } from 'lucide-react'
 import {
   useAdminActions,
   useCreateAction,
@@ -22,6 +22,7 @@ const emptyForm: Omit<ActionPayload, 'tenantId'> = {
   requiresWebhook: false,
   sendsEmail: false,
   sendsSms: false,
+  isProcess: false,
   webhookUrl: '',
   webhookMethod: 'POST',
   defaultTriggerConfig: null,
@@ -58,6 +59,7 @@ export function ActionsPage() {
       requiresWebhook: a.requiresWebhook,
       sendsEmail: a.sendsEmail,
       sendsSms: a.sendsSms,
+      isProcess: a.isProcess,
       webhookUrl: a.webhookUrl ?? '',
       webhookMethod: a.webhookMethod ?? 'POST',
       defaultTriggerConfig: a.defaultTriggerConfig,
@@ -136,6 +138,7 @@ export function ActionsPage() {
                 <th className="px-4 py-3 text-center font-medium text-gray-600">Webhook</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">Email</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">SMS</th>
+                <th className="px-4 py-3 text-center font-medium text-gray-600">Proceso</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">Estado</th>
                 <th className="px-4 py-3 text-right font-medium text-gray-600">Acciones</th>
               </tr>
@@ -185,6 +188,15 @@ export function ActionsPage() {
                     {a.sendsSms ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
                         <MessageSquare className="h-3 w-3" /> Si
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-400">No</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {a.isProcess ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                        <Cog className="h-3 w-3" /> Si
                       </span>
                     ) : (
                       <span className="text-xs text-gray-400">No</span>
@@ -345,6 +357,29 @@ export function ActionsPage() {
                   >
                     {form.sendsSms ? (
                       <ToggleRight className="h-7 w-7 text-amber-500" />
+                    ) : (
+                      <ToggleLeft className="h-7 w-7 text-gray-300" />
+                    )}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-100">
+                      <Cog className="h-4 w-4 text-indigo-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">Proceso</p>
+                      <p className="text-xs text-gray-500">Acción interna ejecutada por el Worker (no envía webhook, email ni SMS)</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, isProcess: !form.isProcess })}
+                    className="transition-colors"
+                  >
+                    {form.isProcess ? (
+                      <ToggleRight className="h-7 w-7 text-indigo-500" />
                     ) : (
                       <ToggleLeft className="h-7 w-7 text-gray-300" />
                     )}
