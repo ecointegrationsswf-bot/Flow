@@ -127,6 +127,13 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWebhookEventDispatcher,
     AgentFlow.Infrastructure.ScheduledJobs.WebhookEventDispatcher>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.DefaultWebhookExecutor>();
+
+// Fase 2 executors — slugs FOLLOW_UP_MESSAGE y AUTO_CLOSE_CAMPAIGN.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.FollowUpExecutor>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.CampaignAutoCloseExecutor>();
+
 builder.Services.AddHostedService<AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
@@ -627,6 +634,83 @@ try
             END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] SEND_EMAIL_RESUME seed: {ex.Message}"); }
+
+    // ── Fase 1: tablas ScheduledWebhookJobs (self-healing) ────────────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ScheduledWebhookJobs')
+            BEGIN
+                CREATE TABLE ScheduledWebhookJobs (
+                    Id                  uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    ActionDefinitionId  uniqueidentifier NOT NULL,
+                    TriggerType         nvarchar(20) NOT NULL,
+                    CronExpression      nvarchar(100) NULL,
+                    TriggerEvent        nvarchar(100) NULL,
+                    DelayMinutes        int NULL,
+                    Scope               nvarchar(20) NOT NULL DEFAULT 'AllTenants',
+                    IsActive            bit NOT NULL DEFAULT 1,
+                    NextRunAt           datetime2 NULL,
+                    LastRunAt           datetime2 NULL,
+                    LastRunStatus       nvarchar(20) NULL,
+                    LastRunSummary      nvarchar(1000) NULL,
+                    ConsecutiveFailures int NOT NULL DEFAULT 0,
+                    CreatedAt           datetime2 NOT NULL DEFAULT GETUTCDATE(),
+                    UpdatedAt           datetime2 NOT NULL DEFAULT GETUTCDATE(),
+                    CONSTRAINT FK_SWJ_Action FOREIGN KEY (ActionDefinitionId) REFERENCES ActionDefinitions(Id)
+                );
+                CREATE INDEX IX_SWJ_Active_Next ON ScheduledWebhookJobs (IsActive, NextRunAt);
+                CREATE INDEX IX_SWJ_TriggerEvent ON ScheduledWebhookJobs (TriggerEvent);
+            END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ScheduledWebhookJobExecutions')
+            BEGIN
+                CREATE TABLE ScheduledWebhookJobExecutions (
+                    Id              uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    JobId           uniqueidentifier NOT NULL,
+                    StartedAt       datetime2 NOT NULL,
+                    CompletedAt     datetime2 NOT NULL,
+                    Status          nvarchar(20) NOT NULL,
+                    TotalRecords    int NOT NULL DEFAULT 0,
+                    SuccessCount    int NOT NULL DEFAULT 0,
+                    FailureCount    int NOT NULL DEFAULT 0,
+                    ErrorDetail     nvarchar(MAX) NULL,
+                    TriggeredBy     nvarchar(50) NULL,
+                    ContextId       nvarchar(200) NULL,
+                    CONSTRAINT FK_SWJE_Job FOREIGN KEY (JobId) REFERENCES ScheduledWebhookJobs(Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IX_SWJE_Job_Started ON ScheduledWebhookJobExecutions (JobId, StartedAt);
+            END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionDefinitions') AND name = 'ScheduleConfig')
+            BEGIN ALTER TABLE ActionDefinitions ADD ScheduleConfig nvarchar(MAX) NULL; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] ScheduledWebhookJobs: {ex.Message}"); }
+
+    // ── Fase 2: columnas de Follow-up + AutoClose (self-healing) ──────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'FollowUpMessagesJson')
+            BEGIN ALTER TABLE CampaignTemplates ADD FollowUpMessagesJson nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AutoCloseMessage')
+            BEGIN ALTER TABLE CampaignTemplates ADD AutoCloseMessage nvarchar(1000) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'FollowUpsSentJson')
+            BEGIN ALTER TABLE CampaignContacts ADD FollowUpsSentJson nvarchar(200) NULL DEFAULT '[]'; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Fase 2 columns: {ex.Message}"); }
+
+    // ── Fase 2: seed ActionDefinitions globales FOLLOW_UP_MESSAGE / AUTO_CLOSE_CAMPAIGN ──
+    try
+    {
+        var seedLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("CampaignAutomationSeeder");
+        AgentFlow.Infrastructure.ScheduledJobs.CampaignAutomationSeeder
+            .SeedAsync(db, seedLogger).GetAwaiter().GetResult();
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] CampaignAutomationSeeder: {ex.Message}"); }
 
     if (!db.SuperAdmins.Any())
     {

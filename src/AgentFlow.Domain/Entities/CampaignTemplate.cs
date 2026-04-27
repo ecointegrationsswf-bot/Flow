@@ -37,8 +37,22 @@ public class CampaignTemplate
     // Seguimientos automáticos — lista de horas (ej: [24, 36, 72])
     public List<int> FollowUpHours { get; set; } = [];
 
+    /// <summary>
+    /// JSON array (List<string>) de mensajes de seguimiento, paralelo a FollowUpHours.
+    /// Índice i del array → mensaje a enviar al cumplirse FollowUpHours[i].
+    /// Soporta variables {nombre}, {poliza}, {aseguradora}, {monto_pendiente}.
+    /// NULL = no envía seguimientos automáticos (FollowUpExecutor lo trata como skip).
+    /// </summary>
+    public string? FollowUpMessagesJson { get; set; }
+
     // Cierre automático — horas después de enviada
     public int AutoCloseHours { get; set; } = 72;
+
+    /// <summary>
+    /// Mensaje enviado al cliente cuando la campaña se cierra automáticamente
+    /// por AutoCloseHours sin actividad. NULL = cierra sin avisar.
+    /// </summary>
+    public string? AutoCloseMessage { get; set; }
 
     // Etiquetas de seguimiento (IDs del maestro de etiquetas)
     public List<Guid> LabelIds { get; set; } = [];

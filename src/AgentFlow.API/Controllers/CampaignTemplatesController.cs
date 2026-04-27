@@ -25,7 +25,10 @@ public record CampaignTemplateRequest(
     List<int>? AttentionDays = null,
     string AttentionStartTime = "08:00",
     string AttentionEndTime = "17:00",
-    string OutOfContextPolicy = "Contain"
+    string OutOfContextPolicy = "Contain",
+    // Fase 2 — Campaign Automation Worker
+    string? FollowUpMessagesJson = null,
+    string? AutoCloseMessage = null
 );
 
 [ApiController]
@@ -44,7 +47,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             {
                 t.Id, t.Name, t.AgentDefinitionId,
                 AgentName = db.AgentDefinitions.Where(a => a.Id == t.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
-                t.FollowUpHours, t.AutoCloseHours, t.LabelIds,
+                t.FollowUpHours, t.FollowUpMessagesJson,
+                t.AutoCloseHours, t.AutoCloseMessage,
+                t.LabelIds,
                 t.SendEmail, t.EmailAddress,
                 t.ActionIds, t.ActionConfigs, t.PromptTemplateIds,
                 t.SystemPrompt, t.SendFrom, t.SendUntil,
@@ -68,7 +73,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             {
                 x.Id, x.Name, x.AgentDefinitionId,
                 AgentName = db.AgentDefinitions.Where(a => a.Id == x.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
-                x.FollowUpHours, x.AutoCloseHours, x.LabelIds,
+                x.FollowUpHours, x.FollowUpMessagesJson,
+                x.AutoCloseHours, x.AutoCloseMessage,
+                x.LabelIds,
                 x.SendEmail, x.EmailAddress,
                 x.ActionIds, x.ActionConfigs, x.PromptTemplateIds,
                 x.SystemPrompt, x.SendFrom, x.SendUntil,
@@ -99,7 +106,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             Name = req.Name,
             AgentDefinitionId = req.AgentDefinitionId,
             FollowUpHours = req.FollowUpHours,
+            FollowUpMessagesJson = req.FollowUpMessagesJson,
             AutoCloseHours = req.AutoCloseHours,
+            AutoCloseMessage = req.AutoCloseMessage,
             LabelIds = req.LabelIds,
             SendEmail = req.SendEmail,
             EmailAddress = req.EmailAddress,
@@ -141,7 +150,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         template.Name = req.Name;
         template.AgentDefinitionId = req.AgentDefinitionId;
         template.FollowUpHours = req.FollowUpHours;
+        template.FollowUpMessagesJson = req.FollowUpMessagesJson;
         template.AutoCloseHours = req.AutoCloseHours;
+        template.AutoCloseMessage = req.AutoCloseMessage;
         template.LabelIds = req.LabelIds;
         template.SendEmail = req.SendEmail;
         template.EmailAddress = req.EmailAddress;
@@ -172,13 +183,28 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         return Ok(new { template.Id, template.Name });
     }
 
-    /// <summary>Lista las acciones activas del tenant para vincular a maestros.</summary>
+    /// <summary>
+    /// Lista las acciones activas asignadas explícitamente a este tenant por el super admin
+    /// (Tenant.AssignedActionIds). Sin fallback: si el admin no asignó nada, devuelve vacío.
+    /// La validación 409 al desasignar (SuperAdminController) protege el caso de maestros
+    /// en uso, así que en flujo normal nunca habrá un template referenciando un ID no asignado.
+    /// </summary>
     [HttpGet("available-actions")]
     public async Task<IActionResult> AvailableActions(CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
+
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedActionIds })
+            .FirstOrDefaultAsync(ct);
+
+        var assignedIds = tenant?.AssignedActionIds ?? [];
+        if (assignedIds.Count == 0)
+            return Ok(Array.Empty<object>());
+
         var actions = await db.Set<ActionDefinition>()
-            .Where(a => a.TenantId == tenantId && a.IsActive)
+            .Where(a => a.IsActive && assignedIds.Contains(a.Id))
             .OrderBy(a => a.Name)
             .Select(a => new { a.Id, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.DefaultTriggerConfig, a.DefaultWebhookContract })
             .ToListAsync(ct);
@@ -187,10 +213,8 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     }
 
     /// <summary>
-    /// Lista los prompt templates activos visibles para este tenant. Los prompts son
-    /// un catálogo global; el super admin asigna por tenant desde
-    /// /api/admin/tenants/{id}/assigned-prompts. Si el tenant no tiene ninguno
-    /// asignado (lista vacía), ve todos los prompts activos (retrocompat).
+    /// Lista los prompt templates activos asignados explícitamente a este tenant
+    /// por el super admin (Tenant.AssignedPromptIds). Sin fallback.
     /// </summary>
     [HttpGet("available-prompts")]
     public async Task<IActionResult> AvailablePrompts(CancellationToken ct)
@@ -202,20 +226,43 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             .FirstOrDefaultAsync(ct);
 
         var assignedIds = tenant?.AssignedPromptIds ?? [];
+        if (assignedIds.Count == 0)
+            return Ok(Array.Empty<object>());
 
-        var query = db.Set<PromptTemplate>().Where(p => p.IsActive);
-
-        // Si el tenant tiene asignaciones explícitas, filtramos. Si no, devolvemos todo
-        // (comportamiento retro-compatible: tenants existentes no pierden acceso).
-        if (assignedIds.Count > 0)
-            query = query.Where(p => assignedIds.Contains(p.Id));
-
-        var prompts = await query
+        var prompts = await db.Set<PromptTemplate>()
+            .Where(p => p.IsActive && assignedIds.Contains(p.Id))
             .OrderBy(p => p.Name)
             .Select(p => new { p.Id, p.Name, p.Description, CategoryName = p.Category != null ? p.Category.Name : null })
             .ToListAsync(ct);
 
         return Ok(prompts);
+    }
+
+    /// <summary>
+    /// Devuelve el texto completo (SystemPrompt) de un prompt template para que la UI
+    /// del maestro pueda copiarlo al campo editable local (CampaignTemplate.SystemPrompt).
+    /// Sólo accesible si está asignado al tenant.
+    /// </summary>
+    [HttpGet("available-prompts/{id:guid}")]
+    public async Task<IActionResult> AvailablePromptDetail(Guid id, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedPromptIds })
+            .FirstOrDefaultAsync(ct);
+
+        var assignedIds = tenant?.AssignedPromptIds ?? [];
+        if (!assignedIds.Contains(id))
+            return NotFound(new { error = "Prompt no asignado a este tenant." });
+
+        var prompt = await db.Set<PromptTemplate>()
+            .Where(p => p.IsActive && p.Id == id)
+            .Select(p => new { p.Id, p.Name, p.Description, p.SystemPrompt })
+            .FirstOrDefaultAsync(ct);
+
+        if (prompt is null) return NotFound();
+        return Ok(prompt);
     }
 
     /// <summary>Duplica un maestro de campaña existente con un nuevo nombre.</summary>
@@ -235,7 +282,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             Name = req.Name.Trim(),
             AgentDefinitionId = original.AgentDefinitionId,
             FollowUpHours = [.. original.FollowUpHours],
+            FollowUpMessagesJson = original.FollowUpMessagesJson,
             AutoCloseHours = original.AutoCloseHours,
+            AutoCloseMessage = original.AutoCloseMessage,
             LabelIds = [.. original.LabelIds],
             SendEmail = original.SendEmail,
             EmailAddress = original.EmailAddress,

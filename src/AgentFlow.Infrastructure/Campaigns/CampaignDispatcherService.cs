@@ -24,6 +24,7 @@ public class CampaignDispatcherService(
     AgentFlowDbContext db,
     IChannelProviderFactory providerFactory,
     IWebhookEventDispatcher eventDispatcher,
+    IScheduledJobRepository scheduledJobs,
     ILogger<CampaignDispatcherService> logger)
 {
     // ── Configuración anti-ban ────────────────────────
@@ -135,8 +136,7 @@ public class CampaignDispatcherService(
             campaign.StartedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
 
-            // Hook — programa jobs suscritos a "CampaignStarted" (típicamente cierre
-            // automático con DelayFromEvent y mensajes de seguimiento de Fase 2).
+            // Hook — programa jobs suscritos a "CampaignStarted" (preconfigurados).
             try
             {
                 await eventDispatcher.DispatchAsync("CampaignStarted", campaignId.ToString(), campaign.TenantId, ct);
@@ -145,6 +145,10 @@ public class CampaignDispatcherService(
             {
                 logger.LogError(ex, "DispatchAsync CampaignStarted falló (continuamos).");
             }
+
+            // Fase 2: programar el job dinámico de cierre automático.
+            try { await ScheduleAutoCloseAsync(campaign, ct); }
+            catch (Exception ex) { logger.LogError(ex, "Schedule AutoClose falló para campaña {Id}.", campaignId); }
         }
 
         // ── 7. Enviar mensajes uno a uno ─────────────────
@@ -184,6 +188,11 @@ public class CampaignDispatcherService(
                     sent++;
                     logger.LogDebug("Campaña {CampaignId}: enviado a {Phone} (#{Count})",
                         campaignId, contact.PhoneNumber, sent);
+
+                    // Fase 2: programar jobs de seguimiento (uno por hora configurada).
+                    // Si el maestro no tiene FollowUpHours, no-op silencioso.
+                    try { await ScheduleFollowUpsForContactAsync(campaign, contact, ct); }
+                    catch (Exception ex) { logger.LogError(ex, "Schedule follow-ups falló para {Phone}", contact.PhoneNumber); }
                 }
                 else
                 {
@@ -258,6 +267,107 @@ public class CampaignDispatcherService(
         parts.Add("¿Podría indicarnos cuándo realizará el pago? Quedamos atentos.");
 
         return string.Join(". ", parts) + ".";
+    }
+
+    // ── Slugs de ActionDefinitions globales que el seed registra al boot ─────
+    // y que los executors específicos (FollowUpExecutor, CampaignAutoCloseExecutor)
+    // declaran como su Slug. El campo Name de la action en BD coincide con estos.
+    private const string FollowUpActionSlug = "FOLLOW_UP_MESSAGE";
+    private const string AutoCloseActionSlug = "AUTO_CLOSE_CAMPAIGN";
+
+    /// <summary>
+    /// Crea jobs DelayFromEvent (uno por cada hora en CampaignTemplate.FollowUpHours)
+    /// para enviar los mensajes de seguimiento al contacto. Skip silencioso si el
+    /// maestro no tiene seguimientos configurados o no hay mensajes definidos.
+    /// </summary>
+    private async Task ScheduleFollowUpsForContactAsync(
+        Campaign campaign, CampaignContact contact, CancellationToken ct)
+    {
+        var template = await db.CampaignTemplates
+            .Where(t => t.Id == campaign.CampaignTemplateId)
+            .Select(t => new { t.FollowUpHours, t.FollowUpMessagesJson })
+            .FirstOrDefaultAsync(ct);
+        if (template is null) return;
+        if (template.FollowUpHours.Count == 0) return;
+        if (string.IsNullOrEmpty(template.FollowUpMessagesJson)) return;
+
+        var actionId = await GetOrFailActionDefinitionIdAsync(FollowUpActionSlug, ct);
+        if (actionId is null) return;
+
+        for (var i = 0; i < template.FollowUpHours.Count; i++)
+        {
+            var hours = template.FollowUpHours[i];
+            if (hours <= 0) continue;
+
+            var job = new ScheduledWebhookJob
+            {
+                Id = Guid.NewGuid(),
+                ActionDefinitionId = actionId.Value,
+                TriggerType = "DelayFromEvent",
+                TriggerEvent = "CampaignContactSent",
+                DelayMinutes = hours * 60,
+                Scope = "PerConversation",
+                IsActive = true,
+                NextRunAt = DateTime.UtcNow.AddMinutes(hours * 60)
+            };
+            await scheduledJobs.AddAsync(job, ct);
+        }
+        // Log compacto — útil al revisar la cola.
+        logger.LogInformation(
+            "Programados {Count} seguimientos para contacto {Phone}.",
+            template.FollowUpHours.Count, contact.PhoneNumber);
+    }
+
+    /// <summary>
+    /// Crea UN job DelayFromEvent que cierra la campaña al cumplirse AutoCloseHours.
+    /// Skip silencioso si AutoCloseHours = 0.
+    /// </summary>
+    private async Task ScheduleAutoCloseAsync(Campaign campaign, CancellationToken ct)
+    {
+        var template = await db.CampaignTemplates
+            .Where(t => t.Id == campaign.CampaignTemplateId)
+            .Select(t => new { t.AutoCloseHours })
+            .FirstOrDefaultAsync(ct);
+        if (template is null || template.AutoCloseHours <= 0) return;
+
+        var actionId = await GetOrFailActionDefinitionIdAsync(AutoCloseActionSlug, ct);
+        if (actionId is null) return;
+
+        var job = new ScheduledWebhookJob
+        {
+            Id = Guid.NewGuid(),
+            ActionDefinitionId = actionId.Value,
+            TriggerType = "DelayFromEvent",
+            TriggerEvent = "CampaignStarted",
+            DelayMinutes = template.AutoCloseHours * 60,
+            Scope = "PerCampaign",
+            IsActive = true,
+            NextRunAt = DateTime.UtcNow.AddMinutes(template.AutoCloseHours * 60)
+        };
+        await scheduledJobs.AddAsync(job, ct);
+
+        logger.LogInformation(
+            "Auto-cierre programado para campaña {Id} en {Hours}h.",
+            campaign.Id, template.AutoCloseHours);
+    }
+
+    /// <summary>
+    /// Resuelve el Id de una ActionDefinition global por su Name. Si no existe,
+    /// loguea warning y devuelve null — los executors específicos no se invocan
+    /// si no hay action en BD (la app debería seedearla al boot).
+    /// </summary>
+    private async Task<Guid?> GetOrFailActionDefinitionIdAsync(string name, CancellationToken ct)
+    {
+        var id = await db.ActionDefinitions
+            .Where(a => a.TenantId == null && a.Name == name && a.IsActive)
+            .Select(a => (Guid?)a.Id)
+            .FirstOrDefaultAsync(ct);
+        if (id is null)
+        {
+            logger.LogWarning(
+                "ActionDefinition global '{Name}' no existe — no se programan jobs. Aplica el seed al boot.", name);
+        }
+        return id;
     }
 
     /// <summary>

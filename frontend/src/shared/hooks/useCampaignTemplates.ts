@@ -25,7 +25,11 @@ export interface CampaignTemplate {
   agentDefinitionId: string
   agentName: string | null
   followUpHours: number[]
+  /** JSON array de mensajes de seguimiento, paralelo a followUpHours (Fase 2). NULL = sin seguimientos automáticos. */
+  followUpMessagesJson: string | null
   autoCloseHours: number
+  /** Mensaje enviado al cerrar automáticamente la campaña (Fase 2). NULL = cerrar sin avisar. */
+  autoCloseMessage: string | null
   labelIds: string[]
   sendEmail: boolean
   emailAddress: string | null
@@ -53,7 +57,9 @@ export interface CampaignTemplatePayload {
   name: string
   agentDefinitionId: string
   followUpHours: number[]
+  followUpMessagesJson?: string | null
   autoCloseHours: number
+  autoCloseMessage?: string | null
   labelIds: string[]
   sendEmail?: boolean
   emailAddress?: string | null
@@ -187,4 +193,20 @@ export function useAvailablePrompts() {
       return data
     },
   })
+}
+
+export interface AvailablePromptDetail {
+  id: string
+  name: string
+  description: string | null
+  systemPrompt: string
+}
+
+/**
+ * Trae el texto completo (SystemPrompt) de un prompt template visible para el tenant.
+ * Se usa para copiarlo al CampaignTemplate.SystemPrompt editable en el maestro.
+ */
+export async function fetchAvailablePromptDetail(id: string): Promise<AvailablePromptDetail> {
+  const { data } = await api.get<AvailablePromptDetail>(`/campaign-templates/available-prompts/${id}`)
+  return data
 }
