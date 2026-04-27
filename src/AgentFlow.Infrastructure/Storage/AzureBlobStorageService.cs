@@ -1,5 +1,7 @@
+using Azure.Storage;
 using Azure.Storage.Blobs;
 using Azure.Storage.Blobs.Models;
+using Azure.Storage.Sas;
 using Microsoft.Extensions.Configuration;
 
 namespace AgentFlow.Infrastructure.Storage;
@@ -63,5 +65,59 @@ public class AzureBlobStorageService : IBlobStorageService
         using var ms = new MemoryStream(content);
         await blob.UploadAsync(ms, new BlobHttpHeaders { ContentType = contentType }, cancellationToken: ct);
         return blob.Uri.ToString();
+    }
+
+    public async Task<string> UploadAndGetSasUrlAsync(
+        string containerName, string path, byte[] content, string contentType,
+        TimeSpan validFor, CancellationToken ct = default)
+    {
+        // Container PRIVADO: sin acceso público. El acceso al blob será solo por SAS.
+        var container = new BlobContainerClient(_connStr, containerName);
+        await container.CreateIfNotExistsAsync(PublicAccessType.None, cancellationToken: ct);
+
+        var blob = container.GetBlobClient(path);
+        using var ms = new MemoryStream(content);
+        await blob.UploadAsync(ms, new BlobHttpHeaders { ContentType = contentType }, cancellationToken: ct);
+
+        // Construir SAS de blob solo-lectura, válido por validFor.
+        // Tolerancia hacia atrás de 5 min para evitar issues de skew de reloj.
+        var sasBuilder = new BlobSasBuilder
+        {
+            BlobContainerName = containerName,
+            BlobName = path,
+            Resource = "b", // blob
+            StartsOn = DateTimeOffset.UtcNow.AddMinutes(-5),
+            ExpiresOn = DateTimeOffset.UtcNow.Add(validFor),
+        };
+        sasBuilder.SetPermissions(BlobSasPermissions.Read);
+
+        // Si el cliente expone GenerateSasUri, lo usamos directamente (firma con la cuenta).
+        if (blob.CanGenerateSasUri)
+        {
+            return blob.GenerateSasUri(sasBuilder).ToString();
+        }
+
+        // Fallback manual: parsear la cuenta+key del connection string y firmar.
+        var (account, key) = ParseAccountKey(_connStr);
+        var credential = new StorageSharedKeyCredential(account, key);
+        var sasToken = sasBuilder.ToSasQueryParameters(credential).ToString();
+        return $"{blob.Uri}?{sasToken}";
+    }
+
+    private static (string AccountName, string AccountKey) ParseAccountKey(string cs)
+    {
+        string? account = null, key = null;
+        foreach (var part in cs.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var idx = part.IndexOf('=');
+            if (idx <= 0) continue;
+            var k = part[..idx].Trim();
+            var v = part[(idx + 1)..];
+            if (k.Equals("AccountName", StringComparison.OrdinalIgnoreCase)) account = v;
+            else if (k.Equals("AccountKey", StringComparison.OrdinalIgnoreCase)) key = v;
+        }
+        if (account is null || key is null)
+            throw new InvalidOperationException("ConnectionString sin AccountName/AccountKey — no se puede generar SAS.");
+        return (account, key);
     }
 }

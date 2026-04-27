@@ -118,13 +118,16 @@ public class SendLabelingSummaryExecutor(
                 var campaignIds = group.Select(g => g.Id).ToList();
                 var (excelBytes, perCampaignSummary) = await BuildExcelAndSummaryAsync(campaignIds, ct);
 
-                // 4. Subir a Azure Blob — container "sumary".
+                // 4. Subir a Azure Blob — container "sumary" PRIVADO.
+                // Generamos un SAS firmado válido por 2 días para que el destinatario
+                // pueda descargar desde el email sin exponer el container.
                 var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-                var safeUserKey = group.Key.Replace("/", "-").Replace("\\", "-");
+                var safeUserKey = SafeFolderName(user.Email);
                 var blobPath = $"{safeUserKey}/Reporte_{stamp}.xlsx";
-                var url = await blobStorage.UploadToContainerAsync(
+                var url = await blobStorage.UploadAndGetSasUrlAsync(
                     ContainerName, blobPath, excelBytes,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", ct);
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    TimeSpan.FromDays(2), ct);
 
                 // 5. Enviar email (con copia oculta a todos los super admins activos).
                 await emailService.SendLabelingSummaryAsync(
@@ -292,6 +295,27 @@ public class SendLabelingSummaryExecutor(
         if (userInfoByKey.TryGetValue(pair.Value, out var info))
             return info.FullName;
         return string.Empty;
+    }
+
+    /// <summary>
+    /// Sanitiza un string para usarlo como nombre de folder/path en Azure Blob.
+    /// Reemplaza todo lo que no sea letra/dígito/guión bajo/guión por '_', quita
+    /// puntos finales y caracteres reservados de URL. Resultado seguro para
+    /// concatenar en URLs sin URL-encoding.
+    /// </summary>
+    private static string SafeFolderName(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return "user";
+        var sb = new System.Text.StringBuilder(raw.Length);
+        foreach (var ch in raw.Trim())
+        {
+            if (char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' || ch == '.')
+                sb.Append(ch);
+            else
+                sb.Append('_');
+        }
+        var s = sb.ToString().Trim('.', '_');
+        return s.Length == 0 ? "user" : s;
     }
 
     /// <summary>
