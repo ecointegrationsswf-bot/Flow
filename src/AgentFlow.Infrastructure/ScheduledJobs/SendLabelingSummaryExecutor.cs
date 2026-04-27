@@ -74,16 +74,41 @@ public class SendLabelingSummaryExecutor(
         {
             if (ct.IsCancellationRequested) break;
 
-            // 3. Resolver el usuario (email + nombre).
+            // Saltar marcadores no humanos (jobs automáticos, system).
+            var key = group.Key;
+            if (string.IsNullOrEmpty(key)
+                || key.Equals("system", StringComparison.OrdinalIgnoreCase))
+            {
+                log.LogInformation("Summary: omitido marcador '{Key}' ({Count} campañas).", key, group.Count());
+                continue;
+            }
+
+            // 3. Resolver el usuario. Campaign.LaunchedByUserId puede contener:
+            //    - Guid (id de AppUser/SuperAdmin)
+            //    - Email
+            //    - FullName (lo que ocurre en este entorno)
+            // Buscamos en AppUsers primero y caemos a SuperAdmins. Tomamos el primero con email.
             var user = await db.AppUsers
-                .Where(u => u.Id.ToString() == group.Key || u.Email == group.Key)
+                .Where(u => (u.Id.ToString() == key || u.Email == key || u.FullName == key)
+                            && !string.IsNullOrEmpty(u.Email))
                 .Select(u => new { u.FullName, u.Email })
                 .FirstOrDefaultAsync(ct);
 
+            if (user is null)
+            {
+                var sa = await db.SuperAdmins
+                    .Where(s => (s.Id.ToString() == key || s.Email == key || s.FullName == key)
+                                && s.IsActive
+                                && !string.IsNullOrEmpty(s.Email))
+                    .Select(s => new { s.FullName, s.Email })
+                    .FirstOrDefaultAsync(ct);
+                if (sa is not null) user = sa;
+            }
+
             if (user is null || string.IsNullOrEmpty(user.Email))
             {
-                log.LogWarning("Summary: usuario {UserKey} sin email — {Count} campañas omitidas.",
-                    group.Key, group.Count());
+                log.LogWarning("Summary: usuario '{UserKey}' no encontrado o sin email — {Count} campañas omitidas.",
+                    key, group.Count());
                 failed++;
                 continue;
             }
