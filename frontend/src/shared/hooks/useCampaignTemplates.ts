@@ -30,10 +30,6 @@ export interface CampaignTemplate {
   autoCloseHours: number
   /** Mensaje enviado al cerrar automáticamente la campaña (Fase 2). NULL = cerrar sin avisar. */
   autoCloseMessage: string | null
-  /** Hora UTC (0-23) del job diario de etiquetado IA (Fase 3). NULL = etiquetado deshabilitado.
-   * El envío del webhook de resultado se modela como una ActionDefinition + ScheduledWebhookJob
-   * con TriggerEvent=ConversationLabeled, configurable desde /admin/scheduled-jobs. */
-  labelingJobHourUtc: number | null
   labelIds: string[]
   sendEmail: boolean
   emailAddress: string | null
@@ -64,7 +60,6 @@ export interface CampaignTemplatePayload {
   followUpMessagesJson?: string | null
   autoCloseHours: number
   autoCloseMessage?: string | null
-  labelingJobHourUtc?: number | null
   labelIds: string[]
   sendEmail?: boolean
   emailAddress?: string | null

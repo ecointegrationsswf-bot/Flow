@@ -40,7 +40,6 @@ const schema = z.object({
   agentDefinitionId: z.string().min(1, 'Selecciona un agente'),
   autoCloseHours: z.coerce.number().min(1).max(720).default(72),
   autoCloseMessage: z.string().nullable().default(null),
-  labelingJobHourUtc: z.coerce.number().int().min(0).max(23).nullable().default(null),
   sendFrom: z.string().nullable().default(null),
   sendUntil: z.string().nullable().default(null),
 })
@@ -175,14 +174,12 @@ export function CampaignTemplateFormPage() {
           agentDefinitionId: existing.agentDefinitionId,
           autoCloseHours: existing.autoCloseHours,
           autoCloseMessage: existing.autoCloseMessage ?? null,
-          labelingJobHourUtc: existing.labelingJobHourUtc ?? null,
           sendFrom: existing.sendFrom ?? null,
           sendUntil: existing.sendUntil ?? null,
         }
       : {
           name: '', agentDefinitionId: '', autoCloseHours: 72,
           autoCloseMessage: null,
-          labelingJobHourUtc: null,
           sendFrom: null, sendUntil: null,
         },
   })
@@ -372,7 +369,6 @@ export function CampaignTemplateFormPage() {
       followUpHours,
       followUpMessagesJson,
       autoCloseMessage: data.autoCloseMessage?.trim() ? data.autoCloseMessage : null,
-      labelingJobHourUtc: data.labelingJobHourUtc ?? null,
       labelIds: selectedLabelIds,
       actionIds: selectedActionIds,
       actionConfigs: Object.keys(actionConfigs).length > 0 ? JSON.stringify(actionConfigs) : null,
@@ -701,41 +697,6 @@ export function CampaignTemplateFormPage() {
             </div>
           )}
 
-          {/* ─── Fase 3: Etiquetado automático con IA ─── */}
-          <div className="mt-8 border-t border-gray-200 pt-6">
-            <h2 className="mb-1 text-sm font-semibold text-gray-900">Etiquetado automático con IA</h2>
-            <p className="mb-4 text-xs text-gray-500">
-              Cuando se activa, a la hora UTC indicada el sistema clasifica las conversaciones cerradas
-              de esta campaña usando las etiquetas seleccionadas arriba.
-            </p>
-
-            <div className="max-w-xs">
-              <label className="block text-sm font-medium text-gray-700">Hora UTC del job diario</label>
-              <input
-                type="number" min={0} max={23} placeholder="0–23 (vacío = deshabilitado)"
-                {...register('labelingJobHourUtc', {
-                  setValueAs: (v) => v === '' || v === null || v === undefined ? null : Number(v),
-                })}
-                className={inputClass}
-              />
-              {errors.labelingJobHourUtc && <p className="mt-1 text-xs text-red-600">{errors.labelingJobHourUtc.message}</p>}
-              <p className="mt-1 text-xs text-gray-500">Ej: 23 = 11pm UTC. Vacío = no se etiqueta automáticamente.</p>
-            </div>
-
-            <div className="mt-5 rounded-md border border-blue-200 bg-blue-50 p-4 text-xs text-blue-900">
-              <p className="font-semibold">¿Quieres notificar al cliente con el resultado etiquetado?</p>
-              <p className="mt-1">
-                Define una <strong>Acción</strong> en el portal admin con su URL, InputSchema y OutputSchema, y luego programa un{' '}
-                <strong>Scheduled Job</strong> con <code className="rounded bg-white px-1">TriggerEvent = ConversationLabeled</code>{' '}
-                y <code className="rounded bg-white px-1">Scope = PerConversation</code>. El Worker enviará el webhook automáticamente
-                tras cada etiquetado, con sourceKeys disponibles como{' '}
-                <code className="rounded bg-white px-1">conversation.label.name</code>,{' '}
-                <code className="rounded bg-white px-1">conversation.label.slug</code>,{' '}
-                <code className="rounded bg-white px-1">conversation.closedAt</code>,{' '}
-                <code className="rounded bg-white px-1">contact.externalId</code>.
-              </p>
-            </div>
-          </div>
         </div>
             )}
 

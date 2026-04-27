@@ -13,10 +13,11 @@ using Microsoft.Extensions.Logging;
 namespace AgentFlow.Infrastructure.ScheduledJobs;
 
 /// <summary>
-/// Executor del job LABEL_CONVERSATIONS. Diseñado para correr como un job Cron
-/// global (típicamente cada hora) — internamente verifica qué CampaignTemplates
-/// del sistema tienen LabelingJobHourUtc igual a la hora UTC actual, y para
-/// cada uno clasifica las conversaciones cerradas pendientes de etiquetar.
+/// Executor del job LABEL_CONVERSATIONS. Se invoca por un ScheduledWebhookJob
+/// Cron configurado en /admin/scheduled-jobs (la expresión cron del job es el
+/// horario; típicamente "0 23 * * *" para 11pm UTC). Cuando el Worker dispara
+/// el job, este executor recorre TODOS los maestros del sistema que tengan al
+/// menos una etiqueta asignada y clasifica sus conversaciones cerradas pendientes.
 ///
 /// Responsabilidad ÚNICA: asignar etiqueta. NO envía webhooks de resultado.
 /// El envío al cliente se modela como una ActionDefinition + ScheduledWebhookJob
@@ -70,17 +71,19 @@ Formato exacto:
     public async Task<JobRunResult> ExecuteAsync(
         ScheduledWebhookJob job, ScheduledJobContext ctx, CancellationToken ct)
     {
-        var nowHourUtc = DateTime.UtcNow.Hour;
-
-        // 1. Maestros que tienen el job programado para esta hora UTC.
-        var templates = await db.CampaignTemplates
+        // Recorremos TODOS los maestros activos con al menos una etiqueta asignada.
+        // El horario lo controla la expresión cron del ScheduledWebhookJob que
+        // dispara este executor — no un campo del maestro.
+        // (LabelIds es JSON serializado, así que filtramos en memoria tras cargar.)
+        var allTemplates = await db.CampaignTemplates
             .AsNoTracking()
-            .Where(t => t.LabelingJobHourUtc != null && t.LabelingJobHourUtc == nowHourUtc)
+            .Where(t => t.IsActive)
             .Select(t => new { t.Id, t.TenantId, t.Name, t.LabelIds })
             .ToListAsync(ct);
 
+        var templates = allTemplates.Where(t => t.LabelIds.Count > 0).ToList();
         if (templates.Count == 0)
-            return JobRunResult.Skipped($"Sin maestros configurados para hora UTC={nowHourUtc}.");
+            return JobRunResult.Skipped("Sin maestros con etiquetas asignadas.");
 
         var totalProcessed = 0;
         var totalLabeled = 0;

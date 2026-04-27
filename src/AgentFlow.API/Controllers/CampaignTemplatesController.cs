@@ -28,10 +28,8 @@ public record CampaignTemplateRequest(
     string OutOfContextPolicy = "Contain",
     // Fase 2 — Campaign Automation Worker
     string? FollowUpMessagesJson = null,
-    string? AutoCloseMessage = null,
-    // Fase 3 — Etiquetado IA. El webhook de resultado se modela como ScheduledWebhookJob
-    // independiente con TriggerEvent=ConversationLabeled.
-    int? LabelingJobHourUtc = null
+    string? AutoCloseMessage = null
+    // Fase 3 — el etiquetado IA ya NO se configura aquí. Vive en /admin/scheduled-jobs.
 );
 
 [ApiController]
@@ -52,7 +50,6 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 AgentName = db.AgentDefinitions.Where(a => a.Id == t.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
                 t.FollowUpHours, t.FollowUpMessagesJson,
                 t.AutoCloseHours, t.AutoCloseMessage,
-                t.LabelingJobHourUtc,
                 t.LabelIds,
                 t.SendEmail, t.EmailAddress,
                 t.ActionIds, t.ActionConfigs, t.PromptTemplateIds,
@@ -79,7 +76,6 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 AgentName = db.AgentDefinitions.Where(a => a.Id == x.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
                 x.FollowUpHours, x.FollowUpMessagesJson,
                 x.AutoCloseHours, x.AutoCloseMessage,
-                x.LabelingJobHourUtc,
                 x.LabelIds,
                 x.SendEmail, x.EmailAddress,
                 x.ActionIds, x.ActionConfigs, x.PromptTemplateIds,
@@ -114,7 +110,6 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             FollowUpMessagesJson = req.FollowUpMessagesJson,
             AutoCloseHours = req.AutoCloseHours,
             AutoCloseMessage = req.AutoCloseMessage,
-            LabelingJobHourUtc = req.LabelingJobHourUtc,
             LabelIds = req.LabelIds,
             SendEmail = req.SendEmail,
             EmailAddress = req.EmailAddress,
@@ -159,7 +154,6 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         template.FollowUpMessagesJson = req.FollowUpMessagesJson;
         template.AutoCloseHours = req.AutoCloseHours;
         template.AutoCloseMessage = req.AutoCloseMessage;
-        template.LabelingJobHourUtc = req.LabelingJobHourUtc;
         template.LabelIds = req.LabelIds;
         template.SendEmail = req.SendEmail;
         template.EmailAddress = req.EmailAddress;
@@ -292,7 +286,6 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             FollowUpMessagesJson = original.FollowUpMessagesJson,
             AutoCloseHours = original.AutoCloseHours,
             AutoCloseMessage = original.AutoCloseMessage,
-            LabelingJobHourUtc = original.LabelingJobHourUtc,
             LabelIds = [.. original.LabelIds],
             SendEmail = original.SendEmail,
             EmailAddress = original.EmailAddress,

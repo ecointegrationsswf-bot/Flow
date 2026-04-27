@@ -55,14 +55,13 @@ public class CampaignTemplate
     public string? AutoCloseMessage { get; set; }
 
     // ── Fase 3 — Etiquetado IA ────────────────────────────────────────────
-    /// <summary>
-    /// Hora UTC (0-23) en que el job diario clasifica las conversaciones cerradas
-    /// no etiquetadas de campañas que usan este maestro. NULL = etiquetado deshabilitado.
-    /// El envío del webhook de resultado al cliente se modela como una ActionDefinition
-    /// programada vía ScheduledWebhookJob con TriggerEvent=ConversationLabeled — no
-    /// como campos hardcoded de este maestro. El admin lo configura en /admin/scheduled-jobs.
-    /// </summary>
-    public int? LabelingJobHourUtc { get; set; }
+    // El job de etiquetado se modela íntegramente en /admin/scheduled-jobs:
+    // - Un ScheduledWebhookJob Cron (la expresión cron es el horario)
+    //   apuntando al ActionDefinition global "LABEL_CONVERSATIONS".
+    // - Un segundo ScheduledWebhookJob EventBased con TriggerEvent="ConversationLabeled"
+    //   y Scope="PerConversation" apuntando a una Action del cliente con su propio
+    //   InputSchema/OutputSchema, para enviar el webhook de resultado.
+    // El maestro de campaña ya no necesita campos específicos de etiquetado.
 
     // Etiquetas de seguimiento (IDs del maestro de etiquetas)
     public List<Guid> LabelIds { get; set; } = [];

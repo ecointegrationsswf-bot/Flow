@@ -707,19 +707,20 @@ try
     catch (Exception ex) { Console.WriteLine($"[Schema] Fase 2 columns: {ex.Message}"); }
 
     // ── Fase 3: columnas de etiquetado IA (self-healing) ──
-    // El webhook de resultado se modela como ActionDefinition + ScheduledWebhookJob
-    // — no se persiste estado adicional en CampaignTemplates ni Conversations.
+    // Solo persistimos en Conversations el resultado de la clasificación.
+    // El horario y el webhook de resultado son ScheduledWebhookJobs en /admin/scheduled-jobs.
     try
     {
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'LabelingJobHourUtc')
-            BEGIN ALTER TABLE CampaignTemplates ADD LabelingJobHourUtc int NULL; END");
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'LabelId')
             BEGIN ALTER TABLE Conversations ADD LabelId uniqueidentifier NULL; END");
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'LabeledAt')
             BEGIN ALTER TABLE Conversations ADD LabeledAt datetime2 NULL; END");
+        // Si quedaron residuos de iteraciones previas, los dropeamos para mantener el schema limpio.
+        db.Database.ExecuteSqlRaw(@"
+            IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'LabelingJobHourUtc')
+            BEGIN ALTER TABLE CampaignTemplates DROP COLUMN LabelingJobHourUtc; END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Fase 3 columns: {ex.Message}"); }
 
