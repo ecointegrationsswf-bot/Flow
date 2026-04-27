@@ -58,6 +58,7 @@ public class ProcessIncomingMessageHandler(
     AgentFlow.Domain.Webhooks.IActionExecutorService actionExecutor,
     AgentFlow.Domain.Webhooks.IActionPromptBuilder actionPromptBuilder,
     IDocumentReferencePromptBuilder documentReferencePromptBuilder,
+    IWebhookEventDispatcher eventDispatcher,
     Microsoft.Extensions.Logging.ILogger<ProcessIncomingMessageHandler> logger
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
@@ -744,6 +745,11 @@ public class ProcessIncomingMessageHandler(
                     conversation.ClosedAt = DateTime.UtcNow;
                     try { await emailResume.ExecuteIfApplicableAsync(conversation, ct); }
                     catch (Exception ex) { Console.WriteLine($"[SendEmailResume] Error: {ex.Message}"); }
+
+                    // Hook ScheduledWebhookWorker — programa jobs EventBased/DelayFromEvent
+                    // suscritos a "ConversationClosed" (etiquetado IA, webhook resultado, etc.).
+                    try { await eventDispatcher.DispatchAsync("ConversationClosed", conversation.Id.ToString(), cmd.TenantId, ct); }
+                    catch (Exception ex) { Console.WriteLine($"[EventDispatch] ConversationClosed: {ex.Message}"); }
                 }
             }
         }

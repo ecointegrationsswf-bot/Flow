@@ -33,19 +33,25 @@ if (!string.IsNullOrEmpty(redisConn))
         var redis = ConnectionMultiplexer.Connect(redisConn + ",abortConnect=false,connectTimeout=3000");
         builder.Services.AddSingleton<IConnectionMultiplexer>(redis);
         builder.Services.AddScoped<ISessionStore, RedisSessionStore>();
+        builder.Services.AddScoped<IMessageBufferStore, AgentFlow.Infrastructure.Messaging.RedisMessageBufferStore>();
         Console.WriteLine("Redis conectado");
     }
     catch
     {
         Console.WriteLine("Redis no disponible. Usando InMemorySessionStore.");
         builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
+        builder.Services.AddSingleton<IMessageBufferStore, AgentFlow.Infrastructure.Messaging.InMemoryMessageBufferStore>();
     }
 }
 else
 {
     Console.WriteLine("Redis no configurado. Usando InMemorySessionStore.");
     builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
+    builder.Services.AddSingleton<IMessageBufferStore, AgentFlow.Infrastructure.Messaging.InMemoryMessageBufferStore>();
 }
+
+// MessageBufferFlushJob — scoped, invocado por Hangfire con MessageBufferSeconds de delay.
+builder.Services.AddScoped<AgentFlow.Infrastructure.Messaging.MessageBufferFlushJob>();
 
 // ── Anthropic Claude ───────────────────────────────────
 // El sistema usa la API key del tenant (tabla Tenants.LlmApiKey).
@@ -109,6 +115,19 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ITransferChatService,
     AgentFlow.Infrastructure.Campaigns.TransferChatService>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ISendEmailResumeService,
     AgentFlow.Infrastructure.Campaigns.SendEmailResumeService>();
+
+// ── Scheduled Webhook Worker (Fase 1 Campaign Automation) ────────────
+// Repositorios + dispatcher de eventos + executor genérico + BackgroundService.
+// Independiente de Hangfire — no compite por sus 2 workers.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.ScheduledJobRepository>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IJobExecutionRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.JobExecutionRepository>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWebhookEventDispatcher,
+    AgentFlow.Infrastructure.ScheduledJobs.WebhookEventDispatcher>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.DefaultWebhookExecutor>();
+builder.Services.AddHostedService<AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
 var jwtSecret = cfg["Jwt:Secret"] ?? "AgentFlow_Dev_Secret_Key_Min32Chars!!";
@@ -189,6 +208,11 @@ builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionExecutorService,
 // Action Trigger Protocol — Fase 0 (NoOp). En Fase 2 se reemplaza la implementación.
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionPromptBuilder,
     AgentFlow.Infrastructure.Webhooks.ActionPromptBuilder>();
+
+// Documentos de referencia por campaña — Fase 1 (builder + fetch).
+// La inyección en el runtime del agente se hace en Fase 2.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDocumentReferencePromptBuilder,
+    AgentFlow.Infrastructure.AI.DocumentReferencePromptBuilder>();
 
 // ── Tenant context ─────────────────────────────────────
 builder.Services.AddHttpContextAccessor();

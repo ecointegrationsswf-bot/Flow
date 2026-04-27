@@ -10,8 +10,9 @@ public class ActionDefinitionConfiguration : IEntityTypeConfiguration<ActionDefi
     {
         b.ToTable("ActionDefinitions");
         b.HasKey(a => a.Id);
-        b.Property(a => a.TenantId).IsRequired();
-        b.HasOne(a => a.Tenant).WithMany().HasForeignKey(a => a.TenantId).OnDelete(DeleteBehavior.Cascade);
+        // TenantId nullable: NULL = acción global; no-NULL = acción legacy scopada.
+        b.Property(a => a.TenantId).IsRequired(false);
+        b.HasOne(a => a.Tenant).WithMany().HasForeignKey(a => a.TenantId).OnDelete(DeleteBehavior.SetNull);
         b.Property(a => a.Name).HasMaxLength(100).IsRequired();
         b.Property(a => a.Description).HasMaxLength(500);
         b.Property(a => a.WebhookUrl).HasMaxLength(500);
@@ -25,6 +26,7 @@ public class ActionDefinitionConfiguration : IEntityTypeConfiguration<ActionDefi
         b.Property(a => a.ConversationImpact).HasConversion<string>().HasMaxLength(20)
             .HasDefaultValue(Domain.Enums.ConversationImpact.Transparent);
         b.Property(a => a.RequiredParams).HasColumnType("nvarchar(max)");
+        b.Property(a => a.ScheduleConfig).HasColumnType("nvarchar(max)");
 
         b.HasIndex(a => new { a.TenantId, a.Name }).IsUnique();
     }

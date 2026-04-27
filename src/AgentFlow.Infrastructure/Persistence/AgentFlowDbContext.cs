@@ -25,6 +25,8 @@ public class AgentFlowDbContext(DbContextOptions<AgentFlowDbContext> options) : 
     public DbSet<WebhookLog> WebhookLogs => Set<WebhookLog>();
     public DbSet<CampaignDispatchLog> CampaignDispatchLogs => Set<CampaignDispatchLog>();
     public DbSet<AgentRegistryEntry> AgentRegistryEntries => Set<AgentRegistryEntry>();
+    public DbSet<ScheduledWebhookJob> ScheduledWebhookJobs => Set<ScheduledWebhookJob>();
+    public DbSet<ScheduledWebhookJobExecution> ScheduledWebhookJobExecutions => Set<ScheduledWebhookJobExecution>();
 
     protected override void OnModelCreating(ModelBuilder b)
     {

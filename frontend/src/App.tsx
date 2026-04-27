@@ -27,6 +27,7 @@ import { CategoriesPage } from '@/modules/admin/components/CategoriesPage'
 import { AdminWhatsAppPage } from '@/modules/admin/components/AdminWhatsAppPage'
 import { AdminUsersPage } from '@/modules/admin/components/AdminUsersPage'
 import { ActionsPage } from '@/modules/admin/components/ActionsPage'
+import { ScheduledJobsPage } from '@/modules/admin/components/ScheduledJobsPage'
 import { PromptsPage } from '@/modules/admin/components/PromptsPage'
 import { PromptFormPage } from '@/modules/admin/components/PromptFormPage'
 import { ProfilePage } from '@/modules/profile/components/ProfilePage'
@@ -63,6 +64,7 @@ export default function App() {
           <Route path="categories" element={<CategoriesPage />} />
           <Route path="whatsapp" element={<AdminWhatsAppPage />} />
           <Route path="actions" element={<ActionsPage />} />
+          <Route path="scheduled-jobs" element={<ScheduledJobsPage />} />
           <Route path="prompts" element={<PromptsPage />} />
           <Route path="prompts/new" element={<PromptFormPage />} />
           <Route path="prompts/:id/edit" element={<PromptFormPage />} />

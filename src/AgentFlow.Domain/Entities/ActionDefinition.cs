@@ -5,8 +5,14 @@ namespace AgentFlow.Domain.Entities;
 public class ActionDefinition
 {
     public Guid Id { get; set; }
-    public Guid TenantId { get; set; }
-    public Tenant Tenant { get; set; } = null!;
+
+    /// <summary>
+    /// NULL = acción global (catálogo). El super admin asigna globales a cada tenant
+    /// desde Tenant.AssignedActionIds. Las acciones con TenantId no-null son legacy
+    /// per-tenant (previas a la promoción a globales) y siguen visibles solo en su tenant.
+    /// </summary>
+    public Guid? TenantId { get; set; }
+    public Tenant? Tenant { get; set; }
 
     public string Name { get; set; } = string.Empty; // SEND_MESSAGE, SEND_RESUME, TRANSFER_CHAT, PREMIUM, etc.
     public string? Description { get; set; }
@@ -57,6 +63,19 @@ public class ActionDefinition
     /// NULL = no hay default, el maestro debe configurar el webhook individualmente.
     /// </summary>
     public string? DefaultWebhookContract { get; set; }
+
+    /// <summary>
+    /// Configuración de scheduling JSON usada por el ScheduledWebhookWorker para
+    /// crear jobs automáticos al asociar esta acción a un trigger cron o evento.
+    /// Estructura: { "triggerType": "Cron|EventBased|DelayFromEvent",
+    ///               "cronExpression": "0 23 * * *",
+    ///               "triggerEvent": "ConversationClosed",
+    ///               "delayMinutes": 60,
+    ///               "scope": "AllTenants|PerCampaign|PerConversation" }
+    /// NULL = la acción no tiene scheduling default; se invoca solo bajo demanda
+    /// por el agente o por jobs creados manualmente desde la UI.
+    /// </summary>
+    public string? ScheduleConfig { get; set; }
 
     public bool IsActive { get; set; } = true;
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

@@ -23,6 +23,7 @@ namespace AgentFlow.Infrastructure.Campaigns;
 public class CampaignDispatcherService(
     AgentFlowDbContext db,
     IChannelProviderFactory providerFactory,
+    IWebhookEventDispatcher eventDispatcher,
     ILogger<CampaignDispatcherService> logger)
 {
     // ── Configuración anti-ban ────────────────────────
@@ -111,14 +112,39 @@ public class CampaignDispatcherService(
             await db.SaveChangesAsync(ct);
 
             logger.LogInformation("Campaña {CampaignId}: completada. Todos los contactos procesados.", campaignId);
+
+            // Hook ScheduledWebhookWorker — programa jobs EventBased/DelayFromEvent
+            // suscritos a "CampaignFinished". Si no hay suscriptores, no-op silencioso.
+            try
+            {
+                await eventDispatcher.DispatchAsync("CampaignFinished", campaignId.ToString(), campaign.TenantId, ct);
+            }
+            catch (Exception ex)
+            {
+                // El dispatcher no debe romper el flujo de campañas.
+                logger.LogError(ex, "DispatchAsync CampaignFinished falló (continuamos).");
+            }
+
             return new DispatchResult(0, 0, "Campaña completada", DispatchStopReason.AllContactsProcessed);
         }
 
         // ── 6. Marcar campaña como iniciada ──────────────
-        if (campaign.StartedAt is null)
+        var isFirstStart = campaign.StartedAt is null;
+        if (isFirstStart)
         {
             campaign.StartedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
+
+            // Hook — programa jobs suscritos a "CampaignStarted" (típicamente cierre
+            // automático con DelayFromEvent y mensajes de seguimiento de Fase 2).
+            try
+            {
+                await eventDispatcher.DispatchAsync("CampaignStarted", campaignId.ToString(), campaign.TenantId, ct);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "DispatchAsync CampaignStarted falló (continuamos).");
+            }
         }
 
         // ── 7. Enviar mensajes uno a uno ─────────────────

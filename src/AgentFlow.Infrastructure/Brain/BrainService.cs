@@ -23,6 +23,7 @@ public class BrainService(
     IClassifierService classifier,
     IAgentRegistry registry,
     IValidationService validation,
+    IWebhookEventDispatcher eventDispatcher,
     AgentFlowDbContext db) : IBrainService
 {
     private const double EscalateConfidenceThreshold = 0.2;
@@ -128,6 +129,10 @@ public class BrainService(
                 BrainSessionState.Escalated_Human, classification, agents);
             escalatedSession = escalatedSession with { EscalatedAt = DateTime.UtcNow };
             await SaveSessionAsync(request.TenantId, request.ContactId, escalatedSession, ct);
+
+            // Hook ScheduledWebhookWorker — programa jobs suscritos a "ConversationEscalated".
+            try { await eventDispatcher.DispatchAsync("ConversationEscalated", escalatedSession.ConversationId.ToString(), request.TenantId, ct); }
+            catch { /* no debe romper el routing del Cerebro */ }
 
             return new BrainDecision(
                 classification.AgentSlug,
