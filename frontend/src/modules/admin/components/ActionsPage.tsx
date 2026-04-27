@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Pencil, Trash2, Webhook, Mail, MessageSquare, ToggleLeft, ToggleRight, X, Loader2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Webhook, Mail, MessageSquare, ToggleLeft, ToggleRight, X, Loader2, Globe } from 'lucide-react'
 import {
   useAdminActions,
   useCreateAction,
@@ -38,11 +38,10 @@ const emptyForm: Omit<ActionPayload, 'tenantId'> = {
 }
 
 export function ActionsPage() {
-  const { data: tenants = [], isLoading: loadingTenants } = useAdminTenants()
+  const { data: tenants = [] } = useAdminTenants()
   const activeTenants = tenants.filter((t) => t.isActive)
 
-  const [selectedTenantId, setSelectedTenantId] = useState('')
-  const { data: actions = [], isLoading } = useAdminActions(selectedTenantId || undefined)
+  const { data: actions = [], isLoading } = useAdminActions()
   const createMut = useCreateAction()
   const updateMut = useUpdateAction()
   const toggleMut = useToggleAction()
@@ -54,10 +53,6 @@ export function ActionsPage() {
   const [error, setError] = useState('')
 
   const openCreate = () => {
-    if (!selectedTenantId) {
-      setError('Selecciona un tenant primero')
-      return
-    }
     setEditingId(null)
     setForm(emptyForm)
     setError('')
@@ -77,11 +72,9 @@ export function ActionsPage() {
       defaultTriggerConfig: a.defaultTriggerConfig,
       defaultWebhookContract: a.defaultWebhookContract,
     })
-    setEditingTenantId(a.tenantId)
     setError('')
     setShowModal(true)
   }
-  const [editingTenantId, setEditingTenantId] = useState('')
 
   const handleSave = async () => {
     if (!form.name.trim()) {
@@ -89,7 +82,8 @@ export function ActionsPage() {
       return
     }
     try {
-      const payload: ActionPayload = { ...form, tenantId: editingId ? editingTenantId : selectedTenantId }
+      // Siempre global al crear. Al editar, el backend preserva el TenantId original.
+      const payload: ActionPayload = { ...form, tenantId: null }
       if (editingId) {
         await updateMut.mutateAsync({ id: editingId, data: payload })
       } else {
@@ -108,45 +102,23 @@ export function ActionsPage() {
 
   const isSaving = createMut.isPending || updateMut.isPending
 
-  if (loadingTenants) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-      </div>
-    )
-  }
-
   return (
     <div>
       {/* Header */}
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Acciones</h1>
-          <p className="text-sm text-gray-500">Administra las acciones disponibles para los agentes</p>
+          <p className="text-sm text-gray-500">
+            Catálogo global de acciones. Asigna subconjuntos a cada cliente desde Tenants → Editar.
+          </p>
         </div>
         <button
           onClick={openCreate}
-          disabled={!selectedTenantId}
-          className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-amber-400 disabled:opacity-50 transition-colors"
+          className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-amber-400 transition-colors"
         >
           <Plus className="h-4 w-4" />
           Nueva accion
         </button>
-      </div>
-
-      {/* Selector de tenant */}
-      <div className="mb-4">
-        <label className="mb-1 block text-sm font-medium text-gray-700">Tenant</label>
-        <select
-          value={selectedTenantId}
-          onChange={(e) => setSelectedTenantId(e.target.value)}
-          className="w-full max-w-xs rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-        >
-          <option value="">Todos los tenants</option>
-          {activeTenants.map((t) => (
-            <option key={t.id} value={t.id}>{t.name}</option>
-          ))}
-        </select>
       </div>
 
       {/* Table */}
@@ -158,11 +130,9 @@ export function ActionsPage() {
         <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
           <MessageSquare className="mx-auto h-12 w-12 text-gray-300" />
           <p className="mt-3 text-sm text-gray-500">No hay acciones creadas</p>
-          {selectedTenantId && (
-            <button onClick={openCreate} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
-              Crear primera accion
-            </button>
-          )}
+          <button onClick={openCreate} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
+            Crear primera accion
+          </button>
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm">
@@ -171,7 +141,7 @@ export function ActionsPage() {
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-4 py-3 font-medium text-gray-600">Nombre</th>
                 <th className="px-4 py-3 font-medium text-gray-600">Descripcion</th>
-                {!selectedTenantId && <th className="px-4 py-3 font-medium text-gray-600">Tenant</th>}
+                <th className="px-4 py-3 font-medium text-gray-600">Alcance</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">Webhook</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">Email</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">SMS</th>
@@ -191,11 +161,17 @@ export function ActionsPage() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-gray-600 max-w-xs truncate">{a.description || '\u2014'}</td>
-                  {!selectedTenantId && (
-                    <td className="px-4 py-3 text-xs text-gray-500">
-                      {activeTenants.find((t) => t.id === a.tenantId)?.name ?? a.tenantId.slice(0, 8)}
-                    </td>
-                  )}
+                  <td className="px-4 py-3">
+                    {a.tenantId === null ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                        <Globe className="h-3 w-3" /> Global
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                        {activeTenants.find((t) => t.id === a.tenantId)?.name ?? a.tenantId.slice(0, 8)}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-center">
                     {a.requiresWebhook ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">
@@ -265,7 +241,7 @@ export function ActionsPage() {
           <div className="w-full max-w-lg rounded-xl bg-white shadow-xl my-auto">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-lg font-semibold text-gray-900">
-                {editingId ? 'Editar accion' : 'Nueva accion'}
+                {editingId ? 'Editar accion' : 'Nueva accion global'}
               </h2>
               <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="h-5 w-5" />
@@ -295,6 +271,7 @@ export function ActionsPage() {
                   <option value="ESCALATE_TO_HUMAN">Escalar a ejecutivo</option>
                   <option value="SEND_PAYMENT_LINK">Enviar enlace de pago</option>
                   <option value="SEND_DOCUMENT">Enviar documento</option>
+                  <option value="LABEL_CONVERSATIONS">Etiquetar conversaciones</option>
                 </select>
               </div>
 
@@ -314,7 +291,6 @@ export function ActionsPage() {
               <div className="space-y-3">
                 <label className="mb-1 block text-sm font-medium text-gray-700">Configuracion</label>
 
-                {/* Webhook toggle */}
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100">
@@ -338,7 +314,6 @@ export function ActionsPage() {
                   </button>
                 </div>
 
-                {/* Email toggle */}
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-100">
@@ -362,7 +337,6 @@ export function ActionsPage() {
                   </button>
                 </div>
 
-                {/* SMS toggle */}
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100">
@@ -386,7 +360,6 @@ export function ActionsPage() {
                   </button>
                 </div>
               </div>
-
             </div>
 
             {/* Footer */}
@@ -409,7 +382,6 @@ export function ActionsPage() {
           </div>
         </div>
       )}
-
     </div>
   )
 }
