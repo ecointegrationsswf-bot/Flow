@@ -21,7 +21,10 @@ public class ConversationConfiguration : IEntityTypeConfiguration<Conversation>
         b.HasOne(c => c.Label)
             .WithMany()
             .HasForeignKey(c => c.LabelId)
-            .OnDelete(DeleteBehavior.SetNull);
+            // NoAction porque ConversationLabel tiene FK al Tenant que cascadea a Conversations,
+            // y SetNull crearía multiple cascade paths. Si se borra una label se queda
+            // referenciada huérfana — la limpieza es responsabilidad del CRUD de labels.
+            .OnDelete(DeleteBehavior.NoAction);
         b.HasIndex(c => new { c.TenantId, c.Status, c.LabelId });
     }
 }

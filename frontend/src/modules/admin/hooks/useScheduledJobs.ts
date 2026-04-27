@@ -59,6 +59,7 @@ export const TRIGGER_EVENTS = [
   'CampaignContactSent',
   'ConversationClosed',
   'ConversationEscalated',
+  'ConversationLabeled',
 ] as const
 
 export function useScheduledJobs() {

@@ -768,6 +768,9 @@ namespace AgentFlow.Infrastructure.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("nvarchar(2000)");
 
+                    b.Property<int?>("LabelingJobHourUtc")
+                        .HasColumnType("int");
+
                     b.Property<int>("MaxRetries")
                         .HasColumnType("int");
 
@@ -908,6 +911,12 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Property<bool>("IsHumanHandled")
                         .HasColumnType("bit");
 
+                    b.Property<Guid?>("LabelId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("LabeledAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<DateTime>("LastActivityAt")
                         .HasColumnType("datetime2");
 
@@ -930,7 +939,11 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("CampaignId");
 
+                    b.HasIndex("LabelId");
+
                     b.HasIndex("TenantId", "ClientPhone", "Status");
+
+                    b.HasIndex("TenantId", "Status", "LabelId");
 
                     b.ToTable("Conversations");
                 });
@@ -1618,6 +1631,11 @@ namespace AgentFlow.Infrastructure.Migrations
                         .WithMany()
                         .HasForeignKey("CampaignId");
 
+                    b.HasOne("AgentFlow.Domain.Entities.ConversationLabel", "Label")
+                        .WithMany()
+                        .HasForeignKey("LabelId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
                     b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
                         .WithMany()
                         .HasForeignKey("TenantId")
@@ -1627,6 +1645,8 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Navigation("ActiveAgent");
 
                     b.Navigation("Campaign");
+
+                    b.Navigation("Label");
 
                     b.Navigation("Tenant");
                 });

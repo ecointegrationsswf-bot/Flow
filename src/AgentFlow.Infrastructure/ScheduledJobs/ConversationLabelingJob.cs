@@ -7,7 +7,6 @@ using AgentFlow.Domain.Webhooks;
 using AgentFlow.Infrastructure.Persistence;
 using Anthropic.SDK;
 using Anthropic.SDK.Messaging;
-using InputSchema = AgentFlow.Domain.Webhooks.InputSchema;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -19,24 +18,26 @@ namespace AgentFlow.Infrastructure.ScheduledJobs;
 /// del sistema tienen LabelingJobHourUtc igual a la hora UTC actual, y para
 /// cada uno clasifica las conversaciones cerradas pendientes de etiquetar.
 ///
+/// Responsabilidad ÚNICA: asignar etiqueta. NO envía webhooks de resultado.
+/// El envío al cliente se modela como una ActionDefinition + ScheduledWebhookJob
+/// con TriggerEvent=ConversationLabeled, que se configura desde el admin en
+/// /admin/scheduled-jobs y reusa todo el Webhook Contract System.
+///
 /// Flujo por conversación:
 ///   1. Carga historial completo (Inbound + Outbound).
 ///   2. Construye prompt fijo + lista de etiquetas del maestro.
-///   3. Llama a Claude (claude-sonnet-4-6) con max_tokens=200, temperature=0.
-///   4. Parsea la respuesta JSON {labelName, confidence, reasoning, extractedDate}.
+///   3. Llama a Claude (claude-sonnet-4-6) con max_tokens=300, temperature=0.
+///   4. Parsea {labelName, confidence, reasoning, extractedDate}.
 ///   5. Persiste LabelId + LabeledAt en la conversación.
-///   6. Si el maestro tiene ResultWebhookUrl configurado, dispara el webhook
-///      reusando PayloadBuilder + HttpDispatcher del Webhook Contract System.
+///   6. Dispara evento "ConversationLabeled" — el Worker programará cualquier
+///      job que tenga ese trigger configurado por el admin.
 ///
-/// Idempotencia: solo procesa conversaciones con LabelId NULL. Si el webhook
-/// ya se envió (ResultWebhookSentAt no nulo), no se reintenta automáticamente.
+/// Idempotencia: solo procesa conversaciones con LabelId NULL.
 /// </summary>
 public class ConversationLabelingJob(
     AgentFlowDbContext db,
     AnthropicClient anthropic,
-    ISystemContextBuilder contextBuilder,
-    IPayloadBuilder payloadBuilder,
-    IHttpDispatcher httpDispatcher,
+    IWebhookEventDispatcher eventDispatcher,
     ILogger<ConversationLabelingJob> log) : IScheduledJobExecutor
 {
     public string Slug => "LABEL_CONVERSATIONS";
@@ -75,7 +76,7 @@ Formato exacto:
         var templates = await db.CampaignTemplates
             .AsNoTracking()
             .Where(t => t.LabelingJobHourUtc != null && t.LabelingJobHourUtc == nowHourUtc)
-            .Select(t => new { t.Id, t.TenantId, t.Name, t.LabelIds, t.ResultWebhookUrl, t.ResultOutputSchema })
+            .Select(t => new { t.Id, t.TenantId, t.Name, t.LabelIds })
             .ToListAsync(ct);
 
         if (templates.Count == 0)
@@ -84,14 +85,12 @@ Formato exacto:
         var totalProcessed = 0;
         var totalLabeled = 0;
         var totalFailed = 0;
-        var totalWebhookOk = 0;
-        var totalWebhookFail = 0;
 
         foreach (var tpl in templates)
         {
             if (ct.IsCancellationRequested) break;
 
-            // Resolver labels disponibles del maestro (intersección con ConversationLabels del tenant).
+            // Resolver labels del tenant que el maestro tiene asignadas.
             var labels = await db.ConversationLabels
                 .Where(l => l.TenantId == tpl.TenantId && l.IsActive && tpl.LabelIds.Contains(l.Id))
                 .Select(l => new { l.Id, l.Name, l.Keywords })
@@ -125,29 +124,27 @@ Formato exacto:
                 await sem.WaitAsync(ct);
                 try
                 {
-                    var (labeled, webhookSent, webhookOk) = await ProcessConversationAsync(
-                        convId, tpl.Id, tpl.TenantId, tpl.ResultWebhookUrl, tpl.ResultOutputSchema,
+                    return await ProcessConversationAsync(
+                        convId, tpl.TenantId,
                         labels.Select(l => (l.Id, l.Name, l.Keywords)).ToList(), ct);
-                    return (labeled, webhookSent, webhookOk);
                 }
                 catch (Exception ex)
                 {
                     log.LogError(ex, "Labeling: error procesando conversación {Conv}.", convId);
-                    return (false, false, false);
+                    return false;
                 }
                 finally { sem.Release(); }
             });
 
             var results = await Task.WhenAll(tasks);
-            foreach (var (labeled, sent, ok) in results)
+            foreach (var labeled in results)
             {
                 totalProcessed++;
                 if (labeled) totalLabeled++; else totalFailed++;
-                if (sent) { if (ok) totalWebhookOk++; else totalWebhookFail++; }
             }
         }
 
-        var summary = $"Procesadas={totalProcessed} · Etiquetadas={totalLabeled} · Fallos={totalFailed} · Webhooks OK={totalWebhookOk}/{totalWebhookOk + totalWebhookFail}";
+        var summary = $"Procesadas={totalProcessed} · Etiquetadas={totalLabeled} · Fallos={totalFailed}";
         log.LogInformation("LabelingJob completo: {Summary}", summary);
 
         if (totalProcessed == 0) return JobRunResult.Skipped("Sin conversaciones pendientes.");
@@ -157,19 +154,18 @@ Formato exacto:
     }
 
     /// <summary>
-    /// Devuelve (labeled, webhookSent, webhookOk).
+    /// Etiqueta UNA conversación. Devuelve true si quedó etiquetada, false si falló.
+    /// Tras etiquetar exitosamente, dispara el evento ConversationLabeled.
     /// </summary>
-    private async Task<(bool, bool, bool)> ProcessConversationAsync(
-        Guid conversationId, Guid templateId, Guid tenantId,
-        string? resultWebhookUrl, string? resultOutputSchema,
+    private async Task<bool> ProcessConversationAsync(
+        Guid conversationId, Guid tenantId,
         List<(Guid Id, string Name, List<string> Keywords)> labels,
         CancellationToken ct)
     {
-        // 1. Cargar historial.
         var conv = await db.Conversations
             .Include(c => c.Messages.OrderBy(m => m.SentAt))
             .FirstOrDefaultAsync(c => c.Id == conversationId, ct);
-        if (conv is null) return (false, false, false);
+        if (conv is null) return false;
 
         var history = string.Join("\n",
             conv.Messages.Select(m =>
@@ -182,10 +178,8 @@ Formato exacto:
                 return $"[{ts}] {role}: {content}";
             }));
 
-        // 2. Construir user prompt con etiquetas y historial.
         var userPrompt = BuildClassifierUserPrompt(labels, history);
 
-        // 3. Llamar a Claude.
         LabelingResult? parsed;
         try
         {
@@ -209,26 +203,25 @@ Formato exacto:
         catch (Exception ex)
         {
             log.LogError(ex, "Labeling: Claude llamada falló para conv {Conv}.", conversationId);
-            return (false, false, false);
+            return false;
         }
 
         if (parsed is null)
         {
             log.LogWarning("Labeling: respuesta no parseable para conv {Conv}.", conversationId);
-            return (false, false, false);
+            return false;
         }
 
-        // 4. Resolver el LabelId por Name (case-insensitive).
+        // Resolver el LabelId por Name (case-insensitive).
         var matched = labels.FirstOrDefault(l =>
             string.Equals(l.Name, parsed.LabelName, StringComparison.OrdinalIgnoreCase));
         if (matched.Id == Guid.Empty)
         {
             log.LogWarning("Labeling: Claude devolvió '{Label}' que no está en el catálogo de conv {Conv}.",
                 parsed.LabelName, conversationId);
-            return (false, false, false);
+            return false;
         }
 
-        // 5. Persistir etiqueta.
         conv.LabelId = matched.Id;
         conv.LabeledAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
@@ -236,83 +229,13 @@ Formato exacto:
         log.LogInformation("Labeling: conv {Conv} → '{Label}' (conf={Conf}).",
             conversationId, matched.Name, parsed.Confidence);
 
-        // 6. Disparar webhook resultado si está configurado.
-        if (string.IsNullOrEmpty(resultWebhookUrl))
-            return (true, false, false);
+        // Disparar evento — cualquier ScheduledWebhookJob configurado con
+        // TriggerEvent=ConversationLabeled se programará en el siguiente tick
+        // (típicamente el webhook de resultado al cliente).
+        try { await eventDispatcher.DispatchAsync("ConversationLabeled", conversationId.ToString(), tenantId, ct); }
+        catch (Exception ex) { log.LogWarning(ex, "Labeling: dispatch de ConversationLabeled falló para conv {Conv}.", conversationId); }
 
-        // Skip si ya se envió antes (idempotencia básica).
-        if (conv.ResultWebhookSentAt is not null)
-            return (true, true, conv.ResultWebhookStatus is >= 200 and < 300);
-
-        var sentOk = await SendResultWebhookAsync(
-            conv.Id, resultWebhookUrl, resultOutputSchema, parsed, ct);
-
-        return (true, true, sentOk);
-    }
-
-    private async Task<bool> SendResultWebhookAsync(
-        Guid conversationId, string url, string? schemaJson,
-        LabelingResult parsed, CancellationToken ct)
-    {
-        try
-        {
-            // Construir contexto enriquecido con todos los sourceKeys del resultado.
-            var sysCtx = await contextBuilder.BuildResultContextAsync(conversationId, ct);
-            sysCtx.Set("conversation.label.confidence", parsed.Confidence.ToString("F2"));
-            sysCtx.Set("conversation.label.reasoning", parsed.Reasoning);
-            if (!string.IsNullOrEmpty(parsed.ExtractedDate))
-                sysCtx.Set("conversation.label.extractedDate", parsed.ExtractedDate);
-
-            // Si no hay schema, enviamos un payload mínimo razonable. Si lo hay, lo respetamos.
-            object payload;
-            if (string.IsNullOrEmpty(schemaJson))
-            {
-                payload = new
-                {
-                    conversationId = conversationId.ToString(),
-                    label = parsed.LabelName,
-                    confidence = parsed.Confidence,
-                    reasoning = parsed.Reasoning,
-                    extractedDate = parsed.ExtractedDate,
-                    closedAt = sysCtx.Get("conversation.closedAt"),
-                    contactPhone = sysCtx.Get("contact.phone"),
-                };
-            }
-            else
-            {
-                var schema = JsonSerializer.Deserialize<InputSchema>(schemaJson);
-                if (schema is null) return false;
-                payload = payloadBuilder.Build(schema, new CollectedParams(), sysCtx);
-            }
-
-            var endpoint = new WebhookEndpointConfig
-            {
-                WebhookUrl = url,
-                WebhookMethod = "POST",
-                AuthType = "None",
-            };
-
-            var dispatch = await httpDispatcher.SendAsync(endpoint, payload, "application/json", ct);
-
-            // Persistir el resultado del envío en la conversación (independiente de éxito).
-            await db.Conversations
-                .Where(c => c.Id == conversationId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(c => c.ResultWebhookSentAt, DateTime.UtcNow)
-                    .SetProperty(c => c.ResultWebhookStatus, dispatch.StatusCode), ct);
-
-            return dispatch.StatusCode is >= 200 and < 300;
-        }
-        catch (Exception ex)
-        {
-            log.LogError(ex, "Labeling: webhook resultado falló para conv {Conv}.", conversationId);
-            await db.Conversations
-                .Where(c => c.Id == conversationId)
-                .ExecuteUpdateAsync(s => s
-                    .SetProperty(c => c.ResultWebhookSentAt, DateTime.UtcNow)
-                    .SetProperty(c => c.ResultWebhookStatus, 0), ct);
-            return false;
-        }
+        return true;
     }
 
     private static string BuildClassifierUserPrompt(
@@ -338,7 +261,6 @@ Formato exacto:
     {
         if (string.IsNullOrWhiteSpace(raw)) return null;
 
-        // Si Claude envuelve el JSON en markdown, extraer el bloque.
         var jsonStart = raw.IndexOf('{');
         var jsonEnd = raw.LastIndexOf('}');
         if (jsonStart < 0 || jsonEnd <= jsonStart) return null;

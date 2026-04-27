@@ -29,10 +29,9 @@ public record CampaignTemplateRequest(
     // Fase 2 — Campaign Automation Worker
     string? FollowUpMessagesJson = null,
     string? AutoCloseMessage = null,
-    // Fase 3 — Etiquetado IA + webhook resultado
-    int? LabelingJobHourUtc = null,
-    string? ResultWebhookUrl = null,
-    string? ResultOutputSchema = null
+    // Fase 3 — Etiquetado IA. El webhook de resultado se modela como ScheduledWebhookJob
+    // independiente con TriggerEvent=ConversationLabeled.
+    int? LabelingJobHourUtc = null
 );
 
 [ApiController]
@@ -53,7 +52,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 AgentName = db.AgentDefinitions.Where(a => a.Id == t.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
                 t.FollowUpHours, t.FollowUpMessagesJson,
                 t.AutoCloseHours, t.AutoCloseMessage,
-                t.LabelingJobHourUtc, t.ResultWebhookUrl, t.ResultOutputSchema,
+                t.LabelingJobHourUtc,
                 t.LabelIds,
                 t.SendEmail, t.EmailAddress,
                 t.ActionIds, t.ActionConfigs, t.PromptTemplateIds,
@@ -80,7 +79,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 AgentName = db.AgentDefinitions.Where(a => a.Id == x.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
                 x.FollowUpHours, x.FollowUpMessagesJson,
                 x.AutoCloseHours, x.AutoCloseMessage,
-                x.LabelingJobHourUtc, x.ResultWebhookUrl, x.ResultOutputSchema,
+                x.LabelingJobHourUtc,
                 x.LabelIds,
                 x.SendEmail, x.EmailAddress,
                 x.ActionIds, x.ActionConfigs, x.PromptTemplateIds,
@@ -116,8 +115,6 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             AutoCloseHours = req.AutoCloseHours,
             AutoCloseMessage = req.AutoCloseMessage,
             LabelingJobHourUtc = req.LabelingJobHourUtc,
-            ResultWebhookUrl = req.ResultWebhookUrl,
-            ResultOutputSchema = req.ResultOutputSchema,
             LabelIds = req.LabelIds,
             SendEmail = req.SendEmail,
             EmailAddress = req.EmailAddress,
@@ -163,8 +160,6 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         template.AutoCloseHours = req.AutoCloseHours;
         template.AutoCloseMessage = req.AutoCloseMessage;
         template.LabelingJobHourUtc = req.LabelingJobHourUtc;
-        template.ResultWebhookUrl = req.ResultWebhookUrl;
-        template.ResultOutputSchema = req.ResultOutputSchema;
         template.LabelIds = req.LabelIds;
         template.SendEmail = req.SendEmail;
         template.EmailAddress = req.EmailAddress;
@@ -298,8 +293,6 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             AutoCloseHours = original.AutoCloseHours,
             AutoCloseMessage = original.AutoCloseMessage,
             LabelingJobHourUtc = original.LabelingJobHourUtc,
-            ResultWebhookUrl = original.ResultWebhookUrl,
-            ResultOutputSchema = original.ResultOutputSchema,
             LabelIds = [.. original.LabelIds],
             SendEmail = original.SendEmail,
             EmailAddress = original.EmailAddress,

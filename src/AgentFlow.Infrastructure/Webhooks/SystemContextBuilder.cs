@@ -44,7 +44,17 @@ public class SystemContextBuilder(AgentFlowDbContext db) : ISystemContextBuilder
         {
             var conv = await db.Conversations
                 .Where(c => c.Id == conversationId.Value)
-                .Select(c => new { c.Id, c.StartedAt, c.ClientName, c.ClientPhone, c.PolicyNumber })
+                .Select(c => new
+                {
+                    c.Id, c.StartedAt, c.ClientName, c.ClientPhone, c.PolicyNumber,
+                    // Fase 3 — sourceKeys del resultado disponibles cuando la conversación
+                    // ya cerró y/o se etiquetó. Cargados en la misma query para evitar N+1.
+                    c.Status, c.ClosedAt, c.IsHumanHandled,
+                    c.LabelId, c.LabeledAt,
+                    LabelName = c.Label != null ? c.Label.Name : null,
+                    LabelKeywords = c.Label != null ? c.Label.Keywords : null,
+                    MessageCount = c.Messages.Count,
+                })
                 .FirstOrDefaultAsync(ct);
 
             if (conv is not null)
@@ -57,6 +67,23 @@ public class SystemContextBuilder(AgentFlowDbContext db) : ISystemContextBuilder
                     ctx.Set("contact.name", conv.ClientName);
                 if (!string.IsNullOrEmpty(conv.PolicyNumber))
                     ctx.Set("contact.policyNumber", conv.PolicyNumber);
+
+                // Fase 3 — keys del cierre (siempre disponibles si hay conv).
+                if (conv.ClosedAt.HasValue)
+                    ctx.Set("conversation.closedAt", conv.ClosedAt.Value.ToString("O"));
+                ctx.Set("conversation.closeReason", DeriveCloseReason(conv.Status, conv.IsHumanHandled));
+                ctx.Set("conversation.messageCount", conv.MessageCount.ToString());
+
+                // Fase 3 — keys del label (solo si fue etiquetada).
+                if (conv.LabelId.HasValue && !string.IsNullOrEmpty(conv.LabelName))
+                {
+                    ctx.Set("conversation.label.name", conv.LabelName);
+                    ctx.Set("conversation.label.slug", Slugify(conv.LabelName));
+                    if (conv.LabelKeywords is { Count: > 0 })
+                        ctx.Set("conversation.label.keywords", string.Join(", ", conv.LabelKeywords));
+                    if (conv.LabeledAt.HasValue)
+                        ctx.Set("conversation.label.labeledAt", conv.LabeledAt.Value.ToString("O"));
+                }
             }
         }
 
@@ -142,55 +169,12 @@ public class SystemContextBuilder(AgentFlowDbContext db) : ISystemContextBuilder
         if (conversationId.HasValue)
             ctx.Set("session.id", conversationId.Value.ToString());
 
-        return ctx;
-    }
-
-    public async Task<SystemContext> BuildResultContextAsync(Guid conversationId, CancellationToken ct = default)
-    {
-        // 1. Cargar conversación + label en una sola query.
-        var convInfo = await db.Conversations
-            .Where(c => c.Id == conversationId)
-            .Select(c => new
-            {
-                c.Id, c.TenantId, c.CampaignId, c.ClientPhone, c.ClientName,
-                c.Status, c.ClosedAt, c.IsHumanHandled,
-                c.LabelId, c.LabeledAt,
-                LabelName = c.Label != null ? c.Label.Name : null,
-                LabelKeywords = c.Label != null ? c.Label.Keywords : null,
-                MessageCount = c.Messages.Count,
-            })
-            .FirstOrDefaultAsync(ct);
-
-        if (convInfo is null)
-        {
-            // Sin conversación → contexto vacío. El caller decide qué hacer.
-            return new SystemContext();
-        }
-
-        // 2. Reutilizar BuildAsync para los sourceKeys básicos (tenant/campaign/contact).
-        var ctx = await BuildAsync(
-            convInfo.TenantId, convInfo.CampaignId, convInfo.ClientPhone, convInfo.Id, null, ct);
-
-        // 3. Sobreescribir/agregar los keys específicos del resultado.
-        ctx.Set("conversation.closedAt", convInfo.ClosedAt?.ToString("O"));
-        ctx.Set("conversation.messageCount", convInfo.MessageCount.ToString());
-        ctx.Set("conversation.closeReason", DeriveCloseReason(convInfo.Status, convInfo.IsHumanHandled));
-
-        if (convInfo.LabelId.HasValue && !string.IsNullOrEmpty(convInfo.LabelName))
-        {
-            ctx.Set("conversation.label.name", convInfo.LabelName);
-            ctx.Set("conversation.label.slug", Slugify(convInfo.LabelName));
-            ctx.Set("conversation.label.keywords", convInfo.LabelKeywords is null ? null : string.Join(", ", convInfo.LabelKeywords));
-            ctx.Set("conversation.label.labeledAt", convInfo.LabeledAt?.ToString("O"));
-        }
-
-        // 4. campaign.externalRef → primer registro del ContactDataJson con clave que
-        //    parezca identificador externo (clientId / nroPoliza / cedula / externalId).
-        //    Permite que el cliente correlacione la conversación con su sistema sin schema rígido.
-        if (convInfo.CampaignId.HasValue)
+        // Fase 3 — externalId / campaign.externalRef desde ContactDataJson (heurística).
+        // Permite correlacionar la conversación con el sistema del cliente sin schema rígido.
+        if (campaignId.HasValue)
         {
             var contactJson = await db.CampaignContacts
-                .Where(cc => cc.CampaignId == convInfo.CampaignId && cc.PhoneNumber == convInfo.ClientPhone)
+                .Where(cc => cc.CampaignId == campaignId.Value && cc.PhoneNumber == contactPhone)
                 .Select(cc => cc.ContactDataJson)
                 .FirstOrDefaultAsync(ct);
 

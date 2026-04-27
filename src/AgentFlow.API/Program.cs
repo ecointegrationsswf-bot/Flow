@@ -706,30 +706,20 @@ try
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Fase 2 columns: {ex.Message}"); }
 
-    // ── Fase 3: columnas de etiquetado IA + webhook resultado (self-healing) ──
+    // ── Fase 3: columnas de etiquetado IA (self-healing) ──
+    // El webhook de resultado se modela como ActionDefinition + ScheduledWebhookJob
+    // — no se persiste estado adicional en CampaignTemplates ni Conversations.
     try
     {
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'LabelingJobHourUtc')
             BEGIN ALTER TABLE CampaignTemplates ADD LabelingJobHourUtc int NULL; END");
         db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ResultWebhookUrl')
-            BEGIN ALTER TABLE CampaignTemplates ADD ResultWebhookUrl nvarchar(500) NULL; END");
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ResultOutputSchema')
-            BEGIN ALTER TABLE CampaignTemplates ADD ResultOutputSchema nvarchar(MAX) NULL; END");
-        db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'LabelId')
             BEGIN ALTER TABLE Conversations ADD LabelId uniqueidentifier NULL; END");
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'LabeledAt')
             BEGIN ALTER TABLE Conversations ADD LabeledAt datetime2 NULL; END");
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'ResultWebhookSentAt')
-            BEGIN ALTER TABLE Conversations ADD ResultWebhookSentAt datetime2 NULL; END");
-        db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'ResultWebhookStatus')
-            BEGIN ALTER TABLE Conversations ADD ResultWebhookStatus int NULL; END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Fase 3 columns: {ex.Message}"); }
 

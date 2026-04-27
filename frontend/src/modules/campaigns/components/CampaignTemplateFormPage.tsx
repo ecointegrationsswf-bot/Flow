@@ -41,7 +41,6 @@ const schema = z.object({
   autoCloseHours: z.coerce.number().min(1).max(720).default(72),
   autoCloseMessage: z.string().nullable().default(null),
   labelingJobHourUtc: z.coerce.number().int().min(0).max(23).nullable().default(null),
-  resultWebhookUrl: z.string().nullable().default(null),
   sendFrom: z.string().nullable().default(null),
   sendUntil: z.string().nullable().default(null),
 })
@@ -122,9 +121,6 @@ export function CampaignTemplateFormPage() {
   const [attentionStart, setAttentionStart] = useState(existing?.attentionStartTime ?? '08:00')
   const [attentionEnd, setAttentionEnd] = useState(existing?.attentionEndTime ?? '17:00')
   const [outOfContextPolicy, setOutOfContextPolicy] = useState(existing?.outOfContextPolicy ?? 'Contain')
-  // Fase 3 — JSON OutputSchema del webhook resultado. Editable como texto crudo.
-  const [resultOutputSchema, setResultOutputSchema] = useState<string>(existing?.resultOutputSchema ?? '')
-  const [resultOutputSchemaError, setResultOutputSchemaError] = useState<string | null>(null)
   // Webhook Contract Builder — modal state (Fase 5)
   const [webhookBuilderActionId, setWebhookBuilderActionId] = useState<string | null>(null)
   // Tab activa — General / Etiquetas / Acciones / Prompt / Documentos
@@ -149,7 +145,6 @@ export function CampaignTemplateFormPage() {
     setAttentionEnd(existing.attentionEndTime ?? '17:00')
     if (existing.outOfContextPolicy) setOutOfContextPolicy(existing.outOfContextPolicy)
     if (existing.systemPrompt) setLocalSystemPrompt(existing.systemPrompt)
-    if (existing.resultOutputSchema) setResultOutputSchema(existing.resultOutputSchema)
   }, [existing?.id])
 
   // Cuando hay un prompt seleccionado, trae el texto original del template global
@@ -181,7 +176,6 @@ export function CampaignTemplateFormPage() {
           autoCloseHours: existing.autoCloseHours,
           autoCloseMessage: existing.autoCloseMessage ?? null,
           labelingJobHourUtc: existing.labelingJobHourUtc ?? null,
-          resultWebhookUrl: existing.resultWebhookUrl ?? null,
           sendFrom: existing.sendFrom ?? null,
           sendUntil: existing.sendUntil ?? null,
         }
@@ -189,7 +183,6 @@ export function CampaignTemplateFormPage() {
           name: '', agentDefinitionId: '', autoCloseHours: 72,
           autoCloseMessage: null,
           labelingJobHourUtc: null,
-          resultWebhookUrl: null,
           sendFrom: null, sendUntil: null,
         },
   })
@@ -374,28 +367,12 @@ export function CampaignTemplateFormPage() {
       ? JSON.stringify(trimmedMessages)
       : null
 
-    // Fase 3: validar el ResultOutputSchema si fue editado.
-    let normalizedSchema: string | null = null
-    if (resultOutputSchema.trim().length > 0) {
-      try {
-        const parsed = JSON.parse(resultOutputSchema)
-        normalizedSchema = JSON.stringify(parsed)
-        setResultOutputSchemaError(null)
-      } catch {
-        setResultOutputSchemaError('JSON inválido — corrige el OutputSchema antes de guardar.')
-        setActiveTab('labels')
-        return
-      }
-    }
-
     const payload = {
       ...data,
       followUpHours,
       followUpMessagesJson,
       autoCloseMessage: data.autoCloseMessage?.trim() ? data.autoCloseMessage : null,
       labelingJobHourUtc: data.labelingJobHourUtc ?? null,
-      resultWebhookUrl: data.resultWebhookUrl?.trim() ? data.resultWebhookUrl : null,
-      resultOutputSchema: normalizedSchema,
       labelIds: selectedLabelIds,
       actionIds: selectedActionIds,
       actionConfigs: Object.keys(actionConfigs).length > 0 ? JSON.stringify(actionConfigs) : null,
@@ -724,69 +701,38 @@ export function CampaignTemplateFormPage() {
             </div>
           )}
 
-          {/* ─── Fase 3: Etiquetado IA + Webhook de resultado ─── */}
+          {/* ─── Fase 3: Etiquetado automático con IA ─── */}
           <div className="mt-8 border-t border-gray-200 pt-6">
             <h2 className="mb-1 text-sm font-semibold text-gray-900">Etiquetado automático con IA</h2>
             <p className="mb-4 text-xs text-gray-500">
-              Cuando se activa, cada hora UTC el sistema clasifica las conversaciones cerradas
-              de esta campaña usando las etiquetas seleccionadas arriba. Si configuras un webhook
-              de resultado, el cliente recibirá el payload con la etiqueta y datos de la conversación.
+              Cuando se activa, a la hora UTC indicada el sistema clasifica las conversaciones cerradas
+              de esta campaña usando las etiquetas seleccionadas arriba.
             </p>
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div>
-                <label className="block text-sm font-medium text-gray-700">Hora UTC del job diario</label>
-                <input
-                  type="number" min={0} max={23} placeholder="0–23 (vacío = deshabilitado)"
-                  {...register('labelingJobHourUtc', {
-                    setValueAs: (v) => v === '' || v === null || v === undefined ? null : Number(v),
-                  })}
-                  className={inputClass}
-                />
-                {errors.labelingJobHourUtc && <p className="mt-1 text-xs text-red-600">{errors.labelingJobHourUtc.message}</p>}
-                <p className="mt-1 text-xs text-gray-500">Ej: 23 = 11pm UTC. Vacío = no se etiqueta automáticamente.</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700">URL del webhook de resultado</label>
-                <input
-                  type="url" placeholder="https://api.cliente.com/conversations/result"
-                  {...register('resultWebhookUrl')}
-                  className={inputClass}
-                />
-                <p className="mt-1 text-xs text-gray-500">Vacío = solo se asigna etiqueta interna sin notificar al cliente.</p>
-              </div>
+            <div className="max-w-xs">
+              <label className="block text-sm font-medium text-gray-700">Hora UTC del job diario</label>
+              <input
+                type="number" min={0} max={23} placeholder="0–23 (vacío = deshabilitado)"
+                {...register('labelingJobHourUtc', {
+                  setValueAs: (v) => v === '' || v === null || v === undefined ? null : Number(v),
+                })}
+                className={inputClass}
+              />
+              {errors.labelingJobHourUtc && <p className="mt-1 text-xs text-red-600">{errors.labelingJobHourUtc.message}</p>}
+              <p className="mt-1 text-xs text-gray-500">Ej: 23 = 11pm UTC. Vacío = no se etiqueta automáticamente.</p>
             </div>
 
-            <div className="mt-4">
-              <label className="block text-sm font-medium text-gray-700">OutputSchema del webhook (JSON)</label>
-              <textarea
-                value={resultOutputSchema}
-                onChange={(e) => { setResultOutputSchema(e.target.value); setResultOutputSchemaError(null) }}
-                rows={8}
-                spellCheck={false}
-                placeholder={`{
-  "fields": [
-    { "fieldPath": "nroPoliza", "sourceKey": "contact.externalId", "sourceType": "system", "dataType": "string" },
-    { "fieldPath": "estatus", "sourceKey": "conversation.label.name", "sourceType": "system", "dataType": "string" },
-    { "fieldPath": "fechaCompromiso", "sourceKey": "conversation.label.extractedDate", "sourceType": "system", "dataType": "date" }
-  ]
-}`}
-                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-xs focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-              {resultOutputSchemaError && (
-                <p className="mt-1 text-xs text-red-600">{resultOutputSchemaError}</p>
-              )}
-              <p className="mt-1 text-xs text-gray-500">
-                Vacío = se envía un payload mínimo por defecto. SourceKeys disponibles:
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">conversation.label.name</code>
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">conversation.label.confidence</code>
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">conversation.label.reasoning</code>
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">conversation.label.extractedDate</code>
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">conversation.closedAt</code>
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">conversation.closeReason</code>
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">conversation.messageCount</code>
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">contact.externalId</code>
-                <code className="mx-1 rounded bg-gray-100 px-1 text-[11px]">contact.phone</code>
+            <div className="mt-5 rounded-md border border-blue-200 bg-blue-50 p-4 text-xs text-blue-900">
+              <p className="font-semibold">¿Quieres notificar al cliente con el resultado etiquetado?</p>
+              <p className="mt-1">
+                Define una <strong>Acción</strong> en el portal admin con su URL, InputSchema y OutputSchema, y luego programa un{' '}
+                <strong>Scheduled Job</strong> con <code className="rounded bg-white px-1">TriggerEvent = ConversationLabeled</code>{' '}
+                y <code className="rounded bg-white px-1">Scope = PerConversation</code>. El Worker enviará el webhook automáticamente
+                tras cada etiquetado, con sourceKeys disponibles como{' '}
+                <code className="rounded bg-white px-1">conversation.label.name</code>,{' '}
+                <code className="rounded bg-white px-1">conversation.label.slug</code>,{' '}
+                <code className="rounded bg-white px-1">conversation.closedAt</code>,{' '}
+                <code className="rounded bg-white px-1">contact.externalId</code>.
               </p>
             </div>
           </div>
