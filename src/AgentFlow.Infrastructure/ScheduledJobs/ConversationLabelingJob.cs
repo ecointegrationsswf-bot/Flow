@@ -54,7 +54,7 @@ public class ConversationLabelingJob(
     private const decimal ClassifierTemperature = 0.0m;
     private const int MaxConversationsPerRun = 200;
 
-    private const string SystemPromptText = """
+    private const string DefaultSystemPromptText = """
 Eres un clasificador de conversaciones de atención al cliente.
 Tu única tarea es leer el historial COMPLETO de una conversación y asignarle
 la etiqueta que mejor describe su resultado.
@@ -94,20 +94,24 @@ Formato exacto:
         var totalLabeled = 0;
         var totalFailed = 0;
 
-        // Cache de AnthropicClient por tenant — evita reconstruir el cliente
-        // por cada conversación. Si el tenant no tiene LlmApiKey y no hay key
-        // global, el tenant entero se omite con warning.
+        // Cache por tenant: AnthropicClient + prompts configurables (analysis + result schema).
+        // Si LabelingAnalysisPrompt es null usamos DefaultSystemPromptText.
+        // Si LabelingResultSchemaPrompt no es null pedimos a Claude un campo "result" extra
+        // que se persiste en Conversation.LabelingResultJson para mapear webhooks.
         var clientByTenant = new Dictionary<Guid, AnthropicClient?>();
+        var promptsByTenant = new Dictionary<Guid, (string AnalysisPrompt, string? ResultSchema)>();
 
         foreach (var tpl in templates)
         {
             if (ct.IsCancellationRequested) break;
 
-            // Resolver el AnthropicClient del tenant (con su LlmApiKey si la tiene).
+            // Resolver client + prompts del tenant (1 query por tenant).
             if (!clientByTenant.TryGetValue(tpl.TenantId, out var tenantClient))
             {
-                tenantClient = await ResolveTenantClientAsync(tpl.TenantId, ct);
-                clientByTenant[tpl.TenantId] = tenantClient;
+                var (client, analysisPrompt, resultSchema) = await ResolveTenantConfigAsync(tpl.TenantId, ct);
+                clientByTenant[tpl.TenantId] = client;
+                promptsByTenant[tpl.TenantId] = (analysisPrompt, resultSchema);
+                tenantClient = client;
             }
             if (tenantClient is null)
             {
@@ -115,6 +119,7 @@ Formato exacto:
                     tpl.TenantId, tpl.Id);
                 continue;
             }
+            var (tenantAnalysisPrompt, tenantResultSchema) = promptsByTenant[tpl.TenantId];
 
             // Resolver labels del tenant que el maestro tiene asignadas.
             var labels = await db.ConversationLabels
@@ -156,7 +161,9 @@ Formato exacto:
                 bool labeled;
                 try
                 {
-                    labeled = await ProcessConversationAsync(tenantClient, convId, tpl.TenantId, labelTuples, ct);
+                    labeled = await ProcessConversationAsync(
+                        tenantClient, convId, tpl.TenantId, labelTuples,
+                        tenantAnalysisPrompt, tenantResultSchema, ct);
                 }
                 catch (Exception ex)
                 {
@@ -178,23 +185,39 @@ Formato exacto:
     }
 
     /// <summary>
-    /// Resuelve el AnthropicClient adecuado para un tenant. Prioriza la LlmApiKey
-    /// del tenant; fallback a la key global. Si ninguna está disponible devuelve null.
+    /// Resuelve client + prompts del tenant en una sola query. Devuelve client
+    /// nulo si no hay LlmApiKey del tenant ni global. AnalysisPrompt nunca es null
+    /// (cae al default). ResultSchema es null cuando el tenant no configuró schema.
     /// </summary>
-    private async Task<AnthropicClient?> ResolveTenantClientAsync(Guid tenantId, CancellationToken ct)
+    private async Task<(AnthropicClient? Client, string AnalysisPrompt, string? ResultSchema)>
+        ResolveTenantConfigAsync(Guid tenantId, CancellationToken ct)
     {
-        var apiKey = await db.Tenants
+        var cfg = await db.Tenants
             .Where(t => t.Id == tenantId)
-            .Select(t => t.LlmApiKey)
+            .Select(t => new
+            {
+                t.LlmApiKey,
+                t.LabelingAnalysisPrompt,
+                t.LabelingResultSchemaPrompt
+            })
             .FirstOrDefaultAsync(ct);
 
-        if (!string.IsNullOrEmpty(apiKey))
-            return new AnthropicClient(apiKey);
+        AnthropicClient? client;
+        if (!string.IsNullOrEmpty(cfg?.LlmApiKey))
+            client = new AnthropicClient(cfg.LlmApiKey);
+        else if (anthropicSettings.HasGlobalKey)
+            client = anthropic;
+        else
+            client = null;
 
-        if (anthropicSettings.HasGlobalKey)
-            return anthropic;
+        var analysis = string.IsNullOrWhiteSpace(cfg?.LabelingAnalysisPrompt)
+            ? DefaultSystemPromptText
+            : cfg!.LabelingAnalysisPrompt!;
+        var resultSchema = string.IsNullOrWhiteSpace(cfg?.LabelingResultSchemaPrompt)
+            ? null
+            : cfg!.LabelingResultSchemaPrompt;
 
-        return null;
+        return (client, analysis, resultSchema);
     }
 
     /// <summary>
@@ -205,6 +228,8 @@ Formato exacto:
         AnthropicClient client,
         Guid conversationId, Guid tenantId,
         List<(Guid Id, string Name, List<string> Keywords)> labels,
+        string analysisPrompt,
+        string? resultSchemaPrompt,
         CancellationToken ct)
     {
         var conv = await db.Conversations
@@ -223,7 +248,9 @@ Formato exacto:
                 return $"[{ts}] {role}: {content}";
             }));
 
-        var userPrompt = BuildClassifierUserPrompt(labels, history);
+        var userPrompt = BuildClassifierUserPrompt(labels, history, resultSchemaPrompt);
+        // Si el tenant pide schema custom, ampliar maxTokens — el JSON puede ser más largo.
+        var maxTokens = resultSchemaPrompt is null ? ClassifierMaxTokens : ClassifierMaxTokens + 700;
 
         LabelingResult? parsed;
         try
@@ -231,9 +258,9 @@ Formato exacto:
             var response = await client.Messages.GetClaudeMessageAsync(new MessageParameters
             {
                 Model = ClassifierModel,
-                MaxTokens = ClassifierMaxTokens,
+                MaxTokens = maxTokens,
                 Temperature = ClassifierTemperature,
-                System = [new SystemMessage(SystemPromptText)],
+                System = [new SystemMessage(analysisPrompt)],
                 Messages = [new Anthropic.SDK.Messaging.Message
                 {
                     Role = RoleType.User,
@@ -269,10 +296,13 @@ Formato exacto:
 
         conv.LabelId = matched.Id;
         conv.LabeledAt = DateTime.UtcNow;
+        // Persistir resultJson custom si el tenant configuró schema y Claude lo devolvió.
+        if (!string.IsNullOrEmpty(parsed.ResultJson))
+            conv.LabelingResultJson = parsed.ResultJson;
         await db.SaveChangesAsync(ct);
 
-        log.LogInformation("Labeling: conv {Conv} → '{Label}' (conf={Conf}).",
-            conversationId, matched.Name, parsed.Confidence);
+        log.LogInformation("Labeling: conv {Conv} → '{Label}' (conf={Conf}, hasResult={HasResult}).",
+            conversationId, matched.Name, parsed.Confidence, parsed.ResultJson is not null);
 
         // Disparar evento — cualquier ScheduledWebhookJob configurado con
         // TriggerEvent=ConversationLabeled se programará en el siguiente tick
@@ -284,7 +314,8 @@ Formato exacto:
     }
 
     private static string BuildClassifierUserPrompt(
-        List<(Guid Id, string Name, List<string> Keywords)> labels, string history)
+        List<(Guid Id, string Name, List<string> Keywords)> labels, string history,
+        string? resultSchemaPrompt)
     {
         var sb = new StringBuilder();
         sb.AppendLine("## ETIQUETAS DISPONIBLES");
@@ -298,7 +329,22 @@ Formato exacto:
         sb.AppendLine("## HISTORIAL DE LA CONVERSACIÓN");
         sb.AppendLine(history);
         sb.AppendLine();
-        sb.AppendLine("Devuelve únicamente el JSON. Recuerda: \"labelName\" debe coincidir EXACTAMENTE con el Nombre de una etiqueta de la lista.");
+
+        if (!string.IsNullOrWhiteSpace(resultSchemaPrompt))
+        {
+            sb.AppendLine("## SCHEMA DE RESULTADO ADICIONAL");
+            sb.AppendLine("Además del label, extrae un objeto JSON con la siguiente estructura.");
+            sb.AppendLine("Si no hay datos para un campo: usa string vacío para textos, 0 para números y null para fechas no encontradas.");
+            sb.AppendLine();
+            sb.AppendLine(resultSchemaPrompt);
+            sb.AppendLine();
+            sb.AppendLine("Devuelve ÚNICAMENTE el siguiente JSON, sin markdown ni texto adicional:");
+            sb.AppendLine("{\"labelName\":\"...\",\"confidence\":0.0,\"reasoning\":\"...\",\"extractedDate\":null,\"result\":{...campos del schema...}}");
+        }
+        else
+        {
+            sb.AppendLine("Devuelve únicamente el JSON. Recuerda: \"labelName\" debe coincidir EXACTAMENTE con el Nombre de una etiqueta de la lista.");
+        }
         return sb.ToString();
     }
 
@@ -320,8 +366,12 @@ Formato exacto:
             var reason = root.TryGetProperty("reasoning", out var r) ? r.GetString() : null;
             var date = root.TryGetProperty("extractedDate", out var d) && d.ValueKind != JsonValueKind.Null
                 ? d.GetString() : null;
+            // El campo "result" es opcional — solo lo serializamos si vino como objeto.
+            string? resultJson = null;
+            if (root.TryGetProperty("result", out var res) && res.ValueKind == JsonValueKind.Object)
+                resultJson = res.GetRawText();
             if (string.IsNullOrEmpty(name)) return null;
-            return new LabelingResult(name, conf, reason, date);
+            return new LabelingResult(name, conf, reason, date, resultJson);
         }
         catch { return null; }
     }

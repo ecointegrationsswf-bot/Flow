@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { PageHeader } from '@/shared/components/PageHeader'
-import { TenantSettingsTab } from './TenantSettingsTab'
 import { UsersTab } from './UsersTab'
 import { WhatsAppTab } from './WhatsAppTab'
 
+// El tab "Tenant" (configuración del tenant) se movió al panel del super admin
+// en Admin → Tenants → Editar Cliente → tab "Configuración". Acá sólo quedan
+// Usuarios (alta/baja de usuarios del propio tenant) y WhatsApp (estado del canal).
 const tabs = [
-  { id: 'tenant', label: 'Tenant' },
   { id: 'users', label: 'Usuarios' },
   { id: 'whatsapp', label: 'WhatsApp' },
 ] as const
@@ -17,7 +18,7 @@ export function SettingsPage() {
 
   return (
     <div>
-      <PageHeader title="Configuracion" subtitle="Administra tu tenant y usuarios" />
+      <PageHeader title="Configuracion" subtitle="Usuarios y canal de WhatsApp" />
 
       {/* Tabs */}
       <div className="mb-6 border-b border-gray-200">
@@ -38,7 +39,6 @@ export function SettingsPage() {
         </nav>
       </div>
 
-      {activeTab === 'tenant' && <TenantSettingsTab />}
       {activeTab === 'users' && <UsersTab />}
       {activeTab === 'whatsapp' && <WhatsAppTab />}
     </div>

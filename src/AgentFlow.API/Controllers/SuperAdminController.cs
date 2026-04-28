@@ -1181,6 +1181,127 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         return NoContent();
     }
 
+    /// <summary>
+    /// Lista las acciones asignadas a un tenant con su estado de configuración webhook.
+    /// Equivalente al endpoint /api/tenant-actions pero accesible por super-admin
+    /// para administrar el contract desde el modal de edición de tenant.
+    /// </summary>
+    [HttpGet("tenants/{tenantId:guid}/actions-config")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantActionsConfig(Guid tenantId, CancellationToken ct)
+    {
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedActionIds })
+            .FirstOrDefaultAsync(ct);
+        if (tenant is null) return NotFound();
+
+        var assignedIds = tenant.AssignedActionIds ?? [];
+        if (assignedIds.Count == 0) return Ok(Array.Empty<object>());
+
+        var actions = await db.ActionDefinitions
+            .Where(a => a.IsActive && a.RequiresWebhook && assignedIds.Contains(a.Id))
+            .OrderBy(a => a.Name)
+            .Select(a => new
+            {
+                a.Id, a.Name, a.Description,
+                a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess,
+                a.DefaultWebhookContract, a.DefaultTriggerConfig,
+                HasWebhookContract = a.DefaultWebhookContract != null
+            })
+            .ToListAsync(ct);
+        return Ok(actions);
+    }
+
+    public record AdminUpdateActionContractRequest(string? Contract);
+
+    /// <summary>
+    /// Prompts del proceso de etiquetado del tenant.
+    /// </summary>
+    [HttpGet("tenants/{tenantId:guid}/labeling-prompts")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantLabelingPrompts(Guid tenantId, CancellationToken ct)
+    {
+        var t = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.LabelingAnalysisPrompt, t.LabelingResultSchemaPrompt })
+            .FirstOrDefaultAsync(ct);
+        if (t is null) return NotFound();
+        return Ok(new
+        {
+            analysisPrompt = t.LabelingAnalysisPrompt,
+            resultSchemaPrompt = t.LabelingResultSchemaPrompt
+        });
+    }
+
+    public record UpdateLabelingPromptsRequest(string? AnalysisPrompt, string? ResultSchemaPrompt);
+
+    [HttpPut("tenants/{tenantId:guid}/labeling-prompts")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantLabelingPrompts(
+        Guid tenantId, [FromBody] UpdateLabelingPromptsRequest req, CancellationToken ct)
+    {
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+        tenant.LabelingAnalysisPrompt = string.IsNullOrWhiteSpace(req.AnalysisPrompt) ? null : req.AnalysisPrompt;
+        tenant.LabelingResultSchemaPrompt = string.IsNullOrWhiteSpace(req.ResultSchemaPrompt) ? null : req.ResultSchemaPrompt;
+        await db.SaveChangesAsync(ct);
+        return Ok(new
+        {
+            analysisPrompt = tenant.LabelingAnalysisPrompt,
+            resultSchemaPrompt = tenant.LabelingResultSchemaPrompt
+        });
+    }
+
+    /// <summary>
+    /// Actualiza el DefaultWebhookContract de una acción asignada a un tenant.
+    /// Mismo comportamiento que /api/tenant-actions/{id}/webhook-contract pero
+    /// invocable desde el panel admin (modal de edición de tenant).
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/actions/{actionId:guid}/webhook-contract")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantActionContract(
+        Guid tenantId, Guid actionId,
+        [FromBody] AdminUpdateActionContractRequest req,
+        CancellationToken ct)
+    {
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedActionIds })
+            .FirstOrDefaultAsync(ct);
+        if (tenant is null) return NotFound();
+
+        var assignedIds = tenant.AssignedActionIds ?? [];
+        if (!assignedIds.Contains(actionId))
+            return NotFound(new { error = "Acción no asignada a este tenant." });
+
+        var action = await db.ActionDefinitions.FirstOrDefaultAsync(a => a.Id == actionId, ct);
+        if (action is null)
+            return NotFound(new { error = "Acción no encontrada." });
+
+        action.DefaultWebhookContract = string.IsNullOrWhiteSpace(req.Contract) ? null : req.Contract;
+
+        // Sincronizar DefaultTriggerConfig si el contract trae triggerConfig.
+        if (!string.IsNullOrWhiteSpace(req.Contract))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(req.Contract);
+                if (doc.RootElement.TryGetProperty("triggerConfig", out var tc)
+                    && tc.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    action.DefaultTriggerConfig = tc.GetRawText();
+                }
+            }
+            catch { /* contract inválido — no sincronizar */ }
+        }
+
+        action.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { action.Id, action.DefaultWebhookContract, action.DefaultTriggerConfig });
+    }
+
     // ───── Prompt Templates ─────
 
     public record PromptTemplateRequest(string Name, string? Description, Guid? CategoryId, string? SystemPrompt, string? ResultPrompt, string? AnalysisPrompts, string? FieldMapping);

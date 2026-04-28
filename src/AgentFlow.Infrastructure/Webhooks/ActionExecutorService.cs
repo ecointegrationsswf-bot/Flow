@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Webhooks;
 using AgentFlow.Infrastructure.Persistence;
@@ -46,6 +47,8 @@ public class ActionExecutorService(
         Guid? conversationId,
         CollectedParams collectedParams,
         string? agentSlug = null,
+        Guid? jobExecutionId = null,
+        Guid? jobId = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(actionSlug))
@@ -72,9 +75,16 @@ public class ActionExecutorService(
         }
 
         // ── 3. Cargar ActionDefinition (incluye DefaultWebhookContract para fallback) ──
-        var actionDef = await db.ActionDefinitions
-            .Where(a => a.TenantId == tenantId && a.Name == actionSlug && a.IsActive)
-            .FirstOrDefaultAsync(ct);
+        // Aceptamos override por tenant + global (TenantId == null). Preferimos el
+        // override del tenant si existe; caemos al global en otro caso.
+        var actionCandidates = await db.ActionDefinitions
+            .Where(a => (a.TenantId == tenantId || a.TenantId == null)
+                        && a.Name == actionSlug
+                        && a.IsActive)
+            .ToListAsync(ct);
+
+        var actionDef = actionCandidates.FirstOrDefault(a => a.TenantId == tenantId)
+                        ?? actionCandidates.FirstOrDefault(a => a.TenantId == null);
 
         if (actionDef is null)
         {
@@ -184,11 +194,20 @@ public class ActionExecutorService(
         }
 
         // ── 8. Ejecutar HTTP ──
+        var dispatchStartedAt = DateTime.UtcNow;
         var httpResult = await httpDispatcher.SendAsync(
             bundle.EndpointConfig,
             payload,
             bundle.InputSchema.ContentType ?? "application/json",
             ct);
+
+        // ── Audit log per-call (siempre — éxito o fallo) ──
+        await TryWriteDispatchLogAsync(
+            tenantId, conversationId, contactPhone,
+            jobExecutionId, jobId, actionDef.Id, actionSlug,
+            bundle.EndpointConfig.WebhookUrl, bundle.EndpointConfig.WebhookMethod ?? "POST",
+            bundle.InputSchema.ContentType ?? "application/json",
+            payload, httpResult, dispatchStartedAt, ct);
 
         if (!httpResult.Success)
         {
@@ -249,4 +268,65 @@ public class ActionExecutorService(
 
     private static string CircuitKey(Guid tenantId, string actionSlug) =>
         $"webhook-cb:{tenantId}:{actionSlug}";
+
+    // ── Audit log ──
+
+    private async Task TryWriteDispatchLogAsync(
+        Guid tenantId,
+        Guid? conversationId,
+        string? contactPhone,
+        Guid? jobExecutionId,
+        Guid? jobId,
+        Guid actionDefinitionId,
+        string actionSlug,
+        string targetUrl,
+        string httpMethod,
+        string contentType,
+        object payload,
+        HttpDispatchResult httpResult,
+        DateTime startedAt,
+        CancellationToken ct)
+    {
+        try
+        {
+            string? payloadJson;
+            try { payloadJson = JsonSerializer.Serialize(payload, _jsonOpts); }
+            catch { payloadJson = payload?.ToString(); }
+
+            var responseBody = httpResult.Body;
+            if (!string.IsNullOrEmpty(responseBody) && responseBody.Length > 8000)
+                responseBody = responseBody[..8000] + "...[truncated]";
+
+            var log = new WebhookDispatchLog
+            {
+                Id = Guid.NewGuid(),
+                TenantId = tenantId,
+                ConversationId = conversationId,
+                ClientPhone = contactPhone,
+                JobExecutionId = jobExecutionId,
+                JobId = jobId,
+                ActionDefinitionId = actionDefinitionId,
+                ActionSlug = actionSlug,
+                TargetUrl = targetUrl ?? string.Empty,
+                HttpMethod = (httpMethod ?? "POST").ToUpper(),
+                RequestContentType = contentType,
+                RequestPayloadJson = payloadJson,
+                ResponseStatusCode = httpResult.StatusCode == 0 ? null : httpResult.StatusCode,
+                ResponseBody = responseBody,
+                DurationMs = httpResult.DurationMs,
+                Status = httpResult.Success ? "Success" : "Failed",
+                ErrorMessage = httpResult.ErrorMessage,
+                StartedAt = startedAt,
+                CompletedAt = DateTime.UtcNow
+            };
+
+            db.WebhookDispatchLogs.Add(log);
+            await db.SaveChangesAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            // Auditoría nunca debe romper el flujo del dispatch.
+            logger.LogWarning(ex, "[ActionExecutor] No se pudo persistir WebhookDispatchLog para {Action}.", actionSlug);
+        }
+    }
 }

@@ -21,6 +21,7 @@ export interface TenantInfo {
   campaignMessageDelaySeconds: number
   brainEnabled: boolean
   webhookContractEnabled: boolean
+  referenceDocumentsEnabled: boolean
 }
 
 export function useTenant() {
@@ -83,6 +84,15 @@ export function useUpdateWebhookContract() {
   return useMutation({
     mutationFn: (enabled: boolean) =>
       api.put('/auth/tenant/webhook-contract', { enabled }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateReferenceDocumentsEnabled() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.put('/auth/tenant/reference-documents', { enabled }).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
   })
 }

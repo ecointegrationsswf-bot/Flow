@@ -21,6 +21,6 @@ public class HttpDispatchResult
     public static HttpDispatchResult Ok(int statusCode, string body, long durationMs) =>
         new() { Success = true, StatusCode = statusCode, Body = body, DurationMs = durationMs };
 
-    public static HttpDispatchResult Fail(string errorMessage, int statusCode = 0, long durationMs = 0) =>
-        new() { Success = false, StatusCode = statusCode, ErrorMessage = errorMessage, DurationMs = durationMs };
+    public static HttpDispatchResult Fail(string errorMessage, int statusCode = 0, long durationMs = 0, string body = "") =>
+        new() { Success = false, StatusCode = statusCode, ErrorMessage = errorMessage, DurationMs = durationMs, Body = body };
 }

@@ -43,6 +43,16 @@ public class Tenant
     public int CampaignMessageDelaySeconds { get; set; } = 10;
 
     /// <summary>
+    /// Tiempo de espera (debounce) para agrupar mensajes entrantes del mismo cliente
+    /// antes de procesarlos con el agente. Evita que el agente responda mensaje por
+    /// mensaje cuando el cliente escribe por partes (ej: "hola", "cómo estás?",
+    /// "me puedes ayudar"). Durante el debounce los mensajes se concatenan y se
+    /// procesan como un solo turno.
+    /// Rango: 0–15. Default 5. 0 = deshabilitado (comportamiento anterior, procesa cada mensaje al instante).
+    /// </summary>
+    public int MessageBufferSeconds { get; set; } = 5;
+
+    /// <summary>
     /// Interruptor global del Cerebro. Cuando es false el sistema funciona igual que hoy.
     /// Cuando es true, todos los mensajes de este tenant pasan por el Cerebro.
     /// </summary>
@@ -57,12 +67,44 @@ public class Tenant
     public bool WebhookContractEnabled { get; set; }
 
     /// <summary>
+    /// Interruptor para inyectar Documentos de Referencia (PDFs adjuntos al maestro de campaña)
+    /// en el contexto del agente. Cuando es false, el sistema NO inyecta los PDFs al prompt
+    /// ni al request Anthropic — comportamiento idéntico a antes de la feature.
+    /// Default false: opt-in explícito para controlar rollout. La migración backfilleó este
+    /// campo en true para tenants que ya tenían documentos cargados.
+    /// </summary>
+    public bool ReferenceDocumentsEnabled { get; set; }
+
+    /// <summary>
     /// Lista de IDs de PromptTemplates asignados a este tenant. Los prompts son un
     /// catálogo global; esta columna JSON restringe qué prompts son visibles en
     /// el formulario del maestro de campaña del tenant.
     /// Si la lista está vacía, el tenant ve TODOS los prompts activos (retrocompat).
     /// </summary>
     public List<Guid> AssignedPromptIds { get; set; } = [];
+
+    /// <summary>
+    /// Lista de IDs de ActionDefinitions asignadas (visibles) a este tenant. Las acciones
+    /// existen con TenantId, pero el super admin puede marcar cuáles están habilitadas
+    /// para aparecer en el selector del maestro de campaña.
+    /// Si la lista está vacía, el tenant ve TODAS sus acciones activas (retrocompat).
+    /// </summary>
+    public List<Guid> AssignedActionIds { get; set; } = [];
+
+    /// <summary>
+    /// Prompt de análisis para el ConversationLabelingJob. Reemplaza al SystemPromptText
+    /// hardcoded del worker. Cuando es null, el worker usa el prompt por defecto.
+    /// </summary>
+    public string? LabelingAnalysisPrompt { get; set; }
+
+    /// <summary>
+    /// Schema JSON que el LLM debe devolver además del label. Cuando está configurado,
+    /// el worker pide a Claude que produzca un JSON con esta estructura y lo persiste
+    /// en Conversation.LabelingResultJson — los webhooks pueden mapear sus campos vía
+    /// sourceType=labelingResult en el InputSchema.
+    /// Ejemplo: {"comentario": "string", "fechaPago": "yyyy-MM-dd", "montoPagar": 0}
+    /// </summary>
+    public string? LabelingResultSchemaPrompt { get; set; }
 
     public ICollection<AgentDefinition> Agents { get; set; } = [];
     public ICollection<Campaign> Campaigns { get; set; } = [];

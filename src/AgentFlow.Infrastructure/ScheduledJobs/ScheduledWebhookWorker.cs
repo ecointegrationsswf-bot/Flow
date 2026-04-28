@@ -112,7 +112,7 @@ public class ScheduledWebhookWorker(
         try
         {
             var executor = SelectExecutor(executors, job);
-            var ctx = new ScheduledJobContext("Worker", null, startedAt);
+            var ctx = new ScheduledJobContext("Worker", null, startedAt, executionId);
             result = await executor.ExecuteAsync(job, ctx, ct);
         }
         catch (Exception ex)

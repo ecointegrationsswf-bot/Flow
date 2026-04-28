@@ -470,6 +470,9 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
+                    b.Property<DateTime?>("LabelingSummarySentAt")
+                        .HasColumnType("datetime2");
+
                     b.Property<DateTime?>("LaunchedAt")
                         .HasColumnType("datetime2");
 
@@ -917,6 +920,9 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Property<DateTime?>("LabeledAt")
                         .HasColumnType("datetime2");
 
+                    b.Property<string>("LabelingResultJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<DateTime>("LastActivityAt")
                         .HasColumnType("datetime2");
 
@@ -1319,6 +1325,12 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
+                    b.Property<string>("LabelingAnalysisPrompt")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("LabelingResultSchemaPrompt")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("LlmApiKey")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
@@ -1391,6 +1403,91 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsUnique();
 
                     b.ToTable("Tenants");
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.WebhookDispatchLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("ActionDefinitionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ActionSlug")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("ClientPhone")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("ConversationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<long>("DurationMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("HttpMethod")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)");
+
+                    b.Property<Guid?>("JobExecutionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("JobId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("RequestContentType")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("RequestPayloadJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("ResponseBody")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int?>("ResponseStatusCode")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("TargetUrl")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<Guid?>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ClientPhone");
+
+                    b.HasIndex("ConversationId");
+
+                    b.HasIndex("JobExecutionId");
+
+                    b.HasIndex("ActionSlug", "StartedAt");
+
+                    b.HasIndex("TenantId", "StartedAt");
+
+                    b.ToTable("WebhookDispatchLogs", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.WebhookLog", b =>

@@ -147,6 +147,7 @@ export interface CampaignTemplateDocument {
   contentType: string
   fileSizeBytes: number
   uploadedAt: string
+  description: string | null
 }
 
 export interface ConversationLabel {

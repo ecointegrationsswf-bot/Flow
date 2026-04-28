@@ -37,4 +37,5 @@ public interface IScheduledJobExecutor
 public sealed record ScheduledJobContext(
     string TriggeredBy,        // Worker | Manual | EventDispatcher
     string? ContextId,         // CampaignId / ConversationId / null para AllTenants
-    DateTime RunStartedAt);
+    DateTime RunStartedAt,
+    Guid? ExecutionId = null); // FK a ScheduledWebhookJobExecutions, propagado al WebhookDispatchLog

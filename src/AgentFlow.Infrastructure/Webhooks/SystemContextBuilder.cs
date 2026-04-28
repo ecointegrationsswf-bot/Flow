@@ -51,6 +51,7 @@ public class SystemContextBuilder(AgentFlowDbContext db) : ISystemContextBuilder
                     // ya cerró y/o se etiquetó. Cargados en la misma query para evitar N+1.
                     c.Status, c.ClosedAt, c.IsHumanHandled,
                     c.LabelId, c.LabeledAt,
+                    c.LabelingResultJson,
                     LabelName = c.Label != null ? c.Label.Name : null,
                     LabelKeywords = c.Label != null ? c.Label.Keywords : null,
                     MessageCount = c.Messages.Count,
@@ -83,6 +84,33 @@ public class SystemContextBuilder(AgentFlowDbContext db) : ISystemContextBuilder
                         ctx.Set("conversation.label.keywords", string.Join(", ", conv.LabelKeywords));
                     if (conv.LabeledAt.HasValue)
                         ctx.Set("conversation.label.labeledAt", conv.LabeledAt.Value.ToString("O"));
+                }
+
+                // Resultado custom del etiquetado: aplanar cada campo como result.<key>
+                // según el schema configurado en Tenant.LabelingResultSchemaPrompt.
+                if (!string.IsNullOrEmpty(conv.LabelingResultJson))
+                {
+                    try
+                    {
+                        using var doc = System.Text.Json.JsonDocument.Parse(conv.LabelingResultJson);
+                        if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            foreach (var prop in doc.RootElement.EnumerateObject())
+                            {
+                                var val = prop.Value.ValueKind switch
+                                {
+                                    System.Text.Json.JsonValueKind.String => prop.Value.GetString() ?? "",
+                                    System.Text.Json.JsonValueKind.Number => prop.Value.GetRawText(),
+                                    System.Text.Json.JsonValueKind.True => "true",
+                                    System.Text.Json.JsonValueKind.False => "false",
+                                    System.Text.Json.JsonValueKind.Null => "",
+                                    _ => prop.Value.GetRawText()
+                                };
+                                ctx.Set($"result.{prop.Name}", val);
+                            }
+                        }
+                    }
+                    catch { /* JSON corrupto — ignorar */ }
                 }
             }
         }

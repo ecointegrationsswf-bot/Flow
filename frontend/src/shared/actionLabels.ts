@@ -14,6 +14,7 @@ export const ACTION_FRIENDLY_NAMES: Record<string, string> = {
   ESCALATE_TO_HUMAN: 'Escalar a ejecutivo',
   SEND_PAYMENT_LINK: 'Enviar enlace de pago',
   SEND_DOCUMENT: 'Enviar documento',
+  NOTIFY_GESTION: 'Notificar gestión al cliente',
   // Acciones internas del Campaign Automation Worker
   FOLLOW_UP_MESSAGE: 'Seguimiento automático',
   AUTO_CLOSE_CAMPAIGN: 'Cierre automático de campaña',

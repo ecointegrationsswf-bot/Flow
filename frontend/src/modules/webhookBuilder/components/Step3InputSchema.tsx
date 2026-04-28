@@ -85,6 +85,7 @@ export function Step3InputSchema({ bundle, onChange }: Props) {
                   className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
                 >
                   <option value="system">Sistema</option>
+                  <option value="labelingResult">Resultado etiquetado</option>
                   <option value="conversation">Chat (futuro)</option>
                   <option value="static">Estático</option>
                 </select>
@@ -115,6 +116,21 @@ export function Step3InputSchema({ bundle, onChange }: Props) {
                         </optgroup>
                       ))}
                     </select>
+                  </>
+                )}
+
+                {field.sourceType === 'labelingResult' && (
+                  <>
+                    <label className="block text-[10px] font-medium text-gray-600 mb-0.5">
+                      Campo del resultado del etiquetado (definido en tab "Etiquetado" del tenant)
+                    </label>
+                    <input
+                      type="text"
+                      value={field.sourceKey ?? ''}
+                      onChange={(e) => updateField(idx, { sourceKey: e.target.value })}
+                      placeholder="comentario, fechaPago, montoPagar..."
+                      className="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono"
+                    />
                   </>
                 )}
 

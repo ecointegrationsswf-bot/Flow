@@ -77,12 +77,14 @@ public class HttpDispatcher(
 
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogWarning("[HttpDispatcher] HTTP {Status} en {Url} — {Duration}ms",
-                    (int)response.StatusCode, endpointConfig.WebhookUrl, sw.ElapsedMilliseconds);
+                logger.LogWarning("[HttpDispatcher] HTTP {Status} en {Url} — {Duration}ms — body: {Body}",
+                    (int)response.StatusCode, endpointConfig.WebhookUrl, sw.ElapsedMilliseconds,
+                    body.Length > 500 ? body[..500] + "..." : body);
                 return HttpDispatchResult.Fail(
                     $"HTTP {(int)response.StatusCode}",
                     (int)response.StatusCode,
-                    sw.ElapsedMilliseconds);
+                    sw.ElapsedMilliseconds,
+                    body);
             }
 
             logger.LogInformation("[HttpDispatcher] OK {Status} en {Url} — {Duration}ms",

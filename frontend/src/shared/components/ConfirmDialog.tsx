@@ -48,12 +48,14 @@ export function ConfirmDialog({
         </div>
         <div className="mt-5 flex justify-end gap-2">
           <button
+            type="button"
             onClick={onClose}
             className="rounded-md border border-gray-300 px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
             Cancelar
           </button>
           <button
+            type="button"
             onClick={onConfirm}
             className={`rounded-md px-3 py-1.5 text-sm font-medium ${btnColor}`}
           >

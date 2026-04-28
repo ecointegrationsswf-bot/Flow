@@ -16,5 +16,12 @@ public class CampaignTemplateDocument
     public long FileSizeBytes { get; set; }
     public DateTime UploadedAt { get; set; } = DateTime.UtcNow;
 
+    /// <summary>
+    /// Descripción opcional para orientar al agente cuándo consultar este documento.
+    /// Se incluye en el bloque "DOCUMENTOS DE REFERENCIA" del system prompt.
+    /// Ej: "Cobertura de accidentes personales del plan 2026".
+    /// </summary>
+    public string? Description { get; set; }
+
     public CampaignTemplate CampaignTemplate { get; set; } = null!;
 }

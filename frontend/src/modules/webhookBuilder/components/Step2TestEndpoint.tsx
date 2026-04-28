@@ -112,10 +112,16 @@ export function Step2TestEndpoint({ bundle, onDetectedFields }: Props) {
             </div>
           )}
 
-          {result.success && result.rawBody && (
-            <details className="mt-2">
-              <summary className="text-xs cursor-pointer text-gray-600">Ver respuesta completa</summary>
-              <pre className="mt-1 max-h-40 overflow-auto rounded bg-white p-2 text-xs font-mono text-gray-700 border border-gray-200">
+          {result.rawBody && (
+            <details className="mt-2" open={!result.success}>
+              <summary className="text-xs cursor-pointer text-gray-600">
+                {result.success ? 'Ver respuesta completa' : 'Respuesta del servidor (error)'}
+              </summary>
+              <pre className={`mt-1 max-h-60 overflow-auto rounded p-2 text-xs font-mono border ${
+                result.success
+                  ? 'bg-white text-gray-700 border-gray-200'
+                  : 'bg-red-50 text-red-900 border-red-200'
+              }`}>
                 {result.rawBody}
               </pre>
             </details>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Loader2, Save, Mail, Brain, Clock, MessageSquare } from 'lucide-react'
 import { ToggleLeft, ToggleRight } from 'lucide-react'
 import { Webhook } from 'lucide-react'
-import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone, useUpdateCampaignDelay, useUpdateBrainEnabled, useUpdateWebhookContract } from '@/shared/hooks/useTenant'
+import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone, useUpdateCampaignDelay, useUpdateBrainEnabled, useUpdateWebhookContract, useUpdateReferenceDocumentsEnabled } from '@/shared/hooks/useTenant'
 
 const TIMEZONES = [
   { value: 'America/Panama',      label: 'America/Panama (UTC-5)' },
@@ -52,6 +52,7 @@ export function TenantSettingsTab() {
   const updateDelay = useUpdateCampaignDelay()
   const updateBrain = useUpdateBrainEnabled()
   const updateWebhookContract = useUpdateWebhookContract()
+  const updateReferenceDocs = useUpdateReferenceDocumentsEnabled()
 
   const [sendGridApiKey, setSendGridApiKey] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
@@ -440,6 +441,44 @@ export function TenantSettingsTab() {
         )}
         {updateWebhookContract.isSuccess && (
           <p className="mt-2 text-sm text-green-600">Configuracion de Webhook Contract actualizada.</p>
+        )}
+      </div>
+
+      {/* Seccion: Documentos de Referencia */}
+      <div className="rounded-lg bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Webhook className="h-5 w-5 text-emerald-600" />
+          <h2 className="text-base font-semibold text-gray-900">Documentos de Referencia (PDFs)</h2>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-4">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Inyectar PDFs adjuntos al contexto del agente</p>
+            <p className="text-xs text-gray-500 mt-1 max-w-md">
+              Cuando está activo, los PDFs que cargues en el tab "Documentos" de cada maestro se
+              envían al agente como contexto. El agente los consulta cuando su prompt base no
+              cubre la pregunta del cliente. Desactivado = los PDFs se siguen guardando pero el
+              agente no los lee.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => updateReferenceDocs.mutate(!tenant?.referenceDocumentsEnabled)}
+            disabled={updateReferenceDocs.isPending}
+            className="transition-colors"
+          >
+            {tenant?.referenceDocumentsEnabled ? (
+              <ToggleRight className="h-8 w-8 text-emerald-600" />
+            ) : (
+              <ToggleLeft className="h-8 w-8 text-gray-300" />
+            )}
+          </button>
+        </div>
+        {updateReferenceDocs.isError && (
+          <p className="mt-2 text-sm text-red-600">{(updateReferenceDocs.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
+        )}
+        {updateReferenceDocs.isSuccess && (
+          <p className="mt-2 text-sm text-green-600">Configuracion de Documentos de Referencia actualizada.</p>
         )}
       </div>
     </div>

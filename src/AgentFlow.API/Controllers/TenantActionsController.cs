@@ -21,13 +21,26 @@ namespace AgentFlow.API.Controllers;
 [Authorize]
 public class TenantActionsController(ITenantContext tenantCtx, AgentFlowDbContext db) : ControllerBase
 {
-    /// <summary>Lista las acciones activas del tenant con su estado de configuración webhook.</summary>
+    /// <summary>
+    /// Lista las acciones activas visibles para este tenant — las asignadas por el
+    /// super admin (Tenant.AssignedActionIds), con su estado de configuración webhook.
+    /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
+
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedActionIds })
+            .FirstOrDefaultAsync(ct);
+
+        var assignedIds = tenant?.AssignedActionIds ?? [];
+        if (assignedIds.Count == 0)
+            return Ok(Array.Empty<object>());
+
         var actions = await db.ActionDefinitions
-            .Where(a => a.TenantId == tenantId && a.IsActive)
+            .Where(a => a.IsActive && assignedIds.Contains(a.Id))
             .OrderBy(a => a.Name)
             .Select(a => new
             {
@@ -47,19 +60,29 @@ public class TenantActionsController(ITenantContext tenantCtx, AgentFlowDbContex
     }
 
     /// <summary>
-    /// Actualiza el DefaultWebhookContract de una acción del tenant.
-    /// El contract es un JSON string con el bundle completo (URL, auth, schemas, trigger).
+    /// Actualiza el DefaultWebhookContract de una acción visible para el tenant.
+    /// Solo se permite si la acción está asignada al tenant (Tenant.AssignedActionIds).
+    /// NOTA: como las acciones son globales, el contract se comparte entre tenants que
+    /// tengan la misma acción asignada. El override per-maestro se hace en CampaignTemplate.ActionConfigs.
     /// </summary>
     [HttpPut("{id:guid}/webhook-contract")]
     public async Task<IActionResult> UpdateWebhookContract(
         Guid id, [FromBody] UpdateWebhookContractRequest req, CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
-        var action = await db.ActionDefinitions
-            .FirstOrDefaultAsync(a => a.Id == id && a.TenantId == tenantId, ct);
 
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedActionIds })
+            .FirstOrDefaultAsync(ct);
+
+        var assignedIds = tenant?.AssignedActionIds ?? [];
+        if (!assignedIds.Contains(id))
+            return NotFound(new { error = "Acción no asignada a este tenant." });
+
+        var action = await db.ActionDefinitions.FirstOrDefaultAsync(a => a.Id == id, ct);
         if (action is null)
-            return NotFound(new { error = "Acción no encontrada para este tenant." });
+            return NotFound(new { error = "Acción no encontrada." });
 
         action.DefaultWebhookContract = req.Contract;
 

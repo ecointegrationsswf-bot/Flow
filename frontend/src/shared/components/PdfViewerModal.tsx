@@ -130,6 +130,7 @@ export function PdfViewerModal({
           <div className="flex items-center gap-1">
             {/* Zoom controls */}
             <button
+              type="button"
               onClick={zoomOut}
               disabled={scale <= 50}
               className="rounded p-1.5 text-gray-400 hover:bg-gray-700 hover:text-white disabled:opacity-30"
@@ -139,6 +140,7 @@ export function PdfViewerModal({
             </button>
             <span className="min-w-[3rem] text-center text-xs text-gray-400">{scale}%</span>
             <button
+              type="button"
               onClick={zoomIn}
               disabled={scale >= 200}
               className="rounded p-1.5 text-gray-400 hover:bg-gray-700 hover:text-white disabled:opacity-30"
@@ -147,6 +149,7 @@ export function PdfViewerModal({
               <ZoomIn className="h-4 w-4" />
             </button>
             <button
+              type="button"
               onClick={zoomFit}
               className="rounded p-1.5 text-gray-400 hover:bg-gray-700 hover:text-white"
               title="Ajustar"
@@ -158,6 +161,7 @@ export function PdfViewerModal({
 
             {/* Download */}
             <button
+              type="button"
               onClick={handleDownload}
               className="flex items-center gap-1.5 rounded-md bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 transition-colors"
             >
@@ -169,6 +173,7 @@ export function PdfViewerModal({
 
             {/* Close */}
             <button
+              type="button"
               onClick={onClose}
               className="rounded p-1.5 text-gray-400 hover:bg-gray-700 hover:text-white"
               title="Cerrar"

@@ -12,6 +12,7 @@ public class CampaignTemplateDocumentConfiguration : IEntityTypeConfiguration<Ca
         b.Property(d => d.FileName).HasMaxLength(500).IsRequired();
         b.Property(d => d.BlobUrl).HasMaxLength(2000).IsRequired();
         b.Property(d => d.ContentType).HasMaxLength(100);
+        b.Property(d => d.Description).HasMaxLength(500);
 
         b.HasOne(d => d.CampaignTemplate)
             .WithMany(t => t.Documents)

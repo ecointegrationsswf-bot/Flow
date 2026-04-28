@@ -55,6 +55,15 @@ public class PayloadBuilder : IPayloadBuilder
                 ? systemContext.Get(field.SourceKey)
                 : null,
 
+            // labelingResult — los campos del JSON producido por ConversationLabelingJob
+            // se aplanan en SystemContext con prefijo "result." (ver SystemContextBuilder).
+            // El usuario tipea solo el nombre corto (ej: "comentario") y aquí lo prefijamos.
+            "labelingresult" => !string.IsNullOrEmpty(field.SourceKey)
+                ? systemContext.Get(field.SourceKey.StartsWith("result.")
+                    ? field.SourceKey
+                    : $"result.{field.SourceKey}")
+                : null,
+
             // Para conversation: intentar sourceKey primero, luego fieldPath como fallback.
             // El agent emite [PARAM:fieldPath=valor], pero el schema puede tener un sourceKey diferente.
             "conversation" => !string.IsNullOrEmpty(field.SourceKey)
@@ -93,8 +102,11 @@ public class PayloadBuilder : IPayloadBuilder
                         ? false
                         : (object)stringValue,
 
-            "date" => DateTime.TryParse(stringValue, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var d)
-                ? d.ToString("O")
+            // ISO 8601 corto sin fracción ni TZ ("yyyy-MM-ddTHH:mm:ss"). Universal-friendly
+            // y aceptado por CONVERT(DATETIME,...) de SQL Server, que rechaza la versión
+            // "O" (7 dígitos de fracción + offset).
+            "date" => DateTime.TryParse(stringValue, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var d)
+                ? d.ToString("s", CultureInfo.InvariantCulture)
                 : (object)stringValue,
 
             "array" => TryDeserializeArray(stringValue) ?? (object)stringValue,

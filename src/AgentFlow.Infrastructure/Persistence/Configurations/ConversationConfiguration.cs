@@ -26,5 +26,7 @@ public class ConversationConfiguration : IEntityTypeConfiguration<Conversation>
             // referenciada huérfana — la limpieza es responsabilidad del CRUD de labels.
             .OnDelete(DeleteBehavior.NoAction);
         b.HasIndex(c => new { c.TenantId, c.Status, c.LabelId });
+
+        b.Property(c => c.LabelingResultJson).HasColumnType("nvarchar(max)");
     }
 }

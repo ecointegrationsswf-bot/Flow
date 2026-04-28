@@ -9,16 +9,31 @@ export interface TenantActionAssignment {
   requiresWebhook: boolean
   sendsEmail: boolean
   sendsSms: boolean
+  isGlobal: boolean
+  originTenantId: string | null
+  originTenantName: string | null
 }
 
 export interface TenantAssignmentsResponse {
   assignedPromptIds: string[]
+  assignedActionIds: string[]
   actions: TenantActionAssignment[]
 }
 
+export interface AssignmentConflict {
+  templateId: string
+  templateName: string
+  usedIds: string[]
+  isActive: boolean
+}
+
+export interface AssignmentConflictError {
+  error: string
+  conflicts: AssignmentConflict[]
+}
+
 /**
- * Trae los prompts asignados a un tenant + las acciones que ya tiene
- * (las acciones ya están scopadas por TenantId en BD).
+ * Trae los prompts/acciones asignados a un tenant + el catálogo de acciones del tenant.
  */
 export function useAdminTenantAssignments(tenantId: string | null) {
   return useQuery<TenantAssignmentsResponse>({
@@ -50,6 +65,34 @@ export function useSetTenantAssignedPrompts() {
         { promptIds },
       )
       return data as { assignedPromptIds: string[] }
+    },
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({
+        queryKey: ['admin', 'tenants', variables.tenantId, 'assignments'],
+      })
+    },
+  })
+}
+
+/**
+ * Reemplaza la lista de ActionDefinitions asignadas al tenant.
+ * Lista vacía = el tenant ve todas sus acciones activas (retrocompat).
+ */
+export function useSetTenantAssignedActions() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      tenantId,
+      actionIds,
+    }: {
+      tenantId: string
+      actionIds: string[]
+    }) => {
+      const { data } = await adminClient.put(
+        `/admin/tenants/${tenantId}/assigned-actions`,
+        { actionIds },
+      )
+      return data as { assignedActionIds: string[] }
     },
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({

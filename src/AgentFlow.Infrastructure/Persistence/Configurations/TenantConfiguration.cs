@@ -35,6 +35,18 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
                     : JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
             ).HasColumnType("nvarchar(max)");
 
+        // AssignedActionIds: mismo patrón que AssignedPromptIds.
+        b.Property(t => t.AssignedActionIds)
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => string.IsNullOrWhiteSpace(v)
+                    ? new List<Guid>()
+                    : JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
+            ).HasColumnType("nvarchar(max)");
+
+        b.Property(t => t.LabelingAnalysisPrompt).HasColumnType("nvarchar(max)");
+        b.Property(t => t.LabelingResultSchemaPrompt).HasColumnType("nvarchar(max)");
+
         b.HasMany(t => t.Agents).WithOne(a => a.Tenant).HasForeignKey(a => a.TenantId);
         b.HasMany(t => t.Campaigns).WithOne(c => c.Tenant).HasForeignKey(c => c.TenantId);
     }

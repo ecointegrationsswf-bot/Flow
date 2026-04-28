@@ -142,6 +142,11 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.SendLabelingSummaryExecutor>();
 
+// Slug NOTIFY_GESTION — batch cron que dispara el webhook de gestión por cada
+// conversación etiquetada desde la última corrida (cutoff = job.LastRunAt).
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.NotifyGestionBatchExecutor>();
+
 builder.Services.AddHostedService<AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──

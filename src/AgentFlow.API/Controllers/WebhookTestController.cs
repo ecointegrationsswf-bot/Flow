@@ -46,11 +46,25 @@ public class WebhookTestController(IHttpDispatcher httpDispatcher) : ControllerB
 
         if (!httpResult.Success)
         {
+            // Intentar parsear el body de error como JSON para mostrarlo formateado en la UI.
+            JsonElement? errorBody = null;
+            if (!string.IsNullOrWhiteSpace(httpResult.Body))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(httpResult.Body);
+                    errorBody = doc.RootElement.Clone();
+                }
+                catch { /* no es JSON, se manda raw */ }
+            }
+
             return Ok(new TestWebhookResponse
             {
                 Success = false,
                 HttpStatus = httpResult.StatusCode,
                 ErrorMessage = httpResult.ErrorMessage,
+                ResponseBody = errorBody,
+                RawBody = httpResult.Body,
                 DurationMs = httpResult.DurationMs,
             });
         }

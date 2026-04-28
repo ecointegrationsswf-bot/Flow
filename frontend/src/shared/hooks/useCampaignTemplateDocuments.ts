@@ -16,9 +16,12 @@ export function useCampaignTemplateDocuments(templateId?: string) {
 export function useUploadCampaignTemplateDocument(templateId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (file: File) => {
+    mutationFn: ({ file, description }: { file: File; description?: string | null }) => {
       const form = new FormData()
       form.append('file', file)
+      if (description && description.trim().length > 0) {
+        form.append('description', description.trim())
+      }
       return api
         .post<CampaignTemplateDocument>(
           `/campaign-templates/${templateId}/documents`,
@@ -27,6 +30,19 @@ export function useUploadCampaignTemplateDocument(templateId: string) {
         )
         .then((r) => r.data)
     },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['campaign-template-documents', templateId] })
+    },
+  })
+}
+
+export function useUpdateCampaignTemplateDocumentDescription(templateId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ docId, description }: { docId: string; description: string | null }) =>
+      api
+        .patch(`/campaign-templates/${templateId}/documents/${docId}`, { description })
+        .then((r: { data: unknown }) => r.data),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['campaign-template-documents', templateId] })
     },

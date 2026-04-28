@@ -25,6 +25,61 @@ Este skill gestiona el proceso completo de build y publicacion del proyecto Agen
 - **Build output**: `C:\TalkIA\src\AgentFlow.API\bin\Release\net8.0\publish`
 - **Comando build**: `dotnet publish C:\TalkIA\src\AgentFlow.API -c Release -o C:\TalkIA\src\AgentFlow.API\bin\Release\net8.0\publish`
 
+### Worker (Windows Service independiente) — ScheduledWebhookWorker + executors
+- **Tipo**: Windows Service (`AgentFlow Worker`)
+- **Build output**: `C:\TalkIA\src\AgentFlow.Worker\bin\Release\net10.0\publish`
+- **Comando build**: `dotnet publish C:\TalkIA\src\AgentFlow.Worker -c Release -o C:\TalkIA\src\AgentFlow.Worker\bin\Release\net10.0\publish --self-contained false`
+- **Path destino sugerido en servidor**: `C:\AgentFlow\Worker\`
+
+**Flujo completo de instalación inicial (primera vez en el servidor):**
+
+1. **En tu máquina (build)**:
+   ```powershell
+   dotnet publish src\AgentFlow.Worker -c Release -o src\AgentFlow.Worker\bin\Release\net10.0\publish --self-contained false
+   ```
+2. **Copia el contenido** de `bin\Release\net10.0\publish\` al servidor (ZIP + RDP, robocopy, FTP, etc.) a `C:\AgentFlow\Worker\`.
+3. **En el servidor (PowerShell como Admin)**:
+   ```powershell
+   .\install-worker-service.ps1 -BinPath "C:\AgentFlow\Worker\AgentFlow.Worker.exe"
+   ```
+   Eso registra el servicio "AgentFlow Worker" con start=auto, política de restart 3x60s, y lo arranca.
+
+**Flujo de actualización (cada vez que pusheas cambios):**
+
+1. **En tu máquina**: `dotnet publish ...` (mismo de arriba).
+2. **Copia los binarios** a una carpeta de staging en el servidor (ej: `C:\AgentFlow\Staging\`).
+3. **En el servidor (Admin)**:
+   ```powershell
+   .\update-worker-service.ps1 -StagingPath "C:\AgentFlow\Staging" -InstallPath "C:\AgentFlow\Worker"
+   ```
+   Eso detiene el servicio, copia binarios, restaura `appsettings.Production.json` si lo tienes, y reinicia.
+
+**Comandos útiles en el servidor (admin):**
+```powershell
+Get-Service "AgentFlow Worker"
+Stop-Service "AgentFlow Worker"
+Start-Service "AgentFlow Worker"
+Restart-Service "AgentFlow Worker"
+Get-EventLog -LogName Application -Source "AgentFlow Worker" -Newest 30
+```
+
+**Para desinstalar el servicio:**
+```powershell
+.\uninstall-worker-service.ps1
+```
+
+**Notas importantes:**
+- Si despliegas el Worker como servicio independiente, **debes quitar** la línea
+  `builder.Services.AddHostedService<ScheduledWebhookWorker>()` del [Program.cs:150](src/AgentFlow.API/Program.cs:150)
+  del API y re-deployar el API. Si dejas ambos corriendo, la concurrencia optimista
+  (`MarkRunningAsync`) evita ejecuciones duplicadas pero duplicas carga contra la BD.
+- El Worker NO tiene HTTP — es `Microsoft.NET.Sdk.Worker`, no AspNet.
+- El Worker comparte `appsettings.json` (SQL/Redis/Anthropic/SendGrid/Blob) con el API.
+  En producción, sobreescribe valores con `appsettings.Production.json` que NO se sube
+  al repo y el script `update-worker-service.ps1` lo preserva entre deploys.
+- El servicio corre por defecto como `LocalSystem`. Si necesitas que corra como un
+  usuario específico (por ejemplo para acceder a SMB), pasa `-ServiceUser "DOMAIN\user" -ServicePassword "..."` a `install-worker-service.ps1`.
+
 ## Proceso de deploy
 
 Cuando el usuario invoca `/deploy`, seguir este flujo:
@@ -34,8 +89,9 @@ Preguntar la contrasena FTP del usuario jamconsulting-004 si no fue proporcionad
 
 ### 2. Determinar que deployar
 - `/deploy frontend` — solo frontend
-- `/deploy backend` — solo backend
-- `/deploy` o `/deploy all` — ambos (frontend primero, luego backend)
+- `/deploy backend` — solo backend (API)
+- `/deploy worker` — solo worker (proceso de scheduled jobs)
+- `/deploy` o `/deploy all` — frontend + backend (no worker; el worker se despliega por separado)
 
 ### 3. Build Frontend
 ```bash

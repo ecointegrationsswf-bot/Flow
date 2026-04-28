@@ -21,6 +21,13 @@ public class CampaignTemplateDocumentsController(
     AgentFlowDbContext db,
     IBlobStorageService blobStorage) : ControllerBase
 {
+    // Límites duros por maestro — se aplican al subir. Defensivo ante context window
+    // y costos de Anthropic. Alineado con Fase 3 del plan de Referencia Documents.
+    private const int MaxDocumentsPerTemplate = 5;
+    private const long MaxTotalBytesPerTemplate = 20L * 1024 * 1024; // 20 MB
+    private const long MaxBytesPerDocument = 10L * 1024 * 1024;      // 10 MB (ya validado vía RequestSizeLimit)
+
+
     [HttpGet]
     public async Task<IActionResult> List(Guid templateId, CancellationToken ct)
     {
@@ -37,6 +44,7 @@ public class CampaignTemplateDocumentsController(
                 d.ContentType,
                 d.FileSizeBytes,
                 d.UploadedAt,
+                d.Description,
             })
             .ToListAsync(ct);
 
@@ -45,18 +53,44 @@ public class CampaignTemplateDocumentsController(
 
     [HttpPost]
     [RequestSizeLimit(10 * 1024 * 1024)] // 10 MB
-    public async Task<IActionResult> Upload(Guid templateId, IFormFile file, CancellationToken ct)
+    public async Task<IActionResult> Upload(
+        Guid templateId,
+        IFormFile file,
+        [FromForm] string? description,
+        CancellationToken ct)
     {
         var tenantId = tenantCtx.TenantId;
 
         if (file.ContentType != "application/pdf")
             return BadRequest(new { error = "Solo se permiten archivos PDF." });
 
+        if (file.Length > MaxBytesPerDocument)
+            return BadRequest(new { error = $"El archivo excede el límite de {MaxBytesPerDocument / (1024 * 1024)} MB por documento." });
+
         var template = await db.CampaignTemplates
             .FirstOrDefaultAsync(t => t.Id == templateId && t.TenantId == tenantId, ct);
 
         if (template is null)
             return NotFound(new { error = "Maestro de campaña no encontrado." });
+
+        // Validar límites de cantidad y tamaño total del maestro.
+        var existing = await db.CampaignTemplateDocuments
+            .Where(d => d.CampaignTemplateId == templateId && d.TenantId == tenantId)
+            .Select(d => new { d.FileSizeBytes })
+            .ToListAsync(ct);
+
+        if (existing.Count >= MaxDocumentsPerTemplate)
+            return BadRequest(new { error = $"Este maestro ya tiene el máximo de {MaxDocumentsPerTemplate} documentos. Eliminá uno para subir otro." });
+
+        var currentTotal = existing.Sum(d => d.FileSizeBytes);
+        if (currentTotal + file.Length > MaxTotalBytesPerTemplate)
+        {
+            var remainingMb = Math.Max(0, MaxTotalBytesPerTemplate - currentTotal) / (1024.0 * 1024.0);
+            return BadRequest(new
+            {
+                error = $"El tamaño total de los documentos del maestro excedería {MaxTotalBytesPerTemplate / (1024 * 1024)} MB. Espacio restante: {remainingMb:F1} MB."
+            });
+        }
 
         var blobPath = $"{tenantId}/campaign-templates/{templateId}/{Guid.NewGuid()}_{file.FileName}";
 
@@ -73,6 +107,7 @@ public class CampaignTemplateDocumentsController(
             ContentType = file.ContentType,
             FileSizeBytes = file.Length,
             UploadedAt = DateTime.UtcNow,
+            Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
         };
 
         db.CampaignTemplateDocuments.Add(doc);
@@ -86,7 +121,34 @@ public class CampaignTemplateDocumentsController(
             doc.ContentType,
             doc.FileSizeBytes,
             doc.UploadedAt,
+            doc.Description,
         });
+    }
+
+    public record UpdateDocumentDescriptionRequest(string? Description);
+
+    /// <summary>
+    /// Actualiza la descripción de un documento — usada por el agente para decidir
+    /// cuándo consultar el PDF durante una conversación.
+    /// </summary>
+    [HttpPatch("{docId:guid}")]
+    public async Task<IActionResult> UpdateDescription(
+        Guid templateId,
+        Guid docId,
+        [FromBody] UpdateDocumentDescriptionRequest req,
+        CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var doc = await db.CampaignTemplateDocuments
+            .FirstOrDefaultAsync(d => d.Id == docId && d.CampaignTemplateId == templateId && d.TenantId == tenantId, ct);
+
+        if (doc is null)
+            return NotFound(new { error = "Documento no encontrado." });
+
+        doc.Description = string.IsNullOrWhiteSpace(req.Description) ? null : req.Description.Trim();
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { doc.Id, doc.Description });
     }
 
     /// <summary>Sirve el PDF para visualización en el navegador (inline).</summary>

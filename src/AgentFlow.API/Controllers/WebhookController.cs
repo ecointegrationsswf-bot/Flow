@@ -2,8 +2,10 @@ using System.Text.Json;
 using AgentFlow.Application.Modules.Webhooks;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Messaging;
 using AgentFlow.Infrastructure.Persistence;
 using AgentFlow.Infrastructure.Storage;
+using Hangfire;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -18,8 +20,68 @@ public class WebhookController(
     AgentFlowDbContext db,
     IBlobStorageService blobStorage,
     IHttpClientFactory httpClientFactory,
-    AgentFlow.Domain.Interfaces.ITranscriptionService transcriptionService) : ControllerBase
+    AgentFlow.Domain.Interfaces.ITranscriptionService transcriptionService,
+    IMessageBufferStore messageBuffer,
+    IBackgroundJobClient? jobClient = null) : ControllerBase
 {
+    /// <summary>
+    /// Despacha un mensaje entrante. Si el tenant tiene MessageBufferSeconds > 0
+    /// (debounce activo), el mensaje se agrega al buffer Redis y se programa un
+    /// job Hangfire que procesa el buffer cuando el cliente deja de escribir.
+    /// Si es 0, se procesa inmediatamente vía mediator (comportamiento anterior).
+    /// </summary>
+    private async Task<(bool Buffered, Guid? ConversationId, string? ReplyText, string? AgentType)> DispatchAsync(
+        Guid tenantId, string fromPhone, string message, ChannelType channel,
+        string? clientName, string? externalId, string? mediaUrl, string? mediaType,
+        CancellationToken ct)
+    {
+        int bufferSec = 0;
+        try
+        {
+            bufferSec = await db.Tenants
+                .Where(t => t.Id == tenantId)
+                .Select(t => (int?)t.MessageBufferSeconds)
+                .FirstOrDefaultAsync(ct) ?? 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Dispatch] No pude leer MessageBufferSeconds, fallback a directo: {ex.Message}");
+        }
+
+        // Intento de buffer con debounce. Si Redis o Hangfire fallan, hacemos fallback
+        // automático al flujo directo (mediator.Send) — el cliente no debe perder el
+        // mensaje por una caída del buffer.
+        if (bufferSec > 0 && jobClient is not null)
+        {
+            try
+            {
+                var buffered = new BufferedMessage(
+                    Content: message ?? string.Empty,
+                    Channel: channel.ToString(),
+                    ClientName: clientName,
+                    ExternalMessageId: externalId,
+                    MediaUrl: mediaUrl,
+                    MediaType: mediaType,
+                    TimestampTicks: DateTime.UtcNow.Ticks);
+
+                await messageBuffer.AppendAsync(tenantId, fromPhone, buffered, ct);
+                jobClient.Schedule<MessageBufferFlushJob>(
+                    svc => svc.RunAsync(tenantId, fromPhone, CancellationToken.None),
+                    TimeSpan.FromSeconds(bufferSec));
+                return (true, null, null, null);
+            }
+            catch (Exception ex)
+            {
+                // Buffer caído (Redis o Hangfire) — proceso directo para no perder el mensaje.
+                Console.WriteLine($"[Dispatch] Buffer falló ({ex.GetType().Name}: {ex.Message}). Fallback a flujo directo.");
+            }
+        }
+
+        var result = await mediator.Send(new ProcessIncomingMessageCommand(
+            tenantId, fromPhone, message ?? string.Empty, channel, clientName, externalId, mediaUrl, mediaType), ct);
+        return (false, result.ConversationId, result.ReplyText, result.AgentType);
+    }
+
     /// <summary>
     /// Endpoint normalizado — usado por n8n o cualquier integrador que ya tenga
     /// el TenantId en el header X-Tenant-Id.
@@ -32,16 +94,16 @@ public class WebhookController(
         if (tenantId == Guid.Empty)
             return BadRequest(new { error = "TenantId requerido. Envía header X-Tenant-Id o JWT válido." });
 
-        var result = await mediator.Send(new ProcessIncomingMessageCommand(
-            tenantId,
-            dto.From,
-            dto.Body,
-            Enum.Parse<ChannelType>(dto.Channel, true),
-            dto.ClientName,
-            dto.ExternalId
-        ), ct);
+        var channel = Enum.Parse<ChannelType>(dto.Channel, true);
+        var dispatch = await DispatchAsync(
+            tenantId, dto.From, dto.Body, channel,
+            dto.ClientName, dto.ExternalId,
+            mediaUrl: null, mediaType: null, ct);
 
-        return Ok(new { result.ConversationId, result.ReplyText, result.AgentType });
+        if (dispatch.Buffered)
+            return Accepted(new { buffered = true, message = "Mensaje agregado al buffer — se procesará tras el debounce." });
+
+        return Ok(new { dispatch.ConversationId, dispatch.ReplyText, dispatch.AgentType });
     }
 
     /// <summary>
@@ -357,28 +419,22 @@ public class WebhookController(
         // ── 11. Procesar mensaje ──────────────────────────
         try
         {
-            var result = await mediator.Send(new ProcessIncomingMessageCommand(
-                line.TenantId.Value,
-                fromPhone,
-                messageText,
-                ChannelType.WhatsApp,
-                clientName,
-                payload.Id,
-                mediaUrl,
-                mediaType
-            ), ct);
+            var dispatch = await DispatchAsync(
+                line.TenantId.Value, fromPhone, messageText, ChannelType.WhatsApp,
+                clientName, payload.Id, mediaUrl, mediaType, ct);
 
-            // Actualizar bitácora como procesado exitosamente
-            log.Status = "processed";
-            log.StatusReason = result.AgentType;
+            // Actualizar bitácora — si fue bufferizado marcamos como 'buffered'
+            log.Status = dispatch.Buffered ? "buffered" : "processed";
+            log.StatusReason = dispatch.Buffered ? "debounce-active" : dispatch.AgentType;
             db.WebhookLogs.Add(log);
             await db.SaveChangesAsync(ct);
 
             return Ok(new
             {
-                status = "processed",
-                conversationId = result.ConversationId,
-                agentType = result.AgentType
+                status = log.Status,
+                conversationId = dispatch.ConversationId,
+                agentType = dispatch.AgentType,
+                buffered = dispatch.Buffered
             });
         }
         catch (Exception ex)

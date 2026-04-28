@@ -220,7 +220,8 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 t.SenderEmail,
                 t.CampaignMessageDelaySeconds,
                 t.BrainEnabled,
-                t.WebhookContractEnabled
+                t.WebhookContractEnabled,
+                t.ReferenceDocumentsEnabled
             })
             .FirstOrDefaultAsync(ct);
 
@@ -351,6 +352,30 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
     }
 
     public record UpdateWebhookContractRequest(bool Enabled);
+
+    /// <summary>
+    /// Activa o desactiva la inyección de Documentos de Referencia (PDFs adjuntos al
+    /// maestro de campaña) en el contexto del agente. Desactivado = comportamiento
+    /// pre-feature (el agente no lee los PDFs aunque estén cargados).
+    /// </summary>
+    [HttpPut("tenant/reference-documents")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateReferenceDocumentsEnabled(
+        [FromBody] UpdateReferenceDocumentsRequest req, CancellationToken ct)
+    {
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        tenant.ReferenceDocumentsEnabled = req.Enabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { tenant.ReferenceDocumentsEnabled });
+    }
+
+    public record UpdateReferenceDocumentsRequest(bool Enabled);
 
     [HttpPost("forgot-password")]
     [EnableRateLimiting("auth")]

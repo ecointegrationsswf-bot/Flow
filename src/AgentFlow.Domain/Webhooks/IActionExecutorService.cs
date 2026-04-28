@@ -20,5 +20,7 @@ public interface IActionExecutorService
         Guid? conversationId,
         CollectedParams collectedParams,
         string? agentSlug = null,
+        Guid? jobExecutionId = null,
+        Guid? jobId = null,
         CancellationToken ct = default);
 }
