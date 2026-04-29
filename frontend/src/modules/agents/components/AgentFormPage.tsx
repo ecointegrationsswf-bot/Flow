@@ -168,36 +168,7 @@ export function AgentFormPage() {
           </div>
         </section>
 
-        {/* Seccion 4: Config LLM */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Configuracion LLM</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Modelo</label>
-              <select {...register('llmModel')} className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-              </select>
-            </div>
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-700">
-                Temperatura: <span className="font-normal text-blue-600">{temperature}</span>
-              </label>
-              <input
-                type="range"
-                {...register('temperature')}
-                min={0}
-                max={1}
-                step={0.1}
-                className="mt-2 w-full accent-blue-600"
-              />
-              <div className="flex justify-between text-xs text-gray-400">
-                <span>0 - Preciso</span>
-                <span>1 - Creativo</span>
-              </div>
-            </div>
-          </div>
-        </section>
+        {/* Seccion 4: Config LLM — solo editable desde el portal de admin */}
 
         {/* Actions */}
         <div className="flex justify-end gap-3">
