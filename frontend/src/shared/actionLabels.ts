@@ -20,6 +20,7 @@ export const ACTION_FRIENDLY_NAMES: Record<string, string> = {
   AUTO_CLOSE_CAMPAIGN: 'Cierre automático de campaña',
   LABEL_CONVERSATIONS: 'Etiquetar conversaciones',
   SEND_LABELING_SUMMARY: 'Enviar resumen etiquetado',
+  DOWNLOAD_DELINQUENCY_DATA: 'Descargar datos de morosidad',
 }
 
 export function getActionFriendlyName(slug: string | null | undefined): string {

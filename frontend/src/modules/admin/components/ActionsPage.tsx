@@ -277,6 +277,7 @@ export function ActionsPage() {
                   <option value="NOTIFY_GESTION">Notificar gestión al cliente</option>
                   <option value="LABEL_CONVERSATIONS">Etiquetar conversaciones</option>
                   <option value="SEND_LABELING_SUMMARY">Enviar resumen etiquetado</option>
+                  <option value="DOWNLOAD_DELINQUENCY_DATA">Descargar datos de morosidad</option>
                 </select>
               </div>
 
