@@ -93,6 +93,9 @@ Formato exacto:
         var totalProcessed = 0;
         var totalLabeled = 0;
         var totalFailed = 0;
+        // Acumulamos hasta los primeros 5 mensajes de error para que aparezcan
+        // en el summary del execution (visible en /admin/scheduled-jobs sin tocar logs).
+        var errorMessages = new List<string>();
 
         // Cache por tenant: AnthropicClient + prompts configurables (analysis + result schema).
         // Si LabelingAnalysisPrompt es null usamos DefaultSystemPromptText.
@@ -105,77 +108,96 @@ Formato exacto:
         {
             if (ct.IsCancellationRequested) break;
 
-            // Resolver client + prompts del tenant (1 query por tenant).
-            if (!clientByTenant.TryGetValue(tpl.TenantId, out var tenantClient))
+            // Aislamiento por template/tenant: si algo falla aquí (resolver config,
+            // query de labels/pending, etc.), saltamos al siguiente template para
+            // que el error de un tenant no detenga la ejecución de los demás.
+            try
             {
-                var (client, analysisPrompt, resultSchema) = await ResolveTenantConfigAsync(tpl.TenantId, ct);
-                clientByTenant[tpl.TenantId] = client;
-                promptsByTenant[tpl.TenantId] = (analysisPrompt, resultSchema);
-                tenantClient = client;
-            }
-            if (tenantClient is null)
-            {
-                log.LogWarning("Labeling: tenant {Tenant} sin AnthropicClient disponible — maestro {Tpl} omitido.",
-                    tpl.TenantId, tpl.Id);
-                continue;
-            }
-            var (tenantAnalysisPrompt, tenantResultSchema) = promptsByTenant[tpl.TenantId];
-
-            // Resolver labels del tenant que el maestro tiene asignadas.
-            var labels = await db.ConversationLabels
-                .Where(l => l.TenantId == tpl.TenantId && l.IsActive && tpl.LabelIds.Contains(l.Id))
-                .Select(l => new { l.Id, l.Name, l.Keywords })
-                .ToListAsync(ct);
-
-            if (labels.Count == 0)
-            {
-                log.LogInformation("Labeling: maestro {Tpl} sin labels asignadas — skip.", tpl.Id);
-                continue;
-            }
-
-            // Conversaciones candidatas a etiquetar/re-etiquetar:
-            // - LabelId IS NULL (nunca etiquetadas) o
-            // - LastActivityAt > LabeledAt (el cliente escribió tras el último etiquetado).
-            // El Status NO se filtra.
-            var pending = await db.Conversations
-                .Where(c => c.TenantId == tpl.TenantId
-                            && c.CampaignId != null
-                            && (c.LabelId == null
-                                || (c.LabeledAt != null && c.LastActivityAt > c.LabeledAt))
-                            && db.Campaigns.Any(camp => camp.Id == c.CampaignId && camp.CampaignTemplateId == tpl.Id))
-                .OrderBy(c => c.LastActivityAt)
-                .Take(MaxConversationsPerRun)
-                .Select(c => c.Id)
-                .ToListAsync(ct);
-
-            if (pending.Count == 0) continue;
-            log.LogInformation("Labeling: {N} conversaciones para maestro {Tpl}.", pending.Count, tpl.Id);
-
-            // Procesamiento SECUENCIAL — el DbContext es scoped al job y no
-            // soporta queries concurrentes. Cada Claude call tarda ~1-3s, así
-            // que para 200 conversaciones es 5-10 min, aceptable para un job nocturno.
-            var labelTuples = labels.Select(l => (l.Id, l.Name, l.Keywords)).ToList();
-            foreach (var convId in pending)
-            {
-                if (ct.IsCancellationRequested) break;
-                bool labeled;
-                try
+                // Resolver client + prompts del tenant (1 query por tenant).
+                if (!clientByTenant.TryGetValue(tpl.TenantId, out var tenantClient))
                 {
-                    labeled = await ProcessConversationAsync(
-                        tenantClient, convId, tpl.TenantId, labelTuples,
-                        tenantAnalysisPrompt, tenantResultSchema, ct);
+                    var (client, analysisPrompt, resultSchema) = await ResolveTenantConfigAsync(tpl.TenantId, ct);
+                    clientByTenant[tpl.TenantId] = client;
+                    promptsByTenant[tpl.TenantId] = (analysisPrompt, resultSchema);
+                    tenantClient = client;
                 }
-                catch (Exception ex)
+                if (tenantClient is null)
                 {
-                    log.LogError(ex, "Labeling: error procesando conversación {Conv}.", convId);
-                    labeled = false;
+                    log.LogWarning("Labeling: tenant {Tenant} sin AnthropicClient disponible — maestro {Tpl} omitido.",
+                        tpl.TenantId, tpl.Id);
+                    continue;
                 }
-                totalProcessed++;
-                if (labeled) totalLabeled++; else totalFailed++;
+                var (tenantAnalysisPrompt, tenantResultSchema) = promptsByTenant[tpl.TenantId];
+
+                // Resolver labels del tenant que el maestro tiene asignadas.
+                var labels = await db.ConversationLabels
+                    .Where(l => l.TenantId == tpl.TenantId && l.IsActive && tpl.LabelIds.Contains(l.Id))
+                    .Select(l => new { l.Id, l.Name, l.Keywords })
+                    .ToListAsync(ct);
+
+                if (labels.Count == 0)
+                {
+                    log.LogInformation("Labeling: maestro {Tpl} sin labels asignadas — skip.", tpl.Id);
+                    continue;
+                }
+
+                // Conversaciones candidatas a etiquetar/re-etiquetar:
+                // - LabelId IS NULL (nunca etiquetadas) o
+                // - LastActivityAt > LabeledAt (el cliente escribió tras el último etiquetado).
+                // El Status NO se filtra.
+                var pending = await db.Conversations
+                    .Where(c => c.TenantId == tpl.TenantId
+                                && c.CampaignId != null
+                                && (c.LabelId == null
+                                    || (c.LabeledAt != null && c.LastActivityAt > c.LabeledAt))
+                                && db.Campaigns.Any(camp => camp.Id == c.CampaignId && camp.CampaignTemplateId == tpl.Id))
+                    .OrderBy(c => c.LastActivityAt)
+                    .Take(MaxConversationsPerRun)
+                    .Select(c => c.Id)
+                    .ToListAsync(ct);
+
+                if (pending.Count == 0) continue;
+                log.LogInformation("Labeling: {N} conversaciones para maestro {Tpl}.", pending.Count, tpl.Id);
+
+                // Procesamiento SECUENCIAL — el DbContext es scoped al job y no
+                // soporta queries concurrentes. Cada Claude call tarda ~1-3s, así
+                // que para 200 conversaciones es 5-10 min, aceptable para un job nocturno.
+                var labelTuples = labels.Select(l => (l.Id, l.Name, l.Keywords)).ToList();
+                foreach (var convId in pending)
+                {
+                    if (ct.IsCancellationRequested) break;
+                    bool labeled;
+                    try
+                    {
+                        labeled = await ProcessConversationAsync(
+                            tenantClient, convId, tpl.TenantId, labelTuples,
+                            tenantAnalysisPrompt, tenantResultSchema, ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        log.LogError(ex, "Labeling: error procesando conversación {Conv}.", convId);
+                        if (errorMessages.Count < 5)
+                            errorMessages.Add($"conv {convId}: {ex.Message}");
+                        labeled = false;
+                    }
+                    totalProcessed++;
+                    if (labeled) totalLabeled++; else totalFailed++;
+                }
+            }
+            catch (Exception ex)
+            {
+                log.LogError(ex, "Labeling: error procesando maestro {Tpl} (tenant {Tenant}) — continuando con los demás.",
+                    tpl.Id, tpl.TenantId);
+                if (errorMessages.Count < 5)
+                    errorMessages.Add($"maestro {tpl.Id}: {ex.Message}");
+                totalFailed++;
             }
         }
 
         var summary = $"Procesadas={totalProcessed} · Etiquetadas={totalLabeled} · Fallos={totalFailed}";
+        if (errorMessages.Count > 0)
+            summary += " · " + string.Join(" | ", errorMessages);
+        if (summary.Length > 800) summary = summary[..800];
         log.LogInformation("LabelingJob completo: {Summary}", summary);
 
         if (totalProcessed == 0) return JobRunResult.Skipped("Sin conversaciones pendientes.");
