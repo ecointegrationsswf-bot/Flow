@@ -20,14 +20,36 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
             .Include(c => c.Campaign)   // para mostrar el nombre de campaña en el monitor
             .FirstOrDefaultAsync(c => c.Id == id, ct);
 
-    public async Task<IEnumerable<Conversation>> GetActiveByTenantAsync(Guid tenantId, CancellationToken ct = default)
-        => await db.Conversations
+    public async Task<IEnumerable<Conversation>> GetActiveByTenantAsync(
+        Guid tenantId,
+        DateTime? fromUtc = null,
+        DateTime? toUtc = null,
+        string? launchedByUserId = null,
+        CancellationToken ct = default)
+    {
+        var q = db.Conversations
             .Include(c => c.ActiveAgent)   // necesario para agentType/agentName en el monitor
             .Include(c => c.Messages)      // necesario para lastMessagePreview
-            .Where(c => c.TenantId == tenantId)
+            .Where(c => c.TenantId == tenantId);
+
+        if (fromUtc.HasValue) q = q.Where(c => c.LastActivityAt >= fromUtc.Value);
+        if (toUtc.HasValue)   q = q.Where(c => c.LastActivityAt <= toUtc.Value);
+
+        if (!string.IsNullOrWhiteSpace(launchedByUserId))
+        {
+            // Conversaciones cuyo Campaign.LaunchedByUserId coincide,
+            // O conversaciones sin CampaignId (chats orgánicos / no-campaña visibles para todos).
+            var userKey = launchedByUserId.Trim();
+            q = q.Where(c => c.CampaignId == null
+                          || db.Campaigns.Any(camp => camp.Id == c.CampaignId
+                                                   && camp.LaunchedByUserId == userKey));
+        }
+
+        return await q
             .OrderByDescending(c => c.LastActivityAt)
             .Take(200)                     // límite para no sobrecargar el monitor
             .ToListAsync(ct);
+    }
 
     public async Task<Conversation> CreateAsync(Conversation conversation, CancellationToken ct = default)
     {

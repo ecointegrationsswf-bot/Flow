@@ -1,13 +1,20 @@
 import { useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
+import { Search, CalendarRange, X } from 'lucide-react'
 import { differenceInMinutes } from 'date-fns'
 import type { ConversationSummary, ConversationStatus } from '@/shared/types'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
+import { useCampaignLaunchers } from '@/shared/hooks/useMonitor'
 
 interface ConversationListProps {
   conversations: ConversationSummary[]
   selectedId: string | null
   onSelect: (id: string) => void
+  fromDate: string
+  toDate: string
+  onFromDateChange: (v: string) => void
+  onToDateChange: (v: string) => void
+  launchedByUserId: string
+  onLaunchedByUserIdChange: (v: string) => void
 }
 
 
@@ -25,8 +32,13 @@ function getAvatarBg(name: string) {
   return colors[Math.abs(hash) % colors.length]
 }
 
-export function ConversationList({ conversations, selectedId, onSelect }: ConversationListProps) {
+export function ConversationList({
+  conversations, selectedId, onSelect,
+  fromDate, toDate, onFromDateChange, onToDateChange,
+  launchedByUserId, onLaunchedByUserIdChange,
+}: ConversationListProps) {
   const tt = useTenantTime()
+  const { data: launchers = [] } = useCampaignLaunchers()
   const formatTime = (dateStr: string) => {
     if (tt.isToday(dateStr))     return tt.time(dateStr)
     if (tt.isYesterday(dateStr)) return 'Ayer'
@@ -85,6 +97,46 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
             className="w-full rounded-full border border-gray-200 bg-[#f6f6f6] py-2.5 pl-10 pr-4 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400/50 focus:border-blue-400"
           />
         </div>
+      </div>
+
+      {/* Date range filter */}
+      <div className="flex items-center gap-2 px-4 pb-2 text-xs text-gray-600">
+        <CalendarRange className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+        <input
+          type="date" value={fromDate}
+          onChange={e => onFromDateChange(e.target.value)}
+          className="flex-1 rounded-md border border-gray-200 bg-[#f6f6f6] px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400/50"
+        />
+        <span className="text-gray-400">→</span>
+        <input
+          type="date" value={toDate}
+          onChange={e => onToDateChange(e.target.value)}
+          className="flex-1 rounded-md border border-gray-200 bg-[#f6f6f6] px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400/50"
+        />
+        {(fromDate || toDate) && (
+          <button
+            onClick={() => { onFromDateChange(''); onToDateChange('') }}
+            title="Limpiar fechas"
+            className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* Launched-by-user filter */}
+      <div className="px-4 pb-2">
+        <select
+          value={launchedByUserId}
+          onChange={e => onLaunchedByUserIdChange(e.target.value)}
+          className="w-full rounded-lg border border-gray-200 bg-[#f6f6f6] px-3 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+          title="Filtra por el usuario que lanzó la campaña. Las conversaciones sin campaña son visibles para todos."
+        >
+          <option value="">Todas las campañas (cualquier usuario)</option>
+          {launchers.map(l => (
+            <option key={l.key} value={l.key}>{l.label}</option>
+          ))}
+        </select>
       </div>
 
       {/* Filters */}

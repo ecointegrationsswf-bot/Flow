@@ -4,7 +4,19 @@ using MediatR;
 
 namespace AgentFlow.Application.Modules.Monitor;
 
-public record GetActiveConversationsQuery(Guid TenantId) : IRequest<IEnumerable<ConversationSummary>>;
+/// <summary>
+/// Filtros opcionales:
+///   FromUtc/ToUtc — filtra por LastActivityAt en ese rango (UTC).
+///   LaunchedByUserId — sólo conversaciones cuya campaña fue lanzada por ese usuario.
+///     Las conversaciones SIN CampaignId (chats orgánicos / no-campaña) se incluyen
+///     siempre, sin importar el filtro de usuario.
+/// </summary>
+public record GetActiveConversationsQuery(
+    Guid TenantId,
+    DateTime? FromUtc = null,
+    DateTime? ToUtc = null,
+    string? LaunchedByUserId = null
+) : IRequest<IEnumerable<ConversationSummary>>;
 
 public record ConversationSummary(
     Guid Id,
@@ -26,7 +38,8 @@ public class GetActiveConversationsHandler(IConversationRepository repo)
     public async Task<IEnumerable<ConversationSummary>> Handle(
         GetActiveConversationsQuery q, CancellationToken ct)
     {
-        var convs = await repo.GetActiveByTenantAsync(q.TenantId, ct);
+        var convs = await repo.GetActiveByTenantAsync(
+            q.TenantId, q.FromUtc, q.ToUtc, q.LaunchedByUserId, ct);
         return convs.Select(c => new ConversationSummary(
             c.Id,
             c.ClientPhone,

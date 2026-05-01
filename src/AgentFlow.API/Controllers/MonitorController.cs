@@ -2,22 +2,76 @@ using AgentFlow.Application.Modules.Monitor;
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Persistence;
 using AgentFlow.Infrastructure.Storage;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
 [ApiController]
 [Authorize]
 [Route("api/monitor")]
-public class MonitorController(IMediator mediator, ITenantContext tenantCtx) : ControllerBase
+public class MonitorController(IMediator mediator, ITenantContext tenantCtx, AgentFlowDbContext db) : ControllerBase
 {
-    [HttpGet("conversations")]
-    public async Task<IActionResult> GetActive(CancellationToken ct)
+    /// <summary>
+    /// Lista usuarios que han lanzado campañas en este tenant — para poblar el
+    /// selector de filtro en el Monitor. Devuelve identificador (lo que se guardó
+    /// en Campaign.LaunchedByUserId — puede ser email/fullName/guid) y un display.
+    /// </summary>
+    [HttpGet("campaign-launchers")]
+    public async Task<IActionResult> GetCampaignLaunchers(CancellationToken ct)
     {
-        var result = await mediator.Send(new GetActiveConversationsQuery(tenantCtx.TenantId), ct);
+        var keys = await db.Campaigns
+            .Where(c => c.TenantId == tenantCtx.TenantId
+                     && c.LaunchedByUserId != null
+                     && c.LaunchedByUserId != "")
+            .Select(c => c.LaunchedByUserId!)
+            .Distinct()
+            .ToListAsync(ct);
+
+        // Resolver nombres legibles desde AppUsers/SuperAdmins (la clave puede ser id, email o fullName).
+        var users = await db.AppUsers
+            .Where(u => keys.Contains(u.Id.ToString())
+                     || keys.Contains(u.Email)
+                     || keys.Contains(u.FullName))
+            .Select(u => new { Id = u.Id.ToString(), u.Email, u.FullName })
+            .ToListAsync(ct);
+
+        var sas = await db.SuperAdmins
+            .Where(s => keys.Contains(s.Id.ToString())
+                     || keys.Contains(s.Email)
+                     || keys.Contains(s.FullName))
+            .Select(s => new { Id = s.Id.ToString(), s.Email, s.FullName })
+            .ToListAsync(ct);
+
+        var resolved = keys.Select(k =>
+        {
+            var u = users.FirstOrDefault(x => x.Id == k || x.Email == k || x.FullName == k)
+                 ?? sas.FirstOrDefault(x => x.Id == k || x.Email == k || x.FullName == k);
+            var label = u?.FullName ?? u?.Email ?? k;
+            return new { key = k, label };
+        })
+        .OrderBy(x => x.label)
+        .ToList();
+
+        return Ok(resolved);
+    }
+
+    [HttpGet("conversations")]
+    public async Task<IActionResult> GetActive(
+        [FromQuery] DateTime? from,
+        [FromQuery] DateTime? to,
+        [FromQuery] string? launchedByUserId,
+        CancellationToken ct = default)
+    {
+        var result = await mediator.Send(new GetActiveConversationsQuery(
+            tenantCtx.TenantId,
+            from?.ToUniversalTime(),
+            to?.ToUniversalTime(),
+            launchedByUserId), ct);
         return Ok(result);
     }
 
