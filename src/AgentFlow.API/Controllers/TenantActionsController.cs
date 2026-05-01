@@ -50,6 +50,7 @@ public class TenantActionsController(ITenantContext tenantCtx, AgentFlowDbContex
                 a.RequiresWebhook,
                 a.SendsEmail,
                 a.SendsSms,
+                a.IsDelinquencyDownload,
                 a.DefaultWebhookContract,
                 a.DefaultTriggerConfig,
                 HasWebhookContract = a.DefaultWebhookContract != null

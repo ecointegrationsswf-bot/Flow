@@ -179,6 +179,9 @@ public class ProcessIncomingMessageHandler(
         };
         await conversations.AddMessageAsync(inbound, ct);
 
+        // Marcar grupo de morosidad como respondido (sólo si autoCrearCampanas creó la campaña)
+        await campaignRepo.TryMarkContactGroupRepliedAsync(cmd.TenantId, cmd.FromPhone, inbound.SentAt, ct);
+
         // Guardar respuesta del Cerebro
         var outbound = new Message
         {
@@ -318,6 +321,9 @@ public class ProcessIncomingMessageHandler(
         conversation.LastActivityAt = DateTime.UtcNow;
         await conversations.AddMessageAsync(inbound, ct);
         await conversations.SaveChangesAsync(ct);
+
+        // Marcar grupo de morosidad como respondido (sólo si autoCrearCampanas creó la campaña)
+        await campaignRepo.TryMarkContactGroupRepliedAsync(cmd.TenantId, cmd.FromPhone, inbound.SentAt, ct);
 
         // Notificar monitor
         try

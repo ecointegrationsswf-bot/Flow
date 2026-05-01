@@ -46,6 +46,7 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
 
         b.Property(t => t.LabelingAnalysisPrompt).HasColumnType("nvarchar(max)");
         b.Property(t => t.LabelingResultSchemaPrompt).HasColumnType("nvarchar(max)");
+        b.Property(t => t.CodigoPaisDefault).HasMaxLength(10).HasDefaultValue("507");
 
         b.HasMany(t => t.Agents).WithOne(a => a.Tenant).HasForeignKey(a => a.TenantId);
         b.HasMany(t => t.Campaigns).WithOne(c => c.Tenant).HasForeignKey(c => c.TenantId);

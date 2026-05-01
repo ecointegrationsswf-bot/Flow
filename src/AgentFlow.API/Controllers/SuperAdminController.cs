@@ -432,10 +432,21 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
                 OriginTenantName = t != null ? t.Name : null
             }).ToListAsync(ct);
 
+        // Filtrar assignedActionIds a solo los IDs que aún existen en el catálogo.
+        // Evita que el frontend inicialice checkboxes con GUIDs de acciones eliminadas
+        // y luego falle al guardar con 400.
+        var storedActionIds = tenant.AssignedActionIds ?? [];
+        var validActionIds = storedActionIds.Count > 0
+            ? await db.ActionDefinitions
+                .Where(a => storedActionIds.Contains(a.Id))
+                .Select(a => a.Id)
+                .ToListAsync(ct)
+            : new List<Guid>();
+
         return Ok(new
         {
             assignedPromptIds = tenant.AssignedPromptIds,
-            assignedActionIds = tenant.AssignedActionIds,
+            assignedActionIds = validActionIds,
             actions
         });
     }
@@ -506,32 +517,42 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         var tenant = await db.Tenants.FindAsync([tenantId], ct);
         if (tenant is null) return NotFound();
 
-        var ids = req.ActionIds?.Distinct().ToList() ?? [];
+        var rawIds = req.ActionIds?.Distinct().ToList() ?? [];
 
-        if (ids.Count > 0)
-        {
-            // Permite cualquier acción del catálogo (global o legacy de cualquier tenant).
-            // El admin es responsable de confirmar que la config aplica a este cliente.
-            var existingCount = await db.ActionDefinitions
-                .Where(a => ids.Contains(a.Id))
-                .CountAsync(ct);
-            if (existingCount != ids.Count)
-                return BadRequest(new { error = "Una o más acciones no existen en el catálogo." });
-        }
+        // Filtrar a solo IDs que realmente existen en el catálogo.
+        // Usar ids válidos en lugar de retornar 400 — evita bloqueos por acciones
+        // eliminadas que quedaron en AssignedActionIds del tenant.
+        var ids = rawIds.Count > 0
+            ? await db.ActionDefinitions
+                .Where(a => rawIds.Contains(a.Id))
+                .Select(a => a.Id)
+                .ToListAsync(ct)
+            : new List<Guid>();
 
         var currentSet = tenant.AssignedActionIds.ToHashSet();
         var newSet = ids.ToHashSet();
         var removedIds = currentSet.Where(id => !newSet.Contains(id)).ToList();
         if (removedIds.Count > 0)
         {
-            var conflicts = await FindActionConflictsAsync(tenantId, removedIds, ct);
-            if (conflicts.Count > 0)
+            // Solo verificar conflictos para acciones que aún existen en el catálogo.
+            // Los IDs que ya no existen en ActionDefinitions son referencias obsoletas
+            // (basura de acciones eliminadas) — se limpian silenciosamente sin 409.
+            var existingRemovedIds = await db.ActionDefinitions
+                .Where(a => removedIds.Contains(a.Id))
+                .Select(a => a.Id)
+                .ToListAsync(ct);
+
+            if (existingRemovedIds.Count > 0)
             {
-                return Conflict(new
+                var conflicts = await FindActionConflictsAsync(tenantId, existingRemovedIds, ct);
+                if (conflicts.Count > 0)
                 {
-                    error = "No es posible desasignar acciones en uso. El cliente debe removerlas primero en su maestro de campaña.",
-                    conflicts
-                });
+                    return Conflict(new
+                    {
+                        error = "No es posible desasignar acciones en uso. El cliente debe removerlas primero en su maestro de campaña.",
+                        conflicts
+                    });
+                }
             }
         }
 
@@ -1070,7 +1091,8 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         string? DefaultTriggerConfig = null,
         string? DefaultWebhookContract = null,
         Guid? TenantId = null,
-        bool IsProcess = false);
+        bool IsProcess = false,
+        bool IsDelinquencyDownload = false);
 
     /// <summary>
     /// Lista acciones. Sin parámetros devuelve todo el catálogo (globales + legacy per-tenant).
@@ -1088,7 +1110,7 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
 
         var actions = await query
             .OrderBy(a => a.Name)
-            .Select(a => new { a.Id, a.TenantId, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess, a.WebhookUrl, a.WebhookMethod, a.IsActive, a.CreatedAt, a.DefaultTriggerConfig, a.DefaultWebhookContract })
+            .Select(a => new { a.Id, a.TenantId, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess, a.IsDelinquencyDownload, a.WebhookUrl, a.WebhookMethod, a.IsActive, a.CreatedAt, a.DefaultTriggerConfig, a.DefaultWebhookContract })
             .ToListAsync(ct);
         return Ok(actions);
     }
@@ -1118,6 +1140,7 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
             SendsEmail = req.SendsEmail,
             SendsSms = req.SendsSms,
             IsProcess = req.IsProcess,
+            IsDelinquencyDownload = req.IsDelinquencyDownload,
             WebhookUrl = req.WebhookUrl,
             WebhookMethod = req.WebhookMethod,
             DefaultTriggerConfig = req.DefaultTriggerConfig,
@@ -1149,6 +1172,7 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         action.SendsEmail = req.SendsEmail;
         action.SendsSms = req.SendsSms;
         action.IsProcess = req.IsProcess;
+        action.IsDelinquencyDownload = req.IsDelinquencyDownload;
         action.WebhookUrl = req.WebhookUrl;
         action.WebhookMethod = req.WebhookMethod;
         action.DefaultTriggerConfig = req.DefaultTriggerConfig;
@@ -1205,12 +1229,33 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
             .Select(a => new
             {
                 a.Id, a.Name, a.Description,
-                a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess,
+                a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess, a.IsDelinquencyDownload,
                 a.DefaultWebhookContract, a.DefaultTriggerConfig,
                 HasWebhookContract = a.DefaultWebhookContract != null
             })
             .ToListAsync(ct);
-        return Ok(actions);
+
+        // Para acciones marcadas como descarga de morosidad, verificar si el tenant tiene
+        // un ActionDelinquencyConfig con DownloadWebhookUrl configurado.
+        // Esas acciones no usan el WebhookBuilder — su endpoint vive en Admin → Morosidad.
+        var actionIds = actions.Select(a => a.Id).ToList();
+        var delinquencyLookup = await db.ActionDelinquencyConfigs
+            .Where(c => c.TenantId == tenantId && actionIds.Contains(c.ActionDefinitionId))
+            .Select(c => new { c.ActionDefinitionId, HasUrl = c.DownloadWebhookUrl != null && c.DownloadWebhookUrl != "" })
+            .ToListAsync(ct);
+        var dlLookup = delinquencyLookup.ToDictionary(c => c.ActionDefinitionId, c => c.HasUrl);
+
+        var result = actions.Select(a => new
+        {
+            a.Id, a.Name, a.Description,
+            a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess,
+            a.DefaultWebhookContract, a.DefaultTriggerConfig,
+            HasWebhookContract    = a.DefaultWebhookContract != null,
+            IsDelinquencyAction   = a.IsDelinquencyDownload,
+            HasDelinquencyConfig  = dlLookup.TryGetValue(a.Id, out var has) && has
+        }).ToList();
+
+        return Ok(result);
     }
 
     public record AdminUpdateActionContractRequest(string? Contract);

@@ -58,6 +58,9 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Property<bool>("IsActive")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("IsDelinquencyDownload")
+                        .HasColumnType("bit");
+
                     b.Property<bool>("IsProcess")
                         .HasColumnType("bit");
 
@@ -109,6 +112,150 @@ namespace AgentFlow.Infrastructure.Migrations
                         .HasFilter("[TenantId] IS NOT NULL");
 
                     b.ToTable("ActionDefinitions", (string)null);
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.ActionDelinquencyConfig", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ActionDefinitionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("AgentDefinitionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("AutoCrearCampanas")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("CampaignNamePattern")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<Guid?>("CampaignTemplateId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CodigoPais")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)")
+                        .HasDefaultValue("507");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DownloadWebhookHeaders")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<string>("DownloadWebhookMethod")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)")
+                        .HasDefaultValue("GET");
+
+                    b.Property<string>("DownloadWebhookUrl")
+                        .HasMaxLength(2000)
+                        .HasColumnType("nvarchar(2000)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("ItemsJsonPath")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("NotificationEmail")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActionDefinitionId");
+
+                    b.HasIndex("AgentDefinitionId");
+
+                    b.HasIndex("CampaignTemplateId");
+
+                    b.HasIndex("TenantId", "ActionDefinitionId")
+                        .IsUnique();
+
+                    b.ToTable("ActionDelinquencyConfigs", (string)null);
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.ActionFieldMapping", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ActionDefinitionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ColumnKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DataType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)")
+                        .HasDefaultValue("string");
+
+                    b.Property<string>("DefaultValue")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("JsonPath")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("Role")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasDefaultValue("None");
+
+                    b.Property<string>("RoleLabel")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActionDefinitionId", "ColumnKey")
+                        .IsUnique();
+
+                    b.ToTable("ActionFieldMappings", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentCategory", b =>
@@ -874,6 +1021,64 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.ToTable("CampaignTemplateDocuments");
                 });
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.ContactGroup", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid?>("CampaignId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ClientName")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("ExecutionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("FirstClientReplyAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime?>("FirstMessageSentAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("ItemCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("PhoneNormalized")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasDefaultValue("Pending");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal>("TotalAmount")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CampaignId");
+
+                    b.HasIndex("TenantId");
+
+                    b.HasIndex("ExecutionId", "PhoneNormalized")
+                        .IsUnique();
+
+                    b.ToTable("ContactGroups", (string)null);
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.Conversation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -991,6 +1196,127 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.ToTable("ConversationLabels");
                 });
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.DelinquencyExecution", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("ActionDefinitionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("CampaignsCreated")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("DiscardedItems")
+                        .HasColumnType("int");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("GroupsCreated")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ProcessedItems")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("ScheduledWebhookJobId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("StartedAt")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasDefaultValue("Pending");
+
+                    b.Property<Guid>("TenantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int>("TotalItems")
+                        .HasColumnType("int");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ActionDefinitionId");
+
+                    b.HasIndex("TenantId", "StartedAt");
+
+                    b.ToTable("DelinquencyExecutions", (string)null);
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.DelinquencyItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<decimal?>("Amount")
+                        .HasColumnType("decimal(18,2)");
+
+                    b.Property<string>("ClientName")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("DiscardReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<Guid>("ExecutionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ExtractedDataJson")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<Guid?>("GroupId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("KeyValue")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PhoneNormalized")
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<string>("PhoneRaw")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("PolicyNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("RawData")
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<int>("RowIndex")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("nvarchar(30)")
+                        .HasDefaultValue("Pending");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExecutionId");
+
+                    b.HasIndex("GroupId");
+
+                    b.HasIndex("PhoneNormalized");
+
+                    b.ToTable("DelinquencyItems", (string)null);
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.GestionEvent", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1021,6 +1347,134 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("ConversationId");
 
                     b.ToTable("GestionEvents");
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.LogicalFieldCatalog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("DataType")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)")
+                        .HasDefaultValue("string");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<string>("DisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsRequired")
+                        .HasColumnType("bit");
+
+                    b.Property<string>("Key")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<int>("SortOrder")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Key")
+                        .IsUnique();
+
+                    b.ToTable("LogicalFieldCatalog", (string)null);
+
+                    b.HasData(
+                        new
+                        {
+                            Id = new Guid("11111111-0000-0000-0000-000000000001"),
+                            DataType = "phone",
+                            DisplayName = "Número de Teléfono",
+                            IsActive = true,
+                            IsRequired = true,
+                            Key = "PhoneNumber",
+                            SortOrder = 1
+                        },
+                        new
+                        {
+                            Id = new Guid("11111111-0000-0000-0000-000000000002"),
+                            DataType = "string",
+                            DisplayName = "Nombre del Cliente",
+                            IsActive = true,
+                            IsRequired = false,
+                            Key = "ClientName",
+                            SortOrder = 2
+                        },
+                        new
+                        {
+                            Id = new Guid("11111111-0000-0000-0000-000000000003"),
+                            DataType = "string",
+                            DisplayName = "Número de Póliza",
+                            IsActive = true,
+                            IsRequired = false,
+                            Key = "PolicyNumber",
+                            SortOrder = 3
+                        },
+                        new
+                        {
+                            Id = new Guid("11111111-0000-0000-0000-000000000004"),
+                            DataType = "number",
+                            DisplayName = "Monto en Mora",
+                            IsActive = true,
+                            IsRequired = false,
+                            Key = "Amount",
+                            SortOrder = 4
+                        },
+                        new
+                        {
+                            Id = new Guid("11111111-0000-0000-0000-000000000005"),
+                            DataType = "string",
+                            DisplayName = "Aseguradora",
+                            IsActive = true,
+                            IsRequired = false,
+                            Key = "Insurer",
+                            SortOrder = 5
+                        },
+                        new
+                        {
+                            Id = new Guid("11111111-0000-0000-0000-000000000006"),
+                            DataType = "string",
+                            DisplayName = "Fecha de Vencimiento",
+                            IsActive = true,
+                            IsRequired = false,
+                            Key = "DueDate",
+                            SortOrder = 6
+                        },
+                        new
+                        {
+                            Id = new Guid("11111111-0000-0000-0000-000000000007"),
+                            DataType = "string",
+                            DisplayName = "Tipo de Póliza",
+                            IsActive = true,
+                            IsRequired = false,
+                            Key = "PolicyType",
+                            SortOrder = 7
+                        },
+                        new
+                        {
+                            Id = new Guid("11111111-0000-0000-0000-000000000008"),
+                            DataType = "string",
+                            DisplayName = "Email del Ejecutivo",
+                            IsActive = true,
+                            IsRequired = false,
+                            Key = "ExecutiveEmail",
+                            SortOrder = 8
+                        });
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Message", b =>
@@ -1314,6 +1768,13 @@ namespace AgentFlow.Infrastructure.Migrations
                         .HasColumnType("int")
                         .HasDefaultValue(10);
 
+                    b.Property<string>("CodigoPaisDefault")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("nvarchar(10)")
+                        .HasDefaultValue("507");
+
                     b.Property<string>("Country")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -1600,6 +2061,50 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Navigation("Tenant");
                 });
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.ActionDelinquencyConfig", b =>
+                {
+                    b.HasOne("AgentFlow.Domain.Entities.ActionDefinition", "ActionDefinition")
+                        .WithMany()
+                        .HasForeignKey("ActionDefinitionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("AgentFlow.Domain.Entities.AgentDefinition", "AgentDefinition")
+                        .WithMany()
+                        .HasForeignKey("AgentDefinitionId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("AgentFlow.Domain.Entities.CampaignTemplate", "CampaignTemplate")
+                        .WithMany()
+                        .HasForeignKey("CampaignTemplateId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ActionDefinition");
+
+                    b.Navigation("AgentDefinition");
+
+                    b.Navigation("CampaignTemplate");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.ActionFieldMapping", b =>
+                {
+                    b.HasOne("AgentFlow.Domain.Entities.ActionDefinition", "ActionDefinition")
+                        .WithMany()
+                        .HasForeignKey("ActionDefinitionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ActionDefinition");
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentDefinition", b =>
                 {
                     b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
@@ -1718,6 +2223,32 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Navigation("CampaignTemplate");
                 });
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.ContactGroup", b =>
+                {
+                    b.HasOne("AgentFlow.Domain.Entities.Campaign", "Campaign")
+                        .WithMany()
+                        .HasForeignKey("CampaignId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("AgentFlow.Domain.Entities.DelinquencyExecution", "Execution")
+                        .WithMany("Groups")
+                        .HasForeignKey("ExecutionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.NoAction)
+                        .IsRequired();
+
+                    b.Navigation("Campaign");
+
+                    b.Navigation("Execution");
+
+                    b.Navigation("Tenant");
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.Conversation", b =>
                 {
                     b.HasOne("AgentFlow.Domain.Entities.AgentDefinition", "ActiveAgent")
@@ -1757,6 +2288,43 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsRequired();
 
                     b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.DelinquencyExecution", b =>
+                {
+                    b.HasOne("AgentFlow.Domain.Entities.ActionDefinition", "ActionDefinition")
+                        .WithMany()
+                        .HasForeignKey("ActionDefinitionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("AgentFlow.Domain.Entities.Tenant", "Tenant")
+                        .WithMany()
+                        .HasForeignKey("TenantId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ActionDefinition");
+
+                    b.Navigation("Tenant");
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.DelinquencyItem", b =>
+                {
+                    b.HasOne("AgentFlow.Domain.Entities.DelinquencyExecution", "Execution")
+                        .WithMany("Items")
+                        .HasForeignKey("ExecutionId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("AgentFlow.Domain.Entities.ContactGroup", "Group")
+                        .WithMany("Items")
+                        .HasForeignKey("GroupId")
+                        .OnDelete(DeleteBehavior.NoAction);
+
+                    b.Navigation("Execution");
+
+                    b.Navigation("Group");
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.GestionEvent", b =>
@@ -1833,11 +2401,23 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.Navigation("Documents");
                 });
 
+            modelBuilder.Entity("AgentFlow.Domain.Entities.ContactGroup", b =>
+                {
+                    b.Navigation("Items");
+                });
+
             modelBuilder.Entity("AgentFlow.Domain.Entities.Conversation", b =>
                 {
                     b.Navigation("GestionEvents");
 
                     b.Navigation("Messages");
+                });
+
+            modelBuilder.Entity("AgentFlow.Domain.Entities.DelinquencyExecution", b =>
+                {
+                    b.Navigation("Groups");
+
+                    b.Navigation("Items");
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Tenant", b =>

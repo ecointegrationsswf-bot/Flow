@@ -35,6 +35,7 @@ public class CampaignsController(
     IFixedFormatCampaignService fixedFormatService,
     IBlobStorageService blobStorage,
     ICampaignRepository campaignRepo,
+    ICampaignLauncher campaignLauncher,
     AgentFlowDbContext db,
     IConfiguration cfg,
     IHttpClientFactory httpClientFactory) : ControllerBase
@@ -405,140 +406,32 @@ public class CampaignsController(
     [HttpPost("{id:guid}/launch")]
     public async Task<IActionResult> Launch(Guid id, CancellationToken ct)
     {
-        var campaign = await db.Campaigns
-            .Include(c => c.CampaignTemplate)
-            .Include(c => c.Tenant)
-            .FirstOrDefaultAsync(c => c.Id == id && c.TenantId == tenantCtx.TenantId, ct);
-
-        if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
-        if (campaign.Status == CampaignStatus.Running)
-            return Conflict(new { error = "La campaña ya está en ejecución." });
-        if (campaign.Status == CampaignStatus.Completed)
-            return Conflict(new { error = "La campaña ya fue completada." });
-
-        // Validar contactos válidos pendientes
-        var pendingCount = await db.CampaignContacts
-            .CountAsync(c => c.CampaignId == id
-                          && c.IsPhoneValid
-                          && c.DispatchStatus == DispatchStatus.Pending, ct);
-        if (pendingCount == 0)
-            return BadRequest(new { error = "La campaña no tiene contactos válidos pendientes." });
-
-        // Validar maestro con prompt vinculado
-        if (campaign.CampaignTemplate is null)
-            return BadRequest(new { error = "La campaña no tiene un maestro de campaña asociado." });
-        if (campaign.CampaignTemplate.PromptTemplateIds is null ||
-            campaign.CampaignTemplate.PromptTemplateIds.Count == 0)
-            return BadRequest(new { error = "El maestro de campaña no tiene un prompt vinculado." });
-
-        // Resolver credenciales WhatsApp: primero Tenant fields, si vacíos buscar en WhatsAppLines
-        var instanceId = campaign.Tenant.WhatsAppInstanceId;
-        var apiToken   = campaign.Tenant.WhatsAppApiToken;
-
-        if (string.IsNullOrEmpty(instanceId) || string.IsNullOrEmpty(apiToken))
-        {
-            var activeLine = await db.WhatsAppLines
-                .Where(l => l.TenantId == campaign.TenantId && l.IsActive)
-                .OrderByDescending(l => l.CreatedAt)
-                .FirstOrDefaultAsync(ct);
-
-            if (activeLine is null)
-                return BadRequest(new { error = "El tenant no tiene WhatsApp configurado. Ve a Configuración → WhatsApp y agrega una línea." });
-
-            instanceId = activeLine.InstanceId;
-            apiToken   = activeLine.ApiToken;
-        }
-
-        // Marcar como Launching — copiar teléfono de notificación del ejecutivo
-        campaign.Status           = CampaignStatus.Launching;
-        campaign.LaunchedAt       = DateTime.UtcNow;
-        campaign.LaunchedByUserId = CurrentUser;
+        // Verificar tenancy antes de delegar al servicio (el launcher no filtra por tenant
+        // porque también lo invocan procesos automáticos del sistema).
+        var belongsToTenant = await db.Campaigns
+            .AnyAsync(c => c.Id == id && c.TenantId == tenantCtx.TenantId, ct);
+        if (!belongsToTenant)
+            return NotFound(new { error = "Campaña no encontrada." });
 
         var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
                      ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        string? launcherPhone = null;
         if (Guid.TryParse(userIdStr, out var launcherId))
         {
             var launcher = await db.AppUsers.FindAsync([launcherId], ct);
-            if (!string.IsNullOrEmpty(launcher?.NotifyPhone))
-                campaign.LaunchedByUserPhone = launcher.NotifyPhone;
+            launcherPhone = launcher?.NotifyPhone;
         }
 
-        await db.SaveChangesAsync(ct);
+        var result = await campaignLauncher.LaunchAsync(id, CurrentUser, launcherPhone, ct);
+        if (!result.Success)
+            return BadRequest(new { error = result.Error });
 
-        // Disparar webhook n8n
-        var webhookUrl = cfg["N8n:CampaignWebhookUrl"];
-        if (!string.IsNullOrEmpty(webhookUrl))
-        {
-            try
-            {
-                // Cargar contactos pendientes para enviar a n8n
-                var contacts = await db.CampaignContacts
-                    .Where(c => c.CampaignId == id
-                             && c.IsPhoneValid
-                             && c.DispatchStatus == DispatchStatus.Pending)
-                    .Select(c => new
-                    {
-                        phone           = c.PhoneNumber,
-                        clientName      = c.ClientName,
-                        policyNumber    = c.PolicyNumber,
-                        pendingAmount   = c.PendingAmount,
-                        insurance       = c.InsuranceCompany,
-                        contactDataJson = c.ContactDataJson,
-                    })
-                    .ToListAsync(ct);
-
-                var httpClient = httpClientFactory.CreateClient();
-                var payload = JsonSerializer.Serialize(new
-                {
-                    campaignId          = campaign.Id,
-                    agentId             = campaign.AgentDefinitionId,
-                    warmupDay           = 0,
-                    messageDelaySeconds = campaign.Tenant.CampaignMessageDelaySeconds,
-                    tenantConfig        = new
-                    {
-                        tenantId           = campaign.TenantId,
-                        ultraMsgInstanceId = instanceId,
-                        ultraMsgToken      = apiToken,
-                    },
-                    contacts,
-                });
-                var n8nResponse = await httpClient.PostAsync(webhookUrl,
-                    new StringContent(payload, System.Text.Encoding.UTF8, "application/json"), ct);
-
-                if (!n8nResponse.IsSuccessStatusCode)
-                {
-                    var body = await n8nResponse.Content.ReadAsStringAsync(ct);
-                    campaign.Status = CampaignStatus.Failed;
-                    await db.SaveChangesAsync(ct);
-                    return StatusCode(502, new { error = $"n8n rechazó la solicitud ({(int)n8nResponse.StatusCode}). ¿El workflow está activado? Detalle: {body[..Math.Min(200, body.Length)]}" });
-                }
-
-                // Recargar desde BD: n8n puede haber procesado todos los contactos y llamado
-                // contact-sent (auto-complete) ANTES de responder este webhook. Si ya está
-                // Completed/Failed, no sobreescribir con Running.
-                await db.Entry(campaign).ReloadAsync(ct);
-                if (campaign.Status == CampaignStatus.Launching)
-                    campaign.Status = CampaignStatus.Running;
-            }
-            catch (Exception ex)
-            {
-                campaign.Status = CampaignStatus.Failed;
-                await db.SaveChangesAsync(ct);
-                return StatusCode(502, new { error = $"No se pudo disparar n8n: {ex.Message}" });
-            }
-        }
-        else
-        {
-            campaign.Status = CampaignStatus.Running; // dev: sin n8n configurado
-        }
-
-        await db.SaveChangesAsync(ct);
         return Ok(new
         {
-            campaignId      = campaign.Id,
-            status          = campaign.Status.ToString(),
-            pendingContacts = pendingCount,
-            launchedAt      = campaign.LaunchedAt,
+            campaignId      = result.CampaignId,
+            status          = result.Status,
+            pendingContacts = result.PendingContacts,
+            launchedAt      = result.LaunchedAt,
         });
     }
 

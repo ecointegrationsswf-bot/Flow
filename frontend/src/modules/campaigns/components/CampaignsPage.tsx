@@ -12,7 +12,7 @@ import { usePermissions } from '@/shared/hooks/usePermissions'
 const triggerLabels: Record<string, string> = {
   FileUpload: 'Archivo',
   PolicyEvent: 'Evento poliza',
-  DelinquencyEvent: 'Morosidad',
+  DelinquencyEvent: 'Automática',
   Manual: 'Manual',
 }
 

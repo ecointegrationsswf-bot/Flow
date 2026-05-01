@@ -8,6 +8,7 @@ export interface TenantAction {
   requiresWebhook: boolean
   sendsEmail: boolean
   sendsSms: boolean
+  isDelinquencyDownload: boolean
   defaultWebhookContract: string | null
   defaultTriggerConfig: string | null
   hasWebhookContract: boolean

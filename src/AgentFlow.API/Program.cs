@@ -115,6 +115,8 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ITransferChatService,
     AgentFlow.Infrastructure.Campaigns.TransferChatService>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ISendEmailResumeService,
     AgentFlow.Infrastructure.Campaigns.SendEmailResumeService>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ICampaignLauncher,
+    AgentFlow.Infrastructure.Campaigns.CampaignLauncher>();
 
 // ── Scheduled Webhook Worker (Fase 1 Campaign Automation) ────────────
 // Repositorios + dispatcher de eventos + executor genérico + BackgroundService.
@@ -147,7 +149,16 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.NotifyGestionBatchExecutor>();
 
+// Slug DOWNLOAD_DELINQUENCY_DATA — descarga JSON de morosidad por tenant y lo procesa.
+// Cron configurado en /admin/scheduled-jobs (ej: "0 8 * * *" → diario 8am Panamá).
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.DelinquencyDownloadExecutor>();
+
 builder.Services.AddHostedService<AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
+
+// ── Módulo Morosidad ─────────────────────────────────────────────────────
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDelinquencyProcessor,
+    AgentFlow.Infrastructure.Morosidad.DelinquencyProcessor>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
 var jwtSecret = cfg["Jwt:Secret"] ?? "AgentFlow_Dev_Secret_Key_Min32Chars!!";

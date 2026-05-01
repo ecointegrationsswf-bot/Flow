@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Webhook, Mail, MessageSquare, Cog, Loader2, Zap, CheckCircle, AlertCircle } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { Webhook, Mail, MessageSquare, Cog, Loader2, Zap, CheckCircle, AlertCircle, TrendingDown, ExternalLink } from 'lucide-react'
 import {
   useAdminTenantActionsConfig,
   useAdminUpdateTenantActionContract,
@@ -22,6 +23,7 @@ interface Props {
 export function TenantActionsConfigTab({ tenantId }: Props) {
   const { data: actions = [], isLoading } = useAdminTenantActionsConfig(tenantId)
   const updateContract = useAdminUpdateTenantActionContract(tenantId)
+  const navigate = useNavigate()
   const [wizardActionId, setWizardActionId] = useState<string | null>(null)
   const [successId, setSuccessId] = useState<string | null>(null)
 
@@ -66,15 +68,23 @@ export function TenantActionsConfigTab({ tenantId }: Props) {
         </div>
       ) : (
         <div className="grid gap-3">
-          {actions.map((action) => (
-            <ActionCard
-              key={action.id}
-              action={action}
-              onConfigure={() => setWizardActionId(action.id)}
-              isSaving={updateContract.isPending && wizardActionId === action.id}
-              justSaved={successId === action.id}
-            />
-          ))}
+          {actions.map((action) =>
+            action.isDelinquencyAction ? (
+              <DelinquencyActionCard
+                key={action.id}
+                action={action}
+                onNavigate={() => navigate(`/admin/morosidad?tenant=${tenantId}&action=${action.id}`)}
+              />
+            ) : (
+              <ActionCard
+                key={action.id}
+                action={action}
+                onConfigure={() => setWizardActionId(action.id)}
+                isSaving={updateContract.isPending && wizardActionId === action.id}
+                justSaved={successId === action.id}
+              />
+            )
+          )}
         </div>
       )}
 
@@ -182,4 +192,64 @@ function parseContract(json: string | null): Partial<WebhookContractBundle> {
   } catch {
     return {}
   }
+}
+
+/**
+ * Tarjeta especial para DOWNLOAD_DELINQUENCY_DATA.
+ * Su configuración vive en Admin → Morosidad, no en el WebhookBuilder.
+ */
+function DelinquencyActionCard({
+  action,
+  onNavigate,
+}: {
+  action: TenantActionConfig
+  onNavigate: () => void
+}) {
+  const friendly = getActionFriendlyName(action.name)
+
+  return (
+    <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-gray-900">{friendly}</h3>
+            <span className="rounded bg-gray-100 px-2 py-0.5 text-[10px] font-mono text-gray-500">
+              {action.name}
+            </span>
+          </div>
+          {action.description && (
+            <p className="mt-1 text-xs text-gray-500">{action.description}</p>
+          )}
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            <span className="inline-flex items-center gap-1 rounded-full border border-purple-200 bg-purple-50 px-2 py-0.5 text-[11px] font-medium text-purple-700">
+              <Webhook className="h-3 w-3" /> Webhook
+            </span>
+            <span className="inline-flex items-center gap-1 rounded-full border border-teal-200 bg-teal-50 px-2 py-0.5 text-[11px] font-medium text-teal-700">
+              <TrendingDown className="h-3 w-3" /> Morosidad
+            </span>
+          </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-2">
+          {action.hasDelinquencyConfig ? (
+            <span className="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-medium text-green-700">
+              <CheckCircle className="h-3.5 w-3.5" /> Configurado
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700">
+              <AlertCircle className="h-3.5 w-3.5" /> Sin configurar
+            </span>
+          )}
+          <button
+            type="button"
+            onClick={onNavigate}
+            className="flex items-center gap-1.5 rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-teal-700"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {action.hasDelinquencyConfig ? 'Editar en Morosidad' : 'Configurar en Morosidad'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }

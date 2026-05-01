@@ -27,6 +27,16 @@ public class ActionDefinition
     /// El admin la programa desde /admin/scheduled-jobs como cualquier otra acción.
     /// </summary>
     public bool IsProcess { get; set; }
+
+    /// <summary>
+    /// Marca la acción como descarga de datos de morosidad. Cuando es true:
+    /// — aparece en el selector del módulo /admin/morosidad y del portal /morosidad
+    /// — el ScheduledWebhookWorker la procesa con el DelinquencyDownloadExecutor
+    ///   que registra la descarga en DelinquencyExecutions y normaliza los ítems.
+    /// Permite tener varias acciones de descarga (ej: morosidad por aseguradora) sin
+    /// depender del nombre/slug.
+    /// </summary>
+    public bool IsDelinquencyDownload { get; set; }
     public string? WebhookUrl { get; set; }
     public string? WebhookMethod { get; set; } // GET, POST, PUT
 

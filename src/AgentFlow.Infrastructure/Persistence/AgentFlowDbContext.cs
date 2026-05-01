@@ -29,6 +29,14 @@ public class AgentFlowDbContext(DbContextOptions<AgentFlowDbContext> options) : 
     public DbSet<ScheduledWebhookJobExecution> ScheduledWebhookJobExecutions => Set<ScheduledWebhookJobExecution>();
     public DbSet<WebhookDispatchLog> WebhookDispatchLogs => Set<WebhookDispatchLog>();
 
+    // ── Módulo Morosidad ───────────────────────────────────────────────────────
+    public DbSet<LogicalFieldCatalog> LogicalFieldCatalog => Set<LogicalFieldCatalog>();
+    public DbSet<ActionFieldMapping> ActionFieldMappings => Set<ActionFieldMapping>();
+    public DbSet<ActionDelinquencyConfig> ActionDelinquencyConfigs => Set<ActionDelinquencyConfig>();
+    public DbSet<DelinquencyExecution> DelinquencyExecutions => Set<DelinquencyExecution>();
+    public DbSet<DelinquencyItem> DelinquencyItems => Set<DelinquencyItem>();
+    public DbSet<ContactGroup> ContactGroups => Set<ContactGroup>();
+
     protected override void OnModelCreating(ModelBuilder b)
     {
         b.ApplyConfigurationsFromAssembly(typeof(AgentFlowDbContext).Assembly);

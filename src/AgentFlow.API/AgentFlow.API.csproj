@@ -11,6 +11,7 @@
     <ProjectReference Include="..\AgentFlow.Infrastructure\AgentFlow.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
+    <PackageReference Include="ClosedXML" Version="0.105.0" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0-preview.3.25171.5" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.5.0" />
     <PackageReference Include="Hangfire.AspNetCore" Version="1.8.9" />

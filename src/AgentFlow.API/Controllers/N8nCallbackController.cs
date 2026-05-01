@@ -458,6 +458,25 @@ public class N8nCallbackController(
             contact.SentAt            = DateTime.UtcNow;
             contact.ExternalMessageId = req.ExternalMessageId;
             await db.SaveChangesAsync(ct);
+
+            // Reflejar el envío en el ContactGroup de morosidad (si existe).
+            // Idempotente: sólo actualiza si FirstMessageSentAt sigue NULL.
+            var groupsToMark = await db.ContactGroups
+                .Where(g => g.CampaignId == campaignId
+                         && g.PhoneNormalized == phone
+                         && g.FirstMessageSentAt == null)
+                .ToListAsync(ct);
+
+            if (groupsToMark.Count > 0)
+            {
+                foreach (var g in groupsToMark)
+                {
+                    g.FirstMessageSentAt = contact.SentAt;
+                    if (g.Status == ContactGroupStatus.Pending || g.Status == ContactGroupStatus.CampaignCreated)
+                        g.Status = ContactGroupStatus.MessageSent;
+                }
+                await db.SaveChangesAsync(ct);
+            }
         }
 
         // Incrementar contador de forma atómica para evitar condición de carrera

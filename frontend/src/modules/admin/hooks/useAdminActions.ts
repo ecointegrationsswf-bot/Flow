@@ -12,6 +12,8 @@ export interface ActionDefinition {
   sendsSms: boolean
   /** Acción interna del backend (Worker). No envía webhook/email/SMS — la lógica vive en un IScheduledJobExecutor. */
   isProcess: boolean
+  /** Marca la acción como descarga de morosidad — aparece en /admin/morosidad y /morosidad. */
+  isDelinquencyDownload: boolean
   webhookUrl: string | null
   webhookMethod: string | null
   isActive: boolean
@@ -31,6 +33,7 @@ export interface ActionPayload {
   sendsEmail: boolean
   sendsSms: boolean
   isProcess: boolean
+  isDelinquencyDownload: boolean
   webhookUrl?: string | null
   webhookMethod?: string | null
   defaultTriggerConfig?: string | null

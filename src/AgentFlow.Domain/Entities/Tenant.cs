@@ -106,6 +106,13 @@ public class Tenant
     /// </summary>
     public string? LabelingResultSchemaPrompt { get; set; }
 
+    /// <summary>
+    /// Código de país telefónico por defecto para este tenant. Ej: "507" (Panamá), "57" (Colombia).
+    /// Usado por el módulo de morosidad como fallback cuando la ActionDelinquencyConfig
+    /// no especifica un CodigoPais propio.
+    /// </summary>
+    public string CodigoPaisDefault { get; set; } = "507";
+
     public ICollection<AgentDefinition> Agents { get; set; } = [];
     public ICollection<Campaign> Campaigns { get; set; } = [];
     public ICollection<AppUser> Users { get; set; } = [];

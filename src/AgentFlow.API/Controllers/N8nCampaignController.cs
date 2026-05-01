@@ -318,6 +318,30 @@ public class N8nCampaignController(
 
         await db.SaveChangesAsync(ct);
 
+        // Reflejar el envío en el ContactGroup de morosidad si la campaña vino
+        // del DelinquencyProcessor (autoCrearCampanas=true). Idempotente: sólo
+        // cuando FirstMessageSentAt aún es NULL.
+        if (dispatchStatus == "Sent")
+        {
+            var groupsToMark = await db.ContactGroups
+                .Where(g => g.CampaignId == contact.CampaignId
+                         && g.PhoneNormalized == contact.PhoneNumber
+                         && g.FirstMessageSentAt == null)
+                .ToListAsync(ct);
+
+            if (groupsToMark.Count > 0)
+            {
+                var sentAt = contact.SentAt ?? DateTime.UtcNow;
+                foreach (var g in groupsToMark)
+                {
+                    g.FirstMessageSentAt = sentAt;
+                    if (g.Status == ContactGroupStatus.Pending || g.Status == ContactGroupStatus.CampaignCreated)
+                        g.Status = ContactGroupStatus.MessageSent;
+                }
+                await db.SaveChangesAsync(ct);
+            }
+        }
+
         return Ok(new
         {
             success           = dispatchStatus == "Sent",

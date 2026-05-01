@@ -107,6 +107,20 @@ builder.Services.AddScoped<IJobExecutionRepository,
 builder.Services.AddScoped<IWebhookEventDispatcher,
     AgentFlow.Infrastructure.ScheduledJobs.WebhookEventDispatcher>();
 
+// Canal — necesario para OutputInterpreter, FollowUpExecutor y CampaignAutoCloseExecutor
+builder.Services.AddScoped<IChannelProviderFactory,
+    AgentFlow.Infrastructure.Channels.ChannelProviderFactory>();
+
+// Morosidad
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDelinquencyProcessor,
+    AgentFlow.Infrastructure.Morosidad.DelinquencyProcessor>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ICampaignLauncher,
+    AgentFlow.Infrastructure.Campaigns.CampaignLauncher>();
+
+// ConversationNotifier — no-op en el Worker (sin SignalR Hub).
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IConversationNotifier,
+    AgentFlow.Infrastructure.ScheduledJobs.NoOpConversationNotifier>();
+
 // Executor genérico (slug "*") + executors específicos.
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.DefaultWebhookExecutor>();
@@ -120,6 +134,9 @@ builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.SendLabelingSummaryExecutor>();
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.NotifyGestionBatchExecutor>();
+// Slug DOWNLOAD_DELINQUENCY_DATA
+builder.Services.AddScoped<IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.DelinquencyDownloadExecutor>();
 
 // BackgroundService: tick cada 60s.
 builder.Services.AddHostedService<

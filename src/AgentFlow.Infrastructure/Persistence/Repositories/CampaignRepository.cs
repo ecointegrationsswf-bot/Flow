@@ -1,4 +1,5 @@
 using AgentFlow.Domain.Entities;
+using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using Microsoft.EntityFrameworkCore;
 
@@ -65,5 +66,30 @@ public class CampaignRepository(AgentFlowDbContext db) : ICampaignRepository
         return await db.CampaignContacts
             .AsNoTracking()
             .FirstOrDefaultAsync(cc => cc.CampaignId == campaignId && cc.PhoneNumber == phone, ct);
+    }
+
+    public async Task TryMarkContactGroupRepliedAsync(
+        Guid tenantId, string phoneNormalized, DateTime when, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(phoneNormalized)) return;
+
+        // ExecuteUpdateAsync no aplica el HasConversion<string>() del enum, así que actualizamos
+        // por change tracker (load + save). Filtro estrecho: tenant + teléfono + autoCrearCampanas
+        // (CampaignId NOT NULL) + sin respuesta previa (idempotente).
+        var groups = await db.ContactGroups
+            .Where(g => g.TenantId == tenantId
+                     && g.PhoneNormalized == phoneNormalized
+                     && g.CampaignId != null
+                     && g.FirstClientReplyAt == null)
+            .ToListAsync(ct);
+
+        if (groups.Count == 0) return;
+
+        foreach (var g in groups)
+        {
+            g.FirstClientReplyAt = when;
+            g.Status = ContactGroupStatus.ClientReplied;
+        }
+        await db.SaveChangesAsync(ct);
     }
 }

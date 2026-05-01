@@ -26,4 +26,11 @@ public interface ICampaignRepository
     /// entrantes para cargar los datos del Excel (ContactDataJson) y pasarlos al LLM.
     /// </summary>
     Task<CampaignContact?> GetContactByPhoneAsync(Guid campaignId, string phone, CancellationToken ct = default);
+
+    /// <summary>
+    /// Marca el ContactGroup de morosidad asociado a este teléfono+tenant como "respondido"
+    /// — sólo si CampaignId IS NOT NULL y FirstClientReplyAt IS NULL (idempotente).
+    /// Sólo afecta grupos creados con autoCrearCampanas=true.
+    /// </summary>
+    Task TryMarkContactGroupRepliedAsync(Guid tenantId, string phoneNormalized, DateTime when, CancellationToken ct = default);
 }

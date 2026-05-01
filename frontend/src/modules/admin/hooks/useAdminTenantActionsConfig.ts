@@ -17,6 +17,8 @@ export interface TenantActionConfig {
   defaultWebhookContract: string | null
   defaultTriggerConfig: string | null
   hasWebhookContract: boolean
+  isDelinquencyAction: boolean
+  hasDelinquencyConfig: boolean
 }
 
 export function useAdminTenantActionsConfig(tenantId: string | undefined) {

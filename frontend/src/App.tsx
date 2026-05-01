@@ -28,11 +28,13 @@ import { AdminWhatsAppPage } from '@/modules/admin/components/AdminWhatsAppPage'
 import { AdminUsersPage } from '@/modules/admin/components/AdminUsersPage'
 import { ActionsPage } from '@/modules/admin/components/ActionsPage'
 import { ScheduledJobsPage } from '@/modules/admin/components/ScheduledJobsPage'
+import { AdminMorosidadPage } from '@/modules/admin/components/AdminMorosidadPage'
 import { PromptsPage } from '@/modules/admin/components/PromptsPage'
 import { PromptFormPage } from '@/modules/admin/components/PromptFormPage'
 import { ProfilePage } from '@/modules/profile/components/ProfilePage'
 import { BrainAgentRegistryPage } from '@/modules/brain/components/BrainAgentRegistryPage'
 import { TenantActionsPage } from '@/modules/actions/components/TenantActionsPage'
+import { MorosidadPage } from '@/modules/morosidad/components/MorosidadPage'
 import { ForgotPasswordPage } from '@/modules/auth/components/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/modules/auth/components/ResetPasswordPage'
 
@@ -64,6 +66,7 @@ export default function App() {
           <Route path="categories" element={<CategoriesPage />} />
           <Route path="whatsapp" element={<AdminWhatsAppPage />} />
           <Route path="actions" element={<ActionsPage />} />
+          <Route path="morosidad" element={<AdminMorosidadPage />} />
           <Route path="scheduled-jobs" element={<ScheduledJobsPage />} />
           <Route path="prompts" element={<PromptsPage />} />
           <Route path="prompts/new" element={<PromptFormPage />} />
@@ -79,6 +82,7 @@ export default function App() {
           <Route path="/labels" element={<LabelsPage />} />
           <Route path="/actions" element={<TenantActionsPage />} />
           <Route path="/brain" element={<BrainAgentRegistryPage />} />
+          <Route path="/downloads" element={<MorosidadPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
 

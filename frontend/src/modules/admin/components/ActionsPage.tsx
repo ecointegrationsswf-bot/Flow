@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Pencil, Trash2, Webhook, Mail, MessageSquare, ToggleLeft, ToggleRight, X, Loader2, Globe, Cog } from 'lucide-react'
+import { Plus, Pencil, Trash2, Webhook, Mail, MessageSquare, ToggleLeft, ToggleRight, X, Loader2, Globe, Cog, Download } from 'lucide-react'
 import {
   useAdminActions,
   useCreateAction,
@@ -23,6 +23,7 @@ const emptyForm: Omit<ActionPayload, 'tenantId'> = {
   sendsEmail: false,
   sendsSms: false,
   isProcess: false,
+  isDelinquencyDownload: false,
   webhookUrl: '',
   webhookMethod: 'POST',
   defaultTriggerConfig: null,
@@ -60,6 +61,7 @@ export function ActionsPage() {
       sendsEmail: a.sendsEmail,
       sendsSms: a.sendsSms,
       isProcess: a.isProcess,
+      isDelinquencyDownload: a.isDelinquencyDownload,
       webhookUrl: a.webhookUrl ?? '',
       webhookMethod: a.webhookMethod ?? 'POST',
       defaultTriggerConfig: a.defaultTriggerConfig,
@@ -383,6 +385,29 @@ export function ActionsPage() {
                   >
                     {form.isProcess ? (
                       <ToggleRight className="h-7 w-7 text-indigo-500" />
+                    ) : (
+                      <ToggleLeft className="h-7 w-7 text-gray-300" />
+                    )}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100">
+                      <Download className="h-4 w-4 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">Descarga de morosidad</p>
+                      <p className="text-xs text-gray-500">Activa esta acción para que aparezca en /admin/morosidad y se procese con el DelinquencyDownloadExecutor</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, isDelinquencyDownload: !form.isDelinquencyDownload })}
+                    className="transition-colors"
+                  >
+                    {form.isDelinquencyDownload ? (
+                      <ToggleRight className="h-7 w-7 text-blue-500" />
                     ) : (
                       <ToggleLeft className="h-7 w-7 text-gray-300" />
                     )}

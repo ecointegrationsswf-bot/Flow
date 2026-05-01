@@ -1,16 +1,17 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
-import { Building2, Bot, Tag, Phone, Users, LogOut, Shield, Zap, FileText, Calendar } from 'lucide-react'
+import { Building2, Bot, Tag, Phone, Users, LogOut, Zap, FileText, Calendar, TrendingDown } from 'lucide-react'
 import { useSuperAdminStore } from '@/shared/stores/superAdminStore'
 
 const adminNav = [
-  { to: '/admin/tenants', icon: Building2, label: 'Tenants' },
-  { to: '/admin/agent-templates', icon: Bot, label: 'Agentes' },
-  { to: '/admin/categories', icon: Tag, label: 'Categorias' },
-  { to: '/admin/whatsapp', icon: Phone, label: 'WhatsApp' },
-  { to: '/admin/actions', icon: Zap, label: 'Acciones' },
-  { to: '/admin/scheduled-jobs', icon: Calendar, label: 'Scheduled Jobs' },
-  { to: '/admin/prompts', icon: FileText, label: 'Prompts' },
-  { to: '/admin/users', icon: Users, label: 'Administradores' },
+  { to: '/admin/tenants',         icon: Building2,   label: 'Tenants'        },
+  { to: '/admin/agent-templates', icon: Bot,         label: 'Agentes'        },
+  { to: '/admin/categories',      icon: Tag,         label: 'Categorias'     },
+  { to: '/admin/whatsapp',        icon: Phone,       label: 'WhatsApp'       },
+  { to: '/admin/actions',         icon: Zap,         label: 'Acciones'       },
+  { to: '/admin/morosidad',       icon: TrendingDown,label: 'Descargas'      },
+  { to: '/admin/scheduled-jobs',  icon: Calendar,    label: 'Scheduled Jobs' },
+  { to: '/admin/prompts',         icon: FileText,    label: 'Prompts'        },
+  { to: '/admin/users',           icon: Users,       label: 'Administradores'},
 ]
 
 export function AdminLayout() {

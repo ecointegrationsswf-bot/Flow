@@ -95,8 +95,12 @@ export function useSetTenantAssignedActions() {
       return data as { assignedActionIds: string[] }
     },
     onSuccess: (_data, variables) => {
+      // Invalida assignments Y el config de webhooks (tab Webhooks usa query separada)
       qc.invalidateQueries({
         queryKey: ['admin', 'tenants', variables.tenantId, 'assignments'],
+      })
+      qc.invalidateQueries({
+        queryKey: ['admin-tenant-actions-config', variables.tenantId],
       })
     },
   })
