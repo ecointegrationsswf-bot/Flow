@@ -4,7 +4,7 @@ import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { MessageBubble } from './MessageBubble'
 import { useConversationDetail, useTakeConversation, useSendReply, useSendFile, useReactivateAgent } from '@/shared/hooks/useMonitor'
 import { usePermissions } from '@/shared/hooks/usePermissions'
-import { format } from 'date-fns'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 interface ConversationDetailPanelProps {
   conversationId: string
@@ -21,6 +21,7 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
 
   const { hasPermission } = usePermissions()
   const canTake = hasPermission('take_conversation')
+  const { time: fmtTime } = useTenantTime()
 
   const { data: conversation, isLoading } = useConversationDetail(conversationId)
   const takeMutation = useTakeConversation()
@@ -82,8 +83,8 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
   const isSending = replyMutation.isPending || fileMutation.isPending
   const displayName = conversation.clientName ?? conversation.clientPhone
 
-  // Get time for header
-  const lastTime = conversation.lastActivityAt ? format(new Date(conversation.lastActivityAt), 'h:mm a') : ''
+  // Get time for header (en zona horaria del tenant)
+  const lastTime = fmtTime(conversation.lastActivityAt)
 
   return (
     <div className="flex h-full flex-col">

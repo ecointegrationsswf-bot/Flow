@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react'
 import { Search } from 'lucide-react'
-import { format, isToday, isYesterday, differenceInMinutes } from 'date-fns'
+import { differenceInMinutes } from 'date-fns'
 import type { ConversationSummary, ConversationStatus } from '@/shared/types'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 interface ConversationListProps {
   conversations: ConversationSummary[]
@@ -24,14 +25,13 @@ function getAvatarBg(name: string) {
   return colors[Math.abs(hash) % colors.length]
 }
 
-function formatTime(dateStr: string) {
-  const d = new Date(dateStr)
-  if (isToday(d)) return format(d, 'h:mm a')
-  if (isYesterday(d)) return 'Ayer'
-  return format(d, 'dd/MM/yyyy')
-}
-
 export function ConversationList({ conversations, selectedId, onSelect }: ConversationListProps) {
+  const tt = useTenantTime()
+  const formatTime = (dateStr: string) => {
+    if (tt.isToday(dateStr))     return tt.time(dateStr)
+    if (tt.isYesterday(dateStr)) return 'Ayer'
+    return tt.date(dateStr)
+  }
   const [search, setSearch] = useState('')
   const [filterAgent, setFilterAgent] = useState('')
   const [filterStatus, setFilterStatus] = useState<ConversationStatus | ''>('')
