@@ -129,6 +129,21 @@ export function CampaignTemplateFormPage() {
   useEffect(() => {
     if (!existing) return
     if (existing.followUpHours.length > 0) setFollowUpHours(existing.followUpHours)
+    // Sincronizar mensajes paralelos a las horas. Sin esto, el state local arranca
+    // con [] cuando el template carga async y los textos previos no aparecen en los inputs,
+    // lo que provoca que al guardar se mande null y se pierdan.
+    if (existing.followUpMessagesJson) {
+      try {
+        const parsed = JSON.parse(existing.followUpMessagesJson)
+        if (Array.isArray(parsed)) {
+          const normalized = parsed.map(s => String(s ?? ''))
+          while (normalized.length < existing.followUpHours.length) normalized.push('')
+          setFollowUpMessages(normalized.slice(0, existing.followUpHours.length))
+        }
+      } catch { /* ignore parse errors */ }
+    } else if (existing.followUpHours.length > 0) {
+      setFollowUpMessages(existing.followUpHours.map(() => ''))
+    }
     if (existing.labelIds.length > 0) setSelectedLabelIds(existing.labelIds)
     if (existing.actionIds.length > 0) setSelectedActionIds(existing.actionIds)
     if (existing.promptTemplateIds.length > 0) setSelectedPromptIds(existing.promptTemplateIds)
