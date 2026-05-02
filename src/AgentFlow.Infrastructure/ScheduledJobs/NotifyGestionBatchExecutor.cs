@@ -27,6 +27,7 @@ namespace AgentFlow.Infrastructure.ScheduledJobs;
 public class NotifyGestionBatchExecutor(
     AgentFlowDbContext db,
     IActionExecutorService actionExecutor,
+    IJobExecutionItemRepository itemRepo,
     ILogger<NotifyGestionBatchExecutor> log) : IScheduledJobExecutor
 {
     public string Slug => "NOTIFY_GESTION";
@@ -80,6 +81,16 @@ public class NotifyGestionBatchExecutor(
         var sent = 0;
         var failed = 0;
         var errorMessages = new List<string>();
+        // Solo persistimos items para fallos: con cientos de conversaciones por corrida
+        // duplicar la fila Success en items inflaría la tabla sin valor accionable.
+        var failedItems = new List<ScheduledWebhookJobExecutionItem>();
+
+        // Resolver nombre del cliente para mostrar en la UI cuando falla.
+        var convIds = pending.Select(p => p.Id).ToList();
+        var convNames = await db.Conversations
+            .Where(c => convIds.Contains(c.Id))
+            .Select(c => new { c.Id, c.ClientName, c.ClientPhone })
+            .ToDictionaryAsync(c => c.Id, c => c.ClientName ?? c.ClientPhone, ct);
 
         foreach (var p in pending)
         {
@@ -89,6 +100,7 @@ public class NotifyGestionBatchExecutor(
                 ? (Guid?)tplId
                 : null;
 
+            var startedAt = DateTime.UtcNow;
             try
             {
                 var result = await actionExecutor.ExecuteAsync(
@@ -110,6 +122,21 @@ public class NotifyGestionBatchExecutor(
                     var msg = $"conv {p.Id}: {result.ErrorMessage ?? "sin detalle"}";
                     if (errorMessages.Count < 5) errorMessages.Add(msg);
                     log.LogWarning("NotifyGestionBatch falló para conv {Conv}: {Err}", p.Id, result.ErrorMessage);
+
+                    if (ctx.ExecutionId is Guid execId)
+                    {
+                        failedItems.Add(new ScheduledWebhookJobExecutionItem
+                        {
+                            ExecutionId  = execId,
+                            TenantId     = p.TenantId,
+                            ContextType  = "Conversation",
+                            ContextId    = p.Id.ToString(),
+                            ContextLabel = convNames.TryGetValue(p.Id, out var lbl) ? lbl : p.ClientPhone,
+                            Status       = "Failed",
+                            ErrorMessage = result.ErrorMessage ?? "sin detalle",
+                            DurationMs   = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds,
+                        });
+                    }
                 }
             }
             catch (Exception ex)
@@ -117,8 +144,26 @@ public class NotifyGestionBatchExecutor(
                 failed++;
                 if (errorMessages.Count < 5) errorMessages.Add($"conv {p.Id}: {ex.Message}");
                 log.LogError(ex, "NotifyGestionBatch: excepción procesando conv {Conv}.", p.Id);
+
+                if (ctx.ExecutionId is Guid execId)
+                {
+                    failedItems.Add(new ScheduledWebhookJobExecutionItem
+                    {
+                        ExecutionId  = execId,
+                        TenantId     = p.TenantId,
+                        ContextType  = "Conversation",
+                        ContextId    = p.Id.ToString(),
+                        ContextLabel = convNames.TryGetValue(p.Id, out var lbl) ? lbl : p.ClientPhone,
+                        Status       = "Failed",
+                        ErrorMessage = ex.Message,
+                        DurationMs   = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds,
+                    });
+                }
             }
         }
+
+        try { await itemRepo.AddBatchAsync(failedItems, ct); }
+        catch (Exception ex) { log.LogWarning(ex, "NotifyGestionBatch: no se pudieron persistir items de auditoría."); }
 
         var summary = $"Total={pending.Count} · Enviadas={sent} · Fallos={failed}";
         if (errorMessages.Count > 0) summary += " · Errores: " + string.Join(" | ", errorMessages);

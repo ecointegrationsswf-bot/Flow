@@ -104,6 +104,8 @@ builder.Services.AddScoped<IScheduledJobRepository,
     AgentFlow.Infrastructure.Persistence.Repositories.ScheduledJobRepository>();
 builder.Services.AddScoped<IJobExecutionRepository,
     AgentFlow.Infrastructure.Persistence.Repositories.JobExecutionRepository>();
+builder.Services.AddScoped<IJobExecutionItemRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.JobExecutionItemRepository>();
 builder.Services.AddScoped<IWebhookEventDispatcher,
     AgentFlow.Infrastructure.ScheduledJobs.WebhookEventDispatcher>();
 

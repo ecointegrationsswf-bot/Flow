@@ -125,6 +125,8 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobRepository,
     AgentFlow.Infrastructure.Persistence.Repositories.ScheduledJobRepository>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IJobExecutionRepository,
     AgentFlow.Infrastructure.Persistence.Repositories.JobExecutionRepository>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IJobExecutionItemRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.JobExecutionItemRepository>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWebhookEventDispatcher,
     AgentFlow.Infrastructure.ScheduledJobs.WebhookEventDispatcher>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
@@ -713,6 +715,29 @@ try
                     CONSTRAINT FK_SWJE_Job FOREIGN KEY (JobId) REFERENCES ScheduledWebhookJobs(Id) ON DELETE CASCADE
                 );
                 CREATE INDEX IX_SWJE_Job_Started ON ScheduledWebhookJobExecutions (JobId, StartedAt);
+            END");
+        // Detalle granular por sub-item (tenant/conversación/usuario) de cada ejecución.
+        // Permite mostrar atribución por item en la UI cuando un job AllTenants falla
+        // solo en algunos sub-elementos.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ScheduledWebhookJobExecutionItems')
+            BEGIN
+                CREATE TABLE ScheduledWebhookJobExecutionItems (
+                    Id              uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    ExecutionId     uniqueidentifier NOT NULL,
+                    TenantId        uniqueidentifier NULL,
+                    ContextType     nvarchar(30) NOT NULL,
+                    ContextId       nvarchar(200) NULL,
+                    ContextLabel    nvarchar(300) NULL,
+                    Status          nvarchar(20) NOT NULL,
+                    ErrorMessage    nvarchar(MAX) NULL,
+                    DurationMs      int NULL,
+                    CreatedAt       datetime2 NOT NULL,
+                    CONSTRAINT FK_SWJEI_Execution FOREIGN KEY (ExecutionId)
+                        REFERENCES ScheduledWebhookJobExecutions(Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IX_SWJEI_Execution_Status ON ScheduledWebhookJobExecutionItems (ExecutionId, Status);
+                CREATE INDEX IX_SWJEI_Tenant ON ScheduledWebhookJobExecutionItems (TenantId);
             END");
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionDefinitions') AND name = 'ScheduleConfig')

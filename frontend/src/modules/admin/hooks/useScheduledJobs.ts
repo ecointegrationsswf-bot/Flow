@@ -47,6 +47,19 @@ export interface JobExecution {
   contextId: string | null
 }
 
+export interface JobExecutionItem {
+  id: string
+  executionId: string
+  tenantId: string | null
+  contextType: string         // Tenant | Conversation | Campaign | User | Template
+  contextId: string | null
+  contextLabel: string | null
+  status: string              // Success | Failed | Skipped
+  errorMessage: string | null
+  durationMs: number | null
+  createdAt: string
+}
+
 export interface CronPreview {
   valid: boolean
   nextOccurrencesUtc?: string[]
@@ -78,6 +91,19 @@ export function useScheduledJobExecutions(jobId: string | null) {
     enabled: !!jobId,
     queryFn: async () => {
       const { data } = await adminClient.get<JobExecution[]>(`/scheduled-jobs/${jobId}/executions`)
+      return data
+    },
+  })
+}
+
+export function useScheduledJobExecutionItems(executionId: string | null) {
+  return useQuery({
+    queryKey: ['scheduled-jobs', 'execution-items', executionId],
+    enabled: !!executionId,
+    queryFn: async () => {
+      const { data } = await adminClient.get<JobExecutionItem[]>(
+        `/scheduled-jobs/executions/${executionId}/items`,
+      )
       return data
     },
   })

@@ -29,6 +29,7 @@ public record CronPreviewRequest(string Expression);
 public class ScheduledJobsController(
     IScheduledJobRepository jobs,
     IJobExecutionRepository executions,
+    IJobExecutionItemRepository executionItems,
     AgentFlowDbContext db) : ControllerBase
 {
     [HttpGet]
@@ -142,6 +143,30 @@ public class ScheduledJobsController(
     {
         var hist = await executions.GetRecentByJobAsync(id, take, ct);
         return Ok(hist);
+    }
+
+    /// <summary>
+    /// Detalle granular de una ejecución: una fila por sub-item procesado
+    /// (tenant, conversación, usuario...). Permite a la UI mostrar qué falló
+    /// dentro de un PartialFailure sin tener que cruzar a logs externos.
+    /// </summary>
+    [HttpGet("executions/{executionId:guid}/items")]
+    public async Task<IActionResult> ExecutionItems(Guid executionId, CancellationToken ct = default)
+    {
+        var items = await executionItems.GetByExecutionAsync(executionId, ct);
+        return Ok(items.Select(i => new
+        {
+            i.Id,
+            i.ExecutionId,
+            i.TenantId,
+            i.ContextType,
+            i.ContextId,
+            i.ContextLabel,
+            i.Status,
+            i.ErrorMessage,
+            i.DurationMs,
+            i.CreatedAt,
+        }));
     }
 
     [HttpPost("preview-cron")]

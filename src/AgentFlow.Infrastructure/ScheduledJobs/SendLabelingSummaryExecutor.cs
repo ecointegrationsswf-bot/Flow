@@ -31,6 +31,7 @@ public class SendLabelingSummaryExecutor(
     AgentFlowDbContext db,
     IBlobStorageService blobStorage,
     IEmailService emailService,
+    IJobExecutionItemRepository itemRepo,
     ILogger<SendLabelingSummaryExecutor> log) : IScheduledJobExecutor
 {
     public string Slug => "SEND_LABELING_SUMMARY";
@@ -69,6 +70,7 @@ public class SendLabelingSummaryExecutor(
         var totalUsers = byUser.Count;
         var sent = 0;
         var failed = 0;
+        var items = new List<ScheduledWebhookJobExecutionItem>();
 
         foreach (var group in byUser)
         {
@@ -105,11 +107,30 @@ public class SendLabelingSummaryExecutor(
                 if (sa is not null) user = sa;
             }
 
+            // El TenantId del grupo: tomamos el del primer campaign para tagging del item.
+            // Nota: si un usuario carga campañas de varios tenants, el item se atribuye al primero.
+            var groupTenantId = group.Select(g => g.TenantId).FirstOrDefault();
+            var startedAt = DateTime.UtcNow;
+
             if (user is null || string.IsNullOrEmpty(user.Email))
             {
                 log.LogWarning("Summary: usuario '{UserKey}' no encontrado o sin email — {Count} campañas omitidas.",
                     key, group.Count());
                 failed++;
+                if (ctx.ExecutionId is Guid execIdNoUser)
+                {
+                    items.Add(new ScheduledWebhookJobExecutionItem
+                    {
+                        ExecutionId  = execIdNoUser,
+                        TenantId     = groupTenantId,
+                        ContextType  = "User",
+                        ContextId    = key,
+                        ContextLabel = key,
+                        Status       = "Failed",
+                        ErrorMessage = $"Usuario '{key}' no encontrado en AppUsers ni SuperAdmins, o sin email — {group.Count()} campañas omitidas.",
+                        DurationMs   = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds,
+                    });
+                }
                 continue;
             }
 
@@ -142,13 +163,43 @@ public class SendLabelingSummaryExecutor(
                 log.LogInformation("Summary: enviado a {Email} con {Count} campañas. URL={Url}",
                     user.Email, campaignIds.Count, url);
                 sent++;
+                if (ctx.ExecutionId is Guid execIdOk)
+                {
+                    items.Add(new ScheduledWebhookJobExecutionItem
+                    {
+                        ExecutionId  = execIdOk,
+                        TenantId     = groupTenantId,
+                        ContextType  = "User",
+                        ContextId    = user.Email,
+                        ContextLabel = $"{user.FullName} <{user.Email}>",
+                        Status       = "Success",
+                        DurationMs   = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds,
+                    });
+                }
             }
             catch (Exception ex)
             {
                 log.LogError(ex, "Summary: error procesando usuario {UserKey}.", group.Key);
                 failed++;
+                if (ctx.ExecutionId is Guid execIdEx)
+                {
+                    items.Add(new ScheduledWebhookJobExecutionItem
+                    {
+                        ExecutionId  = execIdEx,
+                        TenantId     = groupTenantId,
+                        ContextType  = "User",
+                        ContextId    = user.Email,
+                        ContextLabel = $"{user.FullName} <{user.Email}>",
+                        Status       = "Failed",
+                        ErrorMessage = ex.ToString(), // stack completo — antes se perdía y solo iba al Event Log
+                        DurationMs   = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds,
+                    });
+                }
             }
         }
+
+        try { await itemRepo.AddBatchAsync(items, ct); }
+        catch (Exception ex) { log.LogWarning(ex, "SendLabelingSummary: no se pudieron persistir items de auditoría."); }
 
         var summary = $"Usuarios procesados={totalUsers} · OK={sent} · Fallos={failed}";
         log.LogInformation("SendLabelingSummary completo: {Summary}", summary);
