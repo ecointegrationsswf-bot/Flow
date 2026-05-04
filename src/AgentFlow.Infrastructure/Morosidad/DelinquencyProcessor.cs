@@ -163,16 +163,40 @@ public class DelinquencyProcessor(
                 group.TotalAmount += item.Amount ?? 0;
                 group.ItemCount++;
 
-                // Construir registro para ContactDataJson — mismo shape que FixedFormatCampaignService
+                // Construir registro para ContactDataJson — mismo shape que FixedFormatCampaignService.
+                // Estrategia: incluir TODAS las propiedades del JSON original descargado para
+                // que Claude tenga acceso a cualquier campo que el prompt del template necesite
+                // (ej: "telefono ejecutivo de Cobro", "Ramo", "Link de pago", etc.). Después los
+                // mapeados sobrescriben/agregan con sus ColumnKey legibles definidos por el admin.
                 var registro = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
                 {
                     ["NombreCliente"] = item.ClientName ?? string.Empty,
                     ["KeyValue"]      = item.KeyValue ?? string.Empty,
                     ["KeyValueLabel"] = keyValueLabel
                 };
+
+                // 1) Volcar TODAS las propiedades del JSON original — sin filtrar por mapping.
+                if (element.ValueKind == JsonValueKind.Object)
+                {
+                    foreach (var prop in element.EnumerateObject())
+                    {
+                        var stringValue = prop.Value.ValueKind switch
+                        {
+                            JsonValueKind.String => prop.Value.GetString(),
+                            JsonValueKind.Null   => null,
+                            JsonValueKind.True   => "true",
+                            JsonValueKind.False  => "false",
+                            JsonValueKind.Number => prop.Value.ToString(),
+                            _                    => prop.Value.GetRawText()
+                        };
+                        if (!string.IsNullOrEmpty(stringValue))
+                            registro[prop.Name] = stringValue;
+                    }
+                }
+
+                // 2) Los mapeados sobrescriben con su ColumnKey legible (alias del admin).
                 foreach (var kv in extracted)
                 {
-                    // Saltar los que ya están como semánticos para no duplicar
                     if (kv.Key == phoneMapping.ColumnKey ||
                         kv.Key == nameMapping.ColumnKey  ||
                         kv.Key == keyValueMapping.ColumnKey)
