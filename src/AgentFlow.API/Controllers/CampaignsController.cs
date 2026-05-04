@@ -37,7 +37,6 @@ public class CampaignsController(
     IFixedFormatCampaignService fixedFormatService,
     IBlobStorageService blobStorage,
     ICampaignRepository campaignRepo,
-    ICampaignLauncher campaignLauncher,
     AgentFlowDbContext db,
     IConfiguration cfg,
     IHttpClientFactory httpClientFactory) : ControllerBase
@@ -419,19 +418,14 @@ public class CampaignsController(
     }
 
     /// <summary>
-    /// Lanza una campaña creada: valida los requisitos, marca el estado
-    /// y dispara el webhook de n8n para iniciar el procesamiento.
+    /// Lanza una campaña creada. Internamente delega al flujo v2 (CampaignWorker
+    /// en el Worker Service); el frontend conserva la URL <c>/launch</c> para no
+    /// requerir cambios en el cliente. Mantiene shape de respuesta compatible con
+    /// el contrato anterior (campaignId, status, pendingContacts, launchedAt).
     /// </summary>
     [HttpPost("{id:guid}/launch")]
     public async Task<IActionResult> Launch(Guid id, CancellationToken ct)
     {
-        // Verificar tenancy antes de delegar al servicio (el launcher no filtra por tenant
-        // porque también lo invocan procesos automáticos del sistema).
-        var belongsToTenant = await db.Campaigns
-            .AnyAsync(c => c.Id == id && c.TenantId == tenantCtx.TenantId, ct);
-        if (!belongsToTenant)
-            return NotFound(new { error = "Campaña no encontrada." });
-
         var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
                      ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         string? launcherPhone = null;
@@ -441,15 +435,27 @@ public class CampaignsController(
             launcherPhone = launcher?.NotifyPhone;
         }
 
-        var result = await campaignLauncher.LaunchAsync(id, CurrentUser, launcherPhone, ct);
+        var result = await mediator.Send(new LaunchCampaignV2Command(
+            CampaignId: id,
+            TenantId: tenantCtx.TenantId,
+            LaunchedByUserId: CurrentUser,
+            LaunchedByUserPhone: launcherPhone,
+            WarmupDay: 0
+        ), ct);
+
         if (!result.Success)
+        {
+            // 404 si la campaña no pertenece al tenant; 400 para el resto de fallos.
+            if (string.Equals(result.Status, "NotFound", StringComparison.Ordinal))
+                return NotFound(new { error = result.Error });
             return BadRequest(new { error = result.Error });
+        }
 
         return Ok(new
         {
             campaignId      = result.CampaignId,
             status          = result.Status,
-            pendingContacts = result.PendingContacts,
+            pendingContacts = result.QueuedCount + result.DeferredCount,
             launchedAt      = result.LaunchedAt,
         });
     }

@@ -1,9 +1,11 @@
 using System.Text.Json;
+using AgentFlow.Application.Modules.Campaigns.LaunchV2;
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Helpers;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Persistence;
+using MediatR;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
@@ -20,7 +22,7 @@ namespace AgentFlow.Infrastructure.Morosidad;
 /// </summary>
 public class DelinquencyProcessor(
     AgentFlowDbContext db,
-    ICampaignLauncher campaignLauncher,
+    IMediator mediator,
     ILogger<DelinquencyProcessor> logger) : IDelinquencyProcessor
 {
     public async Task<Guid> ProcessAsync(
@@ -201,26 +203,31 @@ public class DelinquencyProcessor(
                 if (campaignId.HasValue)
                 {
                     execution.CampaignsCreated = 1;
-                    // Persistir antes de lanzar para que el launcher vea la campaña + contactos.
+                    // Persistir antes de lanzar para que el handler vea la campaña + contactos.
                     await db.SaveChangesAsync(ct);
 
-                    // Auto-lanzar — el ejecutivo no debe presionar "Lanzar" para descargas automáticas.
-                    var launchResult = await campaignLauncher.LaunchAsync(
-                        campaignId.Value,
-                        launchedByUserId: "system:download",
-                        launchedByUserPhone: null,
-                        ct);
+                    // Auto-lanzar v2 (en proceso, sin n8n) — el ejecutivo no debe presionar
+                    // "Lanzar" para descargas automáticas. El CampaignWorker procesa los Queued.
+                    var launchResult = await mediator.Send(new LaunchCampaignV2Command(
+                        CampaignId: campaignId.Value,
+                        TenantId: tenantId,
+                        LaunchedByUserId: "system:download",
+                        LaunchedByUserPhone: null,
+                        WarmupDay: 0
+                    ), ct);
 
                     if (!launchResult.Success)
                     {
-                        logger.LogError("[Download] Auto-launch falló para campaign {CampaignId}: {Error}",
+                        logger.LogError("[Download] Auto-launch v2 falló para campaign {CampaignId}: {Error}",
                             campaignId, launchResult.Error);
-                        execution.ErrorMessage = $"Campaña creada pero el auto-launch falló: {launchResult.Error}";
+                        execution.ErrorMessage = $"Campaña creada pero el auto-launch v2 falló: {launchResult.Error}";
                     }
                     else
                     {
-                        logger.LogInformation("[Download] Campaign {CampaignId} auto-lanzada — status={Status}, pending={Pending}",
-                            campaignId, launchResult.Status, launchResult.PendingContacts);
+                        logger.LogInformation(
+                            "[Download] Campaign {CampaignId} auto-lanzada v2 — queued={Queued}, deferred={Deferred}, duplicate={Duplicate}, skipped={Skipped}",
+                            campaignId, launchResult.QueuedCount, launchResult.DeferredCount,
+                            launchResult.DuplicateCount, launchResult.SkippedCount);
                     }
                 }
             }
