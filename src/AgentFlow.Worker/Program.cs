@@ -144,6 +144,13 @@ builder.Services.AddScoped<IScheduledJobExecutor,
 builder.Services.AddHostedService<
     AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
 
+// ── Campaign Dispatcher v2 (orquestación de campañas en proceso, sin n8n) ─
+// El CampaignDispatcherService se reusa con cambios v2 (Queued + claim atómico).
+// El CampaignWorker es el BackgroundService que tick cada 30s y procesa por tenant.
+builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
+builder.Services.AddHostedService<
+    AgentFlow.Worker.Campaigns.Orchestration.CampaignWorker>();
+
 // ── Run ──────────────────────────────────────────────────
 var host = builder.Build();
 Console.WriteLine("[Worker] AgentFlow.Worker arrancando…");

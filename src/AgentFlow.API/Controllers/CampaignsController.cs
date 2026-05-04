@@ -143,27 +143,26 @@ public class CampaignsController(
     }
 
     /// <summary>
-    /// Lanza el envío de una campaña. Programa un job en Hangfire
-    /// que enviará los mensajes de forma controlada (anti-ban).
+    /// Lanza el envío de una campaña. Internamente delega al flujo v2 (CampaignWorker
+    /// en el Worker Service) — el endpoint queda como alias por compatibilidad con
+    /// clientes existentes. El parámetro <c>warmupDay</c> es opcional (default 0).
     /// </summary>
     [HttpPost("{id:guid}/start")]
-    public IActionResult StartCampaign(
+    public async Task<IActionResult> StartCampaign(
         Guid id,
-        [FromServices] Hangfire.IBackgroundJobClient? jobClient)
+        [FromQuery] int warmupDay = 0,
+        CancellationToken ct = default)
     {
-        if (jobClient is null)
-            return StatusCode(503, new { error = "Hangfire no disponible. El envío masivo requiere Hangfire." });
+        var phone = User.FindFirst("phone")?.Value;
+        var result = await mediator.Send(new LaunchCampaignV2Command(
+            CampaignId: id,
+            TenantId: tenantCtx.TenantId,
+            LaunchedByUserId: CurrentUser,
+            LaunchedByUserPhone: phone,
+            WarmupDay: warmupDay
+        ), ct);
 
-        // Programar el primer lote inmediatamente
-        var jobId = jobClient.Enqueue<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>(
-            job => job.ExecuteAsync(id, CancellationToken.None));
-
-        return Ok(new
-        {
-            message = "Campaña iniciada. Los mensajes se enviarán de forma controlada.",
-            hangfireJobId = jobId,
-            campaignId = id
-        });
+        return result.Success ? Ok(result) : BadRequest(result);
     }
 
     /// <summary>
@@ -182,21 +181,19 @@ public class CampaignsController(
     }
 
     /// <summary>
-    /// Reactiva una campaña pausada.
+    /// Reactiva una campaña pausada. Solo marca <c>IsActive=true</c>; el CampaignWorker
+    /// la recoge en el próximo tick (≤30s) si está en estado Running.
     /// </summary>
     [HttpPost("{id:guid}/resume")]
-    public IActionResult ResumeCampaign(
-        Guid id,
-        [FromServices] Hangfire.IBackgroundJobClient? jobClient)
+    public async Task<IActionResult> ResumeCampaign(Guid id, CancellationToken ct)
     {
-        if (jobClient is null)
-            return StatusCode(503, new { error = "Hangfire no disponible." });
+        var campaign = await campaignRepo.GetByIdAsync(id, tenantCtx.TenantId, ct);
+        if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
 
-        // Reactivar: el job verificará si la campaña está activa
-        var jobId = jobClient.Enqueue<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>(
-            job => job.ExecuteAsync(id, CancellationToken.None));
+        campaign.IsActive = true;
+        await campaignRepo.UpdateAsync(campaign, ct);
 
-        return Ok(new { message = "Campaña reactivada.", hangfireJobId = jobId });
+        return Ok(new { message = "Campaña reactivada. El Worker la recogerá en el próximo tick." });
     }
 
     [HttpPost("parse")]
