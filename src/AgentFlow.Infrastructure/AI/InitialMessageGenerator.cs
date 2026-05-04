@@ -64,15 +64,21 @@ public class InitialMessageGenerator(
             return null;
         }
 
-        // ContactDataJson — si el StartCampaignCommandHandler no lo pobló (o es flujo
-        // SQL directo), lo construimos a partir de los campos directos del contact.
-        // Este JSON es el que el system prompt del template espera ver en el user message.
-        var effectiveJson = string.IsNullOrWhiteSpace(contact.ContactDataJson)
-            ? BuildJsonFromContact(contact)
-            : contact.ContactDataJson;
+        // ContactDataJson DEBE venir poblado por el upstream (FixedFormatCampaignService
+        // o DelinquencyProcessor) con todas las columnas del Excel. Si está vacío es
+        // síntoma de un bug en el flujo de carga — no inventamos un JSON sintético acá
+        // porque eso oculta el problema y produce mensajes con placeholders sin resolver.
+        if (string.IsNullOrWhiteSpace(contact.ContactDataJson))
+        {
+            logger.LogWarning(
+                "Campaign {Id}: contact {Phone} sin ContactDataJson — fallback al template básico. " +
+                "Revisar upstream (FixedFormatCampaignService/DelinquencyProcessor) que debe poblar este campo.",
+                campaign.Id, contact.PhoneNumber);
+            return null;
+        }
 
         // Contexto = registros del JSON + campos directos del contact (resuelve {{NombreCliente}} etc.).
-        var ctx = BuildContext(effectiveJson);
+        var ctx = BuildContext(contact.ContactDataJson);
         ctx.TryAdd("NombreCliente",  contact.ClientName    ?? "");
         ctx.TryAdd("NumeroPoliza",   contact.PolicyNumber  ?? "");
         ctx.TryAdd("MontoDeuda",     contact.PendingAmount?.ToString("F2") ?? "0.00");
@@ -81,7 +87,7 @@ public class InitialMessageGenerator(
         ctx.TryAdd("Email",          contact.Email ?? "");
 
         var resolvedPrompt = ResolveVariables(prompt, ctx);
-        var userMsg = BuildUserMessage(effectiveJson, ctx);
+        var userMsg = BuildUserMessage(contact.ContactDataJson, ctx);
 
         try
         {
