@@ -64,15 +64,24 @@ public class InitialMessageGenerator(
             return null;
         }
 
-        // Contexto = registros de ContactDataJson + campos directos del contact.
-        var ctx = BuildContext(contact.ContactDataJson);
+        // ContactDataJson — si el StartCampaignCommandHandler no lo pobló (o es flujo
+        // SQL directo), lo construimos a partir de los campos directos del contact.
+        // Este JSON es el que el system prompt del template espera ver en el user message.
+        var effectiveJson = string.IsNullOrWhiteSpace(contact.ContactDataJson)
+            ? BuildJsonFromContact(contact)
+            : contact.ContactDataJson;
+
+        // Contexto = registros del JSON + campos directos del contact (resuelve {{NombreCliente}} etc.).
+        var ctx = BuildContext(effectiveJson);
         ctx.TryAdd("NombreCliente",  contact.ClientName    ?? "");
         ctx.TryAdd("NumeroPoliza",   contact.PolicyNumber  ?? "");
         ctx.TryAdd("MontoDeuda",     contact.PendingAmount?.ToString("F2") ?? "0.00");
         ctx.TryAdd("Aseguradora",    contact.InsuranceCompany ?? "");
+        ctx.TryAdd("Celular",        contact.PhoneNumber);
+        ctx.TryAdd("Email",          contact.Email ?? "");
 
         var resolvedPrompt = ResolveVariables(prompt, ctx);
-        var userMsg = BuildUserMessage(contact.ContactDataJson, ctx);
+        var userMsg = BuildUserMessage(effectiveJson, ctx);
 
         try
         {
@@ -148,5 +157,32 @@ public class InitialMessageGenerator(
             return sb.ToString();
         }
         catch { return "Redacta el mensaje para el cliente con los datos disponibles."; }
+    }
+
+    /// <summary>
+    /// Construye un ContactDataJson sintético cuando el contact no lo trae poblado.
+    /// Garantiza que el user message que recibe Claude SIEMPRE contiene los datos
+    /// del cliente (cuando existen) — evita que Claude responda "necesito el JSON".
+    /// El formato es el mismo que produce n8n / FixedFormatCampaignService:
+    /// un array JSON de 1 elemento con los campos disponibles.
+    /// </summary>
+    private static string BuildJsonFromContact(CampaignContact contact)
+    {
+        var data = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+
+        if (!string.IsNullOrWhiteSpace(contact.ClientName))      data["NombreCliente"]    = contact.ClientName;
+        if (!string.IsNullOrWhiteSpace(contact.PhoneNumber))     data["Celular"]          = contact.PhoneNumber;
+        if (!string.IsNullOrWhiteSpace(contact.Email))           data["Email"]            = contact.Email;
+        if (!string.IsNullOrWhiteSpace(contact.PolicyNumber))    data["NumeroPoliza"]     = contact.PolicyNumber;
+        if (!string.IsNullOrWhiteSpace(contact.InsuranceCompany)) data["Aseguradora"]     = contact.InsuranceCompany;
+        if (contact.PendingAmount is decimal amt && amt > 0)     data["MontoDeuda"]       = amt.ToString("F2");
+
+        // ExtraData del archivo (columnas adicionales mapeadas como diccionario plano).
+        if (contact.ExtraData is { Count: > 0 })
+            foreach (var (k, v) in contact.ExtraData)
+                data.TryAdd(k, v);
+
+        // Array de 1 elemento — formato consistente con ContactDataJson real.
+        return JsonSerializer.Serialize(new[] { data });
     }
 }
