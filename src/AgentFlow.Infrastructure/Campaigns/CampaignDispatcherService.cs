@@ -136,9 +136,13 @@ public class CampaignDispatcherService(
         if (candidateIds.Count == 0)
         {
             // No quedan Queued elegibles. ¿Ya completamos todo o sólo estamos en pausa?
+            // IMPORTANTE: incluimos Pending — son contactos legacy v1 que aún no pasaron
+            // por el intake v2. Si los hay, NO marcamos Completed: la campaña está en
+            // un flujo legacy y no nos toca cerrarla.
             var hasMore = await db.CampaignContacts
                 .AnyAsync(cc => cc.CampaignId == campaignId
-                             && (cc.DispatchStatus == DispatchStatus.Queued
+                             && (cc.DispatchStatus == DispatchStatus.Pending
+                                 || cc.DispatchStatus == DispatchStatus.Queued
                                  || cc.DispatchStatus == DispatchStatus.Claimed
                                  || cc.DispatchStatus == DispatchStatus.Retry
                                  || cc.DispatchStatus == DispatchStatus.Deferred), ct);
