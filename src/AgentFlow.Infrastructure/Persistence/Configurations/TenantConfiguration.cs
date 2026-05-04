@@ -25,6 +25,10 @@ public class TenantConfiguration : IEntityTypeConfiguration<Tenant>
         b.Property(t => t.SendGridApiKey).HasMaxLength(500);
         b.Property(t => t.SenderEmail).HasMaxLength(200);
         b.Property(t => t.CampaignMessageDelaySeconds).HasDefaultValue(10);
+        b.Property(t => t.CampaignMessagesPerMinute).HasDefaultValue(6);
+        b.Property(t => t.CampaignMaxPerHour).HasDefaultValue(200);
+        b.Property(t => t.CampaignMaxPerDay).HasDefaultValue(1000);
+        b.Property(t => t.CampaignDispatchEnabled).HasDefaultValue(true);
 
         // AssignedPromptIds: JSON serializado. Si está vacío el tenant ve todos los prompts (retrocompat).
         b.Property(t => t.AssignedPromptIds)

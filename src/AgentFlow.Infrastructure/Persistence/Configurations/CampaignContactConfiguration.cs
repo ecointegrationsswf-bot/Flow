@@ -28,5 +28,9 @@ public class CampaignContactConfiguration : IEntityTypeConfiguration<CampaignCon
         b.Property(c => c.DispatchError).HasMaxLength(2000);
         b.Property(c => c.FollowUpsSentJson).HasMaxLength(200).HasDefaultValueSql("'[]'");
         b.HasIndex(c => new { c.CampaignId, c.DispatchStatus, c.ClaimedAt });
+
+        // Índice para el query del CampaignWorker:
+        // SELECT contactos donde DispatchStatus IN (Queued, Retry) y (ScheduledFor IS NULL OR ScheduledFor <= now).
+        b.HasIndex(c => new { c.DispatchStatus, c.ScheduledFor });
     }
 }

@@ -50,4 +50,11 @@ public class CampaignContact
     public string? GeneratedMessage { get; set; }       // Mensaje final enviado (auditoría)
     public string? ExternalMessageId { get; set; }      // ID de UltraMsg
     public string? DispatchError { get; set; }          // Detalle del último error
+
+    /// <summary>
+    /// Cuándo el CampaignWorker puede tomar este contacto. NULL = inmediato.
+    /// Lo usa el Intake para diferir contactos que excedieron el warm-up del día
+    /// (ScheduledFor = mañana a las BusinessHoursStart del tenant).
+    /// </summary>
+    public DateTime? ScheduledFor { get; set; }
 }

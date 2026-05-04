@@ -43,6 +43,31 @@ public class Tenant
     public int CampaignMessageDelaySeconds { get; set; } = 10;
 
     /// <summary>
+    /// Tope de mensajes por minuto que el CampaignWorker puede emitir para este tenant.
+    /// Default 6 (un mensaje cada 10s, alineado con CampaignMessageDelaySeconds).
+    /// </summary>
+    public int CampaignMessagesPerMinute { get; set; } = 6;
+
+    /// <summary>
+    /// Tope de mensajes por hora por tenant. Reemplaza la constante hardcoded
+    /// MaxPerHour=200 en CampaignDispatcherService cuando se migra al worker v2.
+    /// </summary>
+    public int CampaignMaxPerHour { get; set; } = 200;
+
+    /// <summary>
+    /// Tope diario de mensajes por tenant. Aplica al total enviado por todas las
+    /// campañas activas del tenant en el día calendario (timezone del tenant).
+    /// </summary>
+    public int CampaignMaxPerDay { get; set; } = 1000;
+
+    /// <summary>
+    /// Off-switch del despacho v2 a nivel tenant. Cuando es false, el CampaignWorker
+    /// ignora las campañas de este tenant aunque estén en estado Running.
+    /// Útil para pausar emergencias sin tocar el estado de las campañas.
+    /// </summary>
+    public bool CampaignDispatchEnabled { get; set; } = true;
+
+    /// <summary>
     /// Tiempo de espera (debounce) para agrupar mensajes entrantes del mismo cliente
     /// antes de procesarlos con el agente. Evita que el agente responda mensaje por
     /// mensaje cuando el cliente escribe por partes (ej: "hola", "cómo estás?",
