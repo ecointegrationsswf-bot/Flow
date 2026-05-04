@@ -76,7 +76,31 @@ public class CampaignDispatcherService(
             return new DispatchResult(0, 0, "Dispatch deshabilitado por tenant", DispatchStopReason.CampaignInactive);
         }
 
-        // ── 2. Verificar horario de oficina ──────────────
+        // ── 2. Cierre temprano: si NO queda ningún contacto en estado in-flight, la
+        //      campaña ya terminó. Marcamos Completed independientemente del horario
+        //      de oficina — cerrar una campaña terminada no es lo mismo que enviar.
+        var hasActive = await db.CampaignContacts.AnyAsync(cc => cc.CampaignId == campaignId
+                            && (cc.DispatchStatus == DispatchStatus.Pending
+                                || cc.DispatchStatus == DispatchStatus.Queued
+                                || cc.DispatchStatus == DispatchStatus.Claimed
+                                || cc.DispatchStatus == DispatchStatus.Retry
+                                || cc.DispatchStatus == DispatchStatus.Deferred), ct);
+        if (!hasActive)
+        {
+            campaign.CompletedAt = DateTime.UtcNow;
+            campaign.Status = CampaignStatus.Completed;
+            campaign.IsActive = false;
+            await db.SaveChangesAsync(ct);
+
+            logger.LogInformation("Campaña {CampaignId}: completada (cierre temprano fuera de horario o sin in-flight).", campaignId);
+
+            try { await eventDispatcher.DispatchAsync("CampaignFinished", campaignId.ToString(), campaign.TenantId, ct); }
+            catch (Exception ex) { logger.LogError(ex, "DispatchAsync CampaignFinished falló (continuamos)."); }
+
+            return new DispatchResult(0, 0, "Campaña completada", DispatchStopReason.AllContactsProcessed);
+        }
+
+        // ── 3. Verificar horario de oficina (solo bloquea ENVÍO; el cierre ya pasó arriba) ──
         if (!IsWithinBusinessHours(tenant))
         {
             logger.LogInformation(
