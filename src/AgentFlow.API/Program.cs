@@ -111,6 +111,9 @@ catch (Exception ex)
 // ── Campaign Dispatcher (envío de campañas con rate limiting) ────────
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>();
+// Generador de mensaje con Claude (paridad con n8n) — usado por el dispatcher v2.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInitialMessageGenerator,
+    AgentFlow.Infrastructure.AI.InitialMessageGenerator>();
 
 // ── CampaignIntakeService v2 (reemplazo de la fase A+B+C de n8n) ─────
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDuplicateChecker,

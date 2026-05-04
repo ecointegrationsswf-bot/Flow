@@ -13,13 +13,13 @@ namespace AgentFlow.Infrastructure.Campaigns.V2;
 /// </summary>
 public class DuplicateChecker(AgentFlowDbContext db) : IDuplicateChecker
 {
-    // List<T> en lugar de array — el provider InMemory de EF Core 10 preview
-    // tropieza con ReadOnlySpan<DispatchStatus> al funccionalizar la query.
-    private static readonly List<DispatchStatus> ActiveStatuses = new()
+    // Estados de un contacto en flujo. Sent NO está incluido: significa que ese
+    // ciclo terminó para esa campaña y otra campaña posterior puede tomar el
+    // teléfono sin marcarlo como duplicado.
+    private static readonly List<DispatchStatus> InFlightStatuses = new()
     {
         DispatchStatus.Queued,
         DispatchStatus.Claimed,
-        DispatchStatus.Sent,
         DispatchStatus.Retry,
     };
 
@@ -32,16 +32,19 @@ public class DuplicateChecker(AgentFlowDbContext db) : IDuplicateChecker
         var phoneList = phones.Where(p => !string.IsNullOrWhiteSpace(p)).Distinct().ToList();
         if (phoneList.Count == 0) return new HashSet<string>();
 
-        // Join explícito en vez de cc.Campaign.TenantId — más portable y
-        // funciona con el provider InMemory de EF Core 10 (que no traduce bien
-        // navegaciones en algunos casos).
+        // Solo se considera duplicado un teléfono que tiene un mensaje EN FLUJO
+        // (Queued/Claimed/Retry) en otra campaña RUNNING + ACTIVA del mismo tenant.
+        // Sent ya no marca duplicado: significa que el envío se completó para
+        // esa campaña y otra puede dispararle un mensaje nuevo sin conflicto.
         var actives = await (
             from cc in db.CampaignContacts
             join c in db.Campaigns on cc.CampaignId equals c.Id
             where c.TenantId == tenantId
                && cc.CampaignId != excludeCampaignId
+               && c.Status == CampaignStatus.Running
+               && c.IsActive
                && phoneList.Contains(cc.PhoneNumber)
-               && ActiveStatuses.Contains(cc.DispatchStatus)
+               && InFlightStatuses.Contains(cc.DispatchStatus)
             select cc.PhoneNumber
         ).Distinct().ToListAsync(ct);
 

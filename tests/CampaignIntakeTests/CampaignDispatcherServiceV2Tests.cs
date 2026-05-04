@@ -36,6 +36,7 @@ public class CampaignDispatcherServiceV2Tests
         var jobs = new StubScheduledJobRepository();
         var dispatcher = new CampaignDispatcherService(
             db, factory, events, jobs,
+            messageGenerator: null,         // smoke tests usan template básico, sin Claude
             NullLogger<CampaignDispatcherService>.Instance);
         return (db, dispatcher, provider, events);
     }

@@ -148,6 +148,9 @@ builder.Services.AddHostedService<
 // El CampaignDispatcherService se reusa con cambios v2 (Queued + claim atómico).
 // El CampaignWorker es el BackgroundService que tick cada 30s y procesa por tenant.
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
+// Generador de mensaje con Claude (paridad con n8n) — usado por el dispatcher v2.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInitialMessageGenerator,
+    AgentFlow.Infrastructure.AI.InitialMessageGenerator>();
 builder.Services.AddHostedService<
     AgentFlow.Worker.Campaigns.Orchestration.CampaignWorker>();
 

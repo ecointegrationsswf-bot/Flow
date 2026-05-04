@@ -32,6 +32,7 @@ public class CampaignDispatcherService(
     IChannelProviderFactory providerFactory,
     IWebhookEventDispatcher eventDispatcher,
     IScheduledJobRepository scheduledJobs,
+    IInitialMessageGenerator? messageGenerator,
     ILogger<CampaignDispatcherService> logger)
 {
     // ── Mínimos de seguridad — tope inferior aunque la config diga lo contrario ──
@@ -238,7 +239,19 @@ public class CampaignDispatcherService(
 
             try
             {
-                var message = BuildInitialMessage(contact, campaign);
+                // Preferimos Claude (paridad con n8n: usa el prompt del CampaignTemplate).
+                // Si falla o no está configurado el LLM, caemos al template básico.
+                string? message = null;
+                if (messageGenerator is not null)
+                {
+                    try { message = await messageGenerator.GenerateAsync(campaign, contact, ct); }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Campaña {CampaignId}: generación con Claude falló para {Phone}, uso template.",
+                            campaignId, contact.PhoneNumber);
+                    }
+                }
+                message ??= BuildInitialMessage(contact, campaign);
                 var sendNow = DateTime.UtcNow;
 
                 var result = await provider.SendMessageAsync(
@@ -300,6 +313,17 @@ public class CampaignDispatcherService(
 
                 if (consecutiveErrors >= ConsecutiveErrorThreshold) break;
             }
+
+            // Persistir estado del contacto + ProcessedContacts en vivo para que
+            // el frontend pueda mostrar progreso 1/N, 2/N, ... mientras corre el lote.
+            // (En lugar de actualizar solo al final del batch.)
+            campaign.ProcessedContacts = await db.CampaignContacts
+                .CountAsync(cc => cc.CampaignId == campaignId
+                               && (cc.DispatchStatus == DispatchStatus.Sent
+                                   || cc.DispatchStatus == DispatchStatus.Error
+                                   || cc.DispatchStatus == DispatchStatus.Skipped
+                                   || cc.DispatchStatus == DispatchStatus.Duplicate), ct);
+            await db.SaveChangesAsync(ct);
 
             // ── Delay anti-ban: base = 60s/MessagesPerMinute, ±20% jitter ───────
             var jitter = (_random.NextDouble() * 0.4) - 0.2;     // [-0.2, +0.2]
