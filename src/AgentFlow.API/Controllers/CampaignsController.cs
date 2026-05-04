@@ -1,4 +1,5 @@
 using AgentFlow.Application.Modules.Campaigns;
+using AgentFlow.Application.Modules.Campaigns.LaunchV2;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Storage;
@@ -15,6 +16,7 @@ using Microsoft.EntityFrameworkCore;
 namespace AgentFlow.API.Controllers;
 
 public record CampaignUploadRequest(string Name, Guid AgentId, DateTime? ScheduledAt);
+public record LaunchV2Request(int WarmupDay = 0);
 public record UploadFixedFormatRequest([Required] string Name, [Required] Guid AgentId, DateTime? ScheduledAt, Guid? CampaignTemplateId = null);
 
 public record CreateCampaignFromFileRequest(
@@ -118,6 +120,26 @@ public class CampaignsController(
                 cc.LastContactAt
             })
         });
+    }
+
+    /// <summary>
+    /// Lanza la campaña usando el flujo v2 (en proceso, sin n8n). Aplica
+    /// dedup contra campañas activas del tenant y warm-up por día. El envío
+    /// real lo realiza el CampaignWorker en el Worker Service.
+    /// </summary>
+    [HttpPost("{id:guid}/launch-v2")]
+    public async Task<IActionResult> LaunchV2(Guid id, [FromBody] LaunchV2Request? body, CancellationToken ct)
+    {
+        var phone = User.FindFirst("phone")?.Value;
+        var result = await mediator.Send(new LaunchCampaignV2Command(
+            CampaignId: id,
+            TenantId: tenantCtx.TenantId,
+            LaunchedByUserId: CurrentUser,
+            LaunchedByUserPhone: phone,
+            WarmupDay: body?.WarmupDay ?? 0
+        ), ct);
+
+        return result.Success ? Ok(result) : BadRequest(result);
     }
 
     /// <summary>

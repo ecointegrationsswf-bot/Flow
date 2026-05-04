@@ -15,6 +15,13 @@ public interface ICampaignRepository
     /// <summary>Obtiene una campaña por ID, filtrada por tenant.</summary>
     Task<Campaign?> GetByIdAsync(Guid campaignId, Guid tenantId, CancellationToken ct = default);
 
+    /// <summary>
+    /// Igual que <see cref="GetByIdAsync"/> pero incluye el Tenant cargado.
+    /// Usado por <c>LaunchCampaignV2Handler</c> que necesita BusinessHoursStart/TimeZone
+    /// del tenant para calcular el <c>ScheduledFor</c> de los contactos diferidos.
+    /// </summary>
+    Task<Campaign?> GetByIdWithTenantAsync(Guid campaignId, Guid tenantId, CancellationToken ct = default);
+
     /// <summary>Lista campañas de un tenant, ordenadas por fecha de creación descendente.</summary>
     Task<List<Campaign>> ListByTenantAsync(Guid tenantId, CancellationToken ct = default);
 

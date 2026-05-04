@@ -111,6 +111,10 @@ catch (Exception ex)
 // ── Campaign Dispatcher (envío de campañas con rate limiting) ────────
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>();
+
+// ── CampaignIntakeService v2 (reemplazo de la fase A+B+C de n8n) ─────
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDuplicateChecker,
+    AgentFlow.Infrastructure.Campaigns.V2.DuplicateChecker>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ITransferChatService,
     AgentFlow.Infrastructure.Campaigns.TransferChatService>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ISendEmailResumeService,

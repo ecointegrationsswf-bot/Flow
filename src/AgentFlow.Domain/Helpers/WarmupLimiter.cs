@@ -1,4 +1,4 @@
-namespace AgentFlow.Infrastructure.Campaigns.V2;
+namespace AgentFlow.Domain.Helpers;
 
 /// <summary>
 /// Tabla de warm-up para campañas — replica la del workflow n8n

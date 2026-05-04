@@ -1,4 +1,4 @@
-using AgentFlow.Infrastructure.Campaigns.V2;
+using AgentFlow.Domain.Helpers;
 using Xunit;
 
 namespace CampaignIntakeTests;

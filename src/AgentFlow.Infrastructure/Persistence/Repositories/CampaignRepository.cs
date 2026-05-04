@@ -27,6 +27,14 @@ public class CampaignRepository(AgentFlowDbContext db) : ICampaignRepository
             .FirstOrDefaultAsync(c => c.Id == campaignId && c.TenantId == tenantId, ct);
     }
 
+    public async Task<Campaign?> GetByIdWithTenantAsync(Guid campaignId, Guid tenantId, CancellationToken ct = default)
+    {
+        return await db.Campaigns
+            .Include(c => c.Tenant)
+            .Include(c => c.Contacts)
+            .FirstOrDefaultAsync(c => c.Id == campaignId && c.TenantId == tenantId, ct);
+    }
+
     public async Task<List<Campaign>> ListByTenantAsync(Guid tenantId, CancellationToken ct = default)
     {
         return await db.Campaigns

@@ -1,6 +1,4 @@
-using AgentFlow.Infrastructure.Morosidad;
-
-namespace AgentFlow.Infrastructure.Campaigns.V2;
+namespace AgentFlow.Domain.Helpers;
 
 /// <summary>
 /// Validador de teléfonos para el CampaignIntakeService v2.
