@@ -67,12 +67,49 @@ public class MonitorController(IMediator mediator, ITenantContext tenantCtx, Age
         [FromQuery] string? launchedByUserId,
         CancellationToken ct = default)
     {
+        // Las fechas del frontend son fecha civil en la zona del tenant (típicamente
+        // "America/Panama") — NO instantes UTC. Las traducimos a un rango UTC que
+        // cubra el día completo desde 00:00 local hasta 00:00 local del día siguiente.
+        var (fromUtc, toUtc) = ConvertDateRangeToUtc(from, to);
+
         var result = await mediator.Send(new GetActiveConversationsQuery(
             tenantCtx.TenantId,
-            from?.ToUniversalTime(),
-            to?.ToUniversalTime(),
+            fromUtc,
+            toUtc,
             launchedByUserId), ct);
         return Ok(result);
+    }
+
+    /// <summary>
+    /// Convierte un rango de fecha civil (sin hora, en TZ del tenant) a un rango UTC
+    /// que abarque el día completo. <c>to</c> es exclusivo (= 00:00 del día siguiente)
+    /// para que el filtro <c>LastActivityAt &lt; toUtc</c> incluya todo el día indicado.
+    /// </summary>
+    private (DateTime? FromUtc, DateTime? ToUtc) ConvertDateRangeToUtc(DateTime? from, DateTime? to)
+    {
+        var tenantTzId = db.Tenants.Where(t => t.Id == tenantCtx.TenantId).Select(t => t.TimeZone).FirstOrDefault()
+                          ?? "America/Panama";
+        TimeZoneInfo tz;
+        try { tz = TimeZoneInfo.FindSystemTimeZoneById(tenantTzId); }
+        catch
+        {
+            try { tz = TimeZoneInfo.FindSystemTimeZoneById("Eastern Standard Time"); }
+            catch { tz = TimeZoneInfo.Utc; }
+        }
+
+        DateTime? fromUtc = null, toUtc = null;
+        if (from.HasValue)
+        {
+            var local = DateTime.SpecifyKind(from.Value.Date, DateTimeKind.Unspecified);
+            fromUtc = TimeZoneInfo.ConvertTimeToUtc(local, tz);
+        }
+        if (to.HasValue)
+        {
+            // Exclusivo: 00:00 del día siguiente en hora del tenant.
+            var local = DateTime.SpecifyKind(to.Value.Date.AddDays(1), DateTimeKind.Unspecified);
+            toUtc = TimeZoneInfo.ConvertTimeToUtc(local, tz);
+        }
+        return (fromUtc, toUtc);
     }
 
     [HttpGet("conversations/{id:guid}")]

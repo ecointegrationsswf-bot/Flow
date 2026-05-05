@@ -8,16 +8,10 @@ import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { ConversationList } from './ConversationList'
 import { ConversationDetailPanel } from './ConversationDetailPanel'
 
-// Helpers para construir las fechas del filtro por defecto en el TZ del navegador
-// (acepta YYYY-MM-DD y devuelve ISO al inicio/fin del día local).
-function startOfDayIso(yyyymmdd: string): string {
-  const [y, m, d] = yyyymmdd.split('-').map(Number)
-  return new Date(y, m - 1, d, 0, 0, 0, 0).toISOString()
-}
-function endOfDayIso(yyyymmdd: string): string {
-  const [y, m, d] = yyyymmdd.split('-').map(Number)
-  return new Date(y, m - 1, d, 23, 59, 59, 999).toISOString()
-}
+// Filtros por fecha civil (YYYY-MM-DD). El backend interpreta el rango en
+// la zona horaria del tenant — por eso NO mandamos ISO con hora local del
+// navegador (eso provocaba desfasajes cuando el navegador tenía un TZ
+// distinto al del tenant).
 function todayLocalDate(): string {
   const d = new Date()
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -35,8 +29,8 @@ export function MonitorPage() {
   const [launchedByUserId, setLaunchedByUserId] = useState<string>('')
 
   const { data: conversations = [], isLoading } = useConversations({
-    fromIso: fromDate ? startOfDayIso(fromDate) : null,
-    toIso:   toDate   ? endOfDayIso(toDate)     : null,
+    fromIso: fromDate || null,    // YYYY-MM-DD; el backend lo interpreta en TZ del tenant
+    toIso:   toDate   || null,
     launchedByUserId: launchedByUserId || null,
   })
 

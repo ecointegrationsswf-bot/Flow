@@ -33,7 +33,8 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
             .Where(c => c.TenantId == tenantId);
 
         if (fromUtc.HasValue) q = q.Where(c => c.LastActivityAt >= fromUtc.Value);
-        if (toUtc.HasValue)   q = q.Where(c => c.LastActivityAt <= toUtc.Value);
+        // toUtc es EXCLUSIVO: representa 00:00 del día siguiente en TZ del tenant.
+        if (toUtc.HasValue)   q = q.Where(c => c.LastActivityAt < toUtc.Value);
 
         if (!string.IsNullOrWhiteSpace(launchedByUserId))
         {
