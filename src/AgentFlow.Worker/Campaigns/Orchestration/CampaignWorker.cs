@@ -115,16 +115,14 @@ public class CampaignWorker(
         var dispatcher = scope.ServiceProvider.GetRequiredService<CampaignDispatcherService>();
 
         // Campañas del tenant en orden FIFO (las más antiguas primero).
-        // SOLO seleccionamos campañas que tienen al menos UN contacto en estado v2
-        // (Queued, Claimed, Retry, Deferred). Las campañas que solo tienen contactos
-        // Pending son legacy v1 (n8n/Hangfire viejo) y este Worker no las toca.
+        // EXCLUSIÓN única: campañas legacy v1 que SOLO tienen contactos Pending
+        // (sin estados v2 ni Sent) — esas son del flujo n8n viejo y no nos tocan.
+        // Cualquier otra campaña Running pasa al dispatcher: él decide procesar
+        // (si hay Queued/Claimed/Retry) o cerrar (si todos terminaron en Sent/Error/etc).
         var campaignIds = await db.Campaigns
             .Where(c => c.TenantId == tenantId && c.Status == CampaignStatus.Running && c.IsActive
                      && db.CampaignContacts.Any(cc => cc.CampaignId == c.Id
-                         && (cc.DispatchStatus == DispatchStatus.Queued
-                             || cc.DispatchStatus == DispatchStatus.Claimed
-                             || cc.DispatchStatus == DispatchStatus.Retry
-                             || cc.DispatchStatus == DispatchStatus.Deferred)))
+                         && cc.DispatchStatus != DispatchStatus.Pending))
             .OrderBy(c => c.LaunchedAt ?? c.CreatedAt)
             .Select(c => c.Id)
             .ToListAsync(ct);
