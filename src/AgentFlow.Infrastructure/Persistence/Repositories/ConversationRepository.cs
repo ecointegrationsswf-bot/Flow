@@ -32,9 +32,14 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
             .Include(c => c.Messages)      // necesario para lastMessagePreview
             .Where(c => c.TenantId == tenantId);
 
-        if (fromUtc.HasValue) q = q.Where(c => c.LastActivityAt >= fromUtc.Value);
-        // toUtc es EXCLUSIVO: representa 00:00 del día siguiente en TZ del tenant.
-        if (toUtc.HasValue)   q = q.Where(c => c.LastActivityAt < toUtc.Value);
+        // Filtro por fecha civil en zona horaria del tenant (Panamá = UTC-5, sin DST).
+        // DATE(LastActivityAt - 5h) BETWEEN DATE(@from) AND DATE(@to) — así una
+        // conversación a las 22:20 PA del 04/05 (que en UTC quedó como 03:20 del 05/05)
+        // aparece bajo el filtro 04/05 PA, junto con las del 13:00 PA del mismo día.
+        // EF Core traduce DateTime.AddHours(...).Date a CAST(DATEADD(hour, -5, ...) AS DATE).
+        const int paOffsetHours = -5;
+        if (fromUtc.HasValue) q = q.Where(c => c.LastActivityAt.AddHours(paOffsetHours).Date >= fromUtc.Value.Date);
+        if (toUtc.HasValue)   q = q.Where(c => c.LastActivityAt.AddHours(paOffsetHours).Date <= toUtc.Value.Date);
 
         if (!string.IsNullOrWhiteSpace(launchedByUserId))
         {

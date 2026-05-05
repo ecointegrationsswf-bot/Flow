@@ -3,11 +3,14 @@ import { useTenant } from './useTenant'
 /**
  * Formateo de fechas/horas en la zona horaria configurada en el tenant
  * (Tenant.TimeZone — ej: "America/Panama"). Si el tenant aún no cargó,
- * cae al timezone del navegador como fallback.
+ * cae a "America/Panama" — NUNCA al TZ del navegador, porque eso engañaba
+ * al usuario mostrando horas UTC mientras el filtro de fechas trabajaba en PA.
  */
+const FALLBACK_TZ = 'America/Panama'
+
 export function useTenantTime() {
   const { data: tenant } = useTenant()
-  const tz = tenant?.timeZone || undefined
+  const tz = tenant?.timeZone || FALLBACK_TZ
 
   return {
     timeZone: tz,
