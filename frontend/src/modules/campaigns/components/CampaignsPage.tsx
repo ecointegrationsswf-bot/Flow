@@ -1,12 +1,12 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Rocket, Loader2, Search, X } from 'lucide-react'
+import { Megaphone, Plus, Loader2, Search, X } from 'lucide-react'
 import { format } from 'date-fns'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
-import { useCampaigns, useLaunchCampaign } from '@/shared/hooks/useCampaigns'
+import { useCampaigns } from '@/shared/hooks/useCampaigns'
 import { usePermissions } from '@/shared/hooks/usePermissions'
 
 const triggerLabels: Record<string, string> = {
@@ -25,34 +25,16 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   Failed:     { label: 'Error',      className: 'bg-red-100 text-red-700' },
 }
 
-const LAUNCHABLE = new Set(['Pending', 'Failed'])
-
 export function CampaignsPage() {
   const { hasPermission } = usePermissions()
   const canCreate = hasPermission('create_campaigns')
   const { data: campaigns, isLoading, isError } = useCampaigns()
-  const launchMut = useLaunchCampaign()
-  const [launchingId, setLaunchingId] = useState<string | null>(null)
   const [launchError, setLaunchError] = useState<string | null>(null)
 
   // Filtros
   const [search, setSearch] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterChannel, setFilterChannel] = useState('')
-
-  const handleLaunch = (id: string) => {
-    setLaunchingId(id)
-    setLaunchError(null)
-    launchMut.mutate(id, {
-      onError: (err: unknown) => {
-        const msg =
-          (err as { response?: { data?: { error?: string } } })?.response?.data?.error
-          ?? 'Error al lanzar la campaña.'
-        setLaunchError(msg)
-      },
-      onSettled: () => setLaunchingId(null),
-    })
-  }
 
   const filtered = useMemo(() => {
     if (!campaigns) return []
@@ -190,13 +172,12 @@ export function CampaignsPage() {
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Estado</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Fecha</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Creada por</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-sm text-gray-400">
+                    <td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">
                       No se encontraron campañas con los filtros aplicados.
                     </td>
                   </tr>
@@ -206,13 +187,11 @@ export function CampaignsPage() {
                     const status = c.status ?? (c.completedAt ? 'Completed' : c.isActive ? 'Running' : 'Pending')
                     const stCfg = statusConfig[status] ?? statusConfig.Pending
                     const isRunning = status === 'Running' || status === 'Launching'
-                    const canLaunch = LAUNCHABLE.has(status)
-                    const isThisLaunching = launchingId === c.id
 
                     return (
                       <tr key={c.id} className="hover:bg-gray-50">
                         <td className="px-4 py-3">
-                          <p className="text-sm font-medium text-gray-900">{c.name}</p>
+                          <p className="text-xs font-normal text-gray-900">{c.name}</p>
                           {c.sourceFileName && <p className="text-xs text-gray-500">{c.sourceFileName}</p>}
                         </td>
                         <td className="px-4 py-3">
@@ -243,20 +222,6 @@ export function CampaignsPage() {
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-600">
                           {c.createdByUserId || '—'}
-                        </td>
-                        <td className="px-4 py-3">
-                          {canLaunch && (
-                            <button
-                              onClick={() => handleLaunch(c.id)}
-                              disabled={isThisLaunching || launchingId !== null}
-                              className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                            >
-                              {isThisLaunching
-                                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                : <Rocket className="h-3.5 w-3.5" />}
-                              {isThisLaunching ? 'Lanzando...' : 'Lanzar'}
-                            </button>
-                          )}
                         </td>
                       </tr>
                     )
