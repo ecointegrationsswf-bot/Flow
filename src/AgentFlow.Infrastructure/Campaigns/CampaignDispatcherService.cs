@@ -53,9 +53,11 @@ public class CampaignDispatcherService(
     /// </summary>
     public async Task<DispatchResult> DispatchBatchAsync(Guid campaignId, CancellationToken ct = default)
     {
-        // ── 1. Cargar campaña con su tenant ──────────────
+        // ── 1. Cargar campaña con su tenant + template ────
+        // Template necesario porque el horario de envío vive ahí (con prioridad sobre el tenant).
         var campaign = await db.Campaigns
             .Include(c => c.Tenant)
+            .Include(c => c.CampaignTemplate)
             .FirstOrDefaultAsync(c => c.Id == campaignId, ct);
 
         if (campaign is null)
@@ -100,14 +102,14 @@ public class CampaignDispatcherService(
             return new DispatchResult(0, 0, "Campaña completada", DispatchStopReason.AllContactsProcessed);
         }
 
-        // ── 3. Verificar horario de oficina (solo bloquea ENVÍO; el cierre ya pasó arriba) ──
-        if (!IsWithinBusinessHours(tenant))
+        // ── 3. Verificar horario de envío (solo bloquea ENVÍO; el cierre ya pasó arriba) ──
+        var hoursCheck = IsWithinBusinessHours(campaign, tenant);
+        if (!hoursCheck.Within)
         {
-            logger.LogInformation(
-                "Campaña {CampaignId}: fuera de horario ({Start}-{End} {TZ}). Será reprogramada.",
-                campaignId, tenant.BusinessHoursStart, tenant.BusinessHoursEnd, tenant.TimeZone);
-            return new DispatchResult(0, 0, "Fuera de horario de oficina", DispatchStopReason.OutsideBusinessHours);
+            logger.LogInformation("Campaña {CampaignId}: fuera de horario — {Reason}", campaignId, hoursCheck.Reason);
+            return new DispatchResult(0, 0, "Fuera de horario", DispatchStopReason.OutsideBusinessHours);
         }
+        logger.LogDebug("Campaña {CampaignId}: {Reason}", campaignId, hoursCheck.Reason);
 
         // ── 3. Obtener provider del tenant ───────────────
         var provider = await providerFactory.GetProviderAsync(tenant.Id, ct);
@@ -243,9 +245,10 @@ public class CampaignDispatcherService(
             if (ct.IsCancellationRequested) break;
 
             // Verificar horario antes de cada envío.
-            if (!IsWithinBusinessHours(tenant))
+            var hoursCheckMid = IsWithinBusinessHours(campaign, tenant);
+            if (!hoursCheckMid.Within)
             {
-                logger.LogInformation("Campaña {CampaignId}: salió del horario durante el envío.", campaignId);
+                logger.LogInformation("Campaña {CampaignId}: salió del horario — {Reason}", campaignId, hoursCheckMid.Reason);
                 // Devolver al pool: vuelvo a Queued para que el Worker reintente más tarde.
                 contact.DispatchStatus = DispatchStatus.Queued;
                 contact.ClaimedAt = null;
@@ -509,23 +512,73 @@ public class CampaignDispatcherService(
     }
 
     /// <summary>
-    /// Verifica si estamos dentro del horario de oficina del tenant.
-    /// Convierte la hora UTC actual a la zona horaria del tenant y compara.
+    /// Verifica si estamos dentro del horario de envío para esta campaña, priorizando
+    /// <c>CampaignTemplate.SendFrom/SendUntil</c> ("Horario de envío" del frontend)
+    /// sobre el horario por defecto del tenant. Retorna también un diagnóstico
+    /// legible con la hora efectiva — útil para debuguear discrepancias TZ
+    /// servidor/frontend.
+    ///
+    /// IMPORTANTE: NO usa <c>AttentionStartTime/EndTime</c> — esos son el horario de
+    /// "atención de asesores humanos" (otra cosa: define cuándo un humano puede
+    /// retomar la conversación). El horario que controla el envío masivo de la
+    /// campaña son <c>SendFrom/SendUntil</c>.
     /// </summary>
-    private static bool IsWithinBusinessHours(Tenant tenant)
+    private static (bool Within, string Reason) IsWithinBusinessHours(Campaign campaign, Tenant tenant)
     {
-        try
+        // 1) Resolver ventana — template.SendFrom/Until tiene prioridad si está configurado.
+        TimeOnly start; TimeOnly end; string source;
+        var t = campaign.CampaignTemplate;
+        if (t is not null
+            && !string.IsNullOrWhiteSpace(t.SendFrom)
+            && !string.IsNullOrWhiteSpace(t.SendUntil)
+            && TimeOnly.TryParse(t.SendFrom, out start)
+            && TimeOnly.TryParse(t.SendUntil, out end))
         {
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(tenant.TimeZone);
-            var nowInTz = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
-            var currentTime = TimeOnly.FromDateTime(nowInTz);
-            return currentTime >= tenant.BusinessHoursStart && currentTime <= tenant.BusinessHoursEnd;
+            source = "CampaignTemplate.SendFrom/Until";
         }
-        catch
+        else
         {
-            // Si la zona horaria es inválida, asumir que estamos en horario
-            return true;
+            start = tenant.BusinessHoursStart;
+            end = tenant.BusinessHoursEnd;
+            source = "Tenant.BusinessHours";
         }
+
+        // 2) Resolver TZ con fallbacks (Windows IDs vs IANA names — varía por SO/runtime).
+        var tz = ResolveTimeZone(tenant.TimeZone);
+        var nowInTz = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+        var currentTime = TimeOnly.FromDateTime(nowInTz);
+
+        // 3) Hora dentro del rango. Soporta ventanas que cruzan medianoche
+        //    (ej: SendFrom=22:00, SendUntil=06:00 = ventana nocturna).
+        var inRange = start <= end
+            ? currentTime >= start && currentTime <= end
+            : currentTime >= start || currentTime <= end;
+        if (!inRange)
+            return (false,
+                $"hora {currentTime:HH:mm} fuera de [{start:HH:mm}-{end:HH:mm}] " +
+                $"(source={source}, tz={tz.Id}, now={nowInTz:yyyy-MM-dd HH:mm})");
+
+        return (true,
+            $"dentro [{start:HH:mm}-{end:HH:mm}] (source={source}, tz={tz.Id}, now={currentTime:HH:mm})");
+    }
+
+    /// <summary>
+    /// Resuelve la TimeZoneInfo aceptando tanto IDs IANA ("America/Panama") como
+    /// Windows ("SA Pacific Standard Time"). En .NET 10 ambos formatos funcionan
+    /// nativamente, pero en runtimes/OS más viejos hace falta convertir.
+    /// </summary>
+    private static TimeZoneInfo ResolveTimeZone(string? tzId)
+    {
+        if (string.IsNullOrWhiteSpace(tzId)) return TimeZoneInfo.Utc;
+        if (TimeZoneInfo.TryFindSystemTimeZoneById(tzId, out var direct) && direct is not null)
+            return direct;
+        if (TimeZoneInfo.TryConvertIanaIdToWindowsId(tzId, out var winId)
+            && TimeZoneInfo.TryFindSystemTimeZoneById(winId, out var winTz) && winTz is not null)
+            return winTz;
+        if (TimeZoneInfo.TryConvertWindowsIdToIanaId(tzId, out var ianaId)
+            && TimeZoneInfo.TryFindSystemTimeZoneById(ianaId, out var ianaTz) && ianaTz is not null)
+            return ianaTz;
+        return TimeZoneInfo.Utc;
     }
 }
 
