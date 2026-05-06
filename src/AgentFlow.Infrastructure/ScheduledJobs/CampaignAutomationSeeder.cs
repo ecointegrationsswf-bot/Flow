@@ -23,11 +23,19 @@ public static class CampaignAutomationSeeder
         {
             (
                 "FOLLOW_UP_MESSAGE",
-                "Acción interna usada por el ScheduledWebhookWorker para enviar mensajes de seguimiento configurados en CampaignTemplate.FollowUpHours/FollowUpMessagesJson. No invocar manualmente."
+                "Acción interna LEGACY (modelo per-contacto). Sustituida por FOLLOW_UP_SWEEP. Se mantiene en BD por compatibilidad con jobs viejos."
             ),
             (
                 "AUTO_CLOSE_CAMPAIGN",
-                "Acción interna que cierra todas las conversaciones activas de una campaña al cumplirse CampaignTemplate.AutoCloseHours. No invocar manualmente."
+                "Acción interna LEGACY (modelo per-campaña). Sustituida por AUTO_CLOSE_CAMPAIGN_SWEEP. Se mantiene en BD por compatibilidad con jobs viejos."
+            ),
+            (
+                "FOLLOW_UP_SWEEP",
+                "Sweeper global de follow-ups. UN solo cron */5 * * * * que recorre TODOS los CampaignContacts con DispatchStatus=Sent y dispara los follow-ups que correspondan según CampaignTemplate.FollowUpHours/FollowUpMessagesJson. Reemplaza al modelo per-contacto FOLLOW_UP_MESSAGE."
+            ),
+            (
+                "AUTO_CLOSE_CAMPAIGN_SWEEP",
+                "Sweeper global de auto-cierre. UN solo cron */30 * * * * que cierra todas las campañas Running cuya última actividad excedió CampaignTemplate.AutoCloseHours. Reemplaza al modelo per-campaña AUTO_CLOSE_CAMPAIGN."
             ),
             (
                 "LABEL_CONVERSATIONS",
@@ -83,6 +91,60 @@ public static class CampaignAutomationSeeder
         // que dispare LABEL_CONVERSATIONS. El executor decide internamente qué
         // maestros corresponden a la hora UTC actual via CampaignTemplate.LabelingJobHourUtc.
         await EnsureLabelingCronJobAsync(db, logger, ct);
+
+        // Sweepers globales del modelo nuevo (reemplazan los jobs per-contacto/per-campaña).
+        await EnsureGlobalCronJobAsync(db, logger,
+            actionName: "FOLLOW_UP_SWEEP",
+            cron: "*/5 * * * *",
+            description: "Recorre contactos enviados y manda follow-ups que toquen.",
+            ct);
+        await EnsureGlobalCronJobAsync(db, logger,
+            actionName: "AUTO_CLOSE_CAMPAIGN_SWEEP",
+            cron: "*/30 * * * *",
+            description: "Cierra campañas que excedieron AutoCloseHours.",
+            ct);
+    }
+
+    /// <summary>
+    /// Idempotente: si ya existe un Cron AllTenants para esa Action, no hace nada.
+    /// </summary>
+    private static async Task EnsureGlobalCronJobAsync(
+        AgentFlowDbContext db, ILogger logger,
+        string actionName, string cron, string description, CancellationToken ct)
+    {
+        var actionId = await db.ActionDefinitions
+            .Where(a => a.TenantId == null && a.Name == actionName)
+            .Select(a => (Guid?)a.Id)
+            .FirstOrDefaultAsync(ct);
+        if (actionId is null)
+        {
+            logger.LogWarning("Seeder: ActionDefinition '{Name}' no existe — no se crea cron.", actionName);
+            return;
+        }
+
+        var alreadyHasCron = await db.ScheduledWebhookJobs
+            .AnyAsync(j => j.ActionDefinitionId == actionId.Value
+                        && j.TriggerType == "Cron"
+                        && j.Scope == "AllTenants", ct);
+        if (alreadyHasCron) return;
+
+        // Calculamos NextRunAt al próximo minuto UTC para que tickée pronto.
+        var now = DateTime.UtcNow;
+        var nextRun = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, DateTimeKind.Utc).AddMinutes(1);
+
+        db.ScheduledWebhookJobs.Add(new ScheduledWebhookJob
+        {
+            Id = Guid.NewGuid(),
+            ActionDefinitionId = actionId.Value,
+            TriggerType = "Cron",
+            CronExpression = cron,
+            Scope = "AllTenants",
+            IsActive = true,
+            NextRunAt = nextRun,
+        });
+        await db.SaveChangesAsync(ct);
+        logger.LogInformation("Seeder: creado cron global '{Name}' ({Cron}). NextRunAt={Next}. {Desc}",
+            actionName, cron, nextRun, description);
     }
 
     private static async Task EnsureLabelingCronJobAsync(AgentFlowDbContext db, ILogger logger, CancellationToken ct)

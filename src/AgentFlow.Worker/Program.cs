@@ -163,10 +163,19 @@ builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IConversationNotifier,
 // Executor genérico (slug "*") + executors específicos.
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.DefaultWebhookExecutor>();
+// LEGACY: per-contacto / per-campaña — siguen registrados por compatibilidad
+// con jobs viejos que pueda haber en BD, pero el dispatcher YA NO crea estos
+// jobs. Ver CampaignDispatcherService para detalles.
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.FollowUpExecutor>();
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.CampaignAutoCloseExecutor>();
+// Sweepers globales (modelo nuevo) — UN cron en la tabla cubre todos los
+// contactos/campañas. Cron */5 y */30 respectivamente.
+builder.Services.AddScoped<IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.FollowUpSweepExecutor>();
+builder.Services.AddScoped<IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.CampaignAutoCloseSweepExecutor>();
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.ConversationLabelingJob>();
 builder.Services.AddScoped<IScheduledJobExecutor,

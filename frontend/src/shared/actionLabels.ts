@@ -16,8 +16,10 @@ export const ACTION_FRIENDLY_NAMES: Record<string, string> = {
   SEND_DOCUMENT: 'Enviar documento',
   NOTIFY_GESTION: 'Notificar gestión al cliente',
   // Acciones internas del Campaign Automation Worker
-  FOLLOW_UP_MESSAGE: 'Seguimiento automático',
-  AUTO_CLOSE_CAMPAIGN: 'Cierre automático de campaña',
+  FOLLOW_UP_MESSAGE: 'Seguimiento automático (legacy)',
+  AUTO_CLOSE_CAMPAIGN: 'Cierre automático de campaña (legacy)',
+  FOLLOW_UP_SWEEP: 'Seguimiento automático',
+  AUTO_CLOSE_CAMPAIGN_SWEEP: 'Cierre automático de campaña',
   LABEL_CONVERSATIONS: 'Etiquetar conversaciones',
   SEND_LABELING_SUMMARY: 'Enviar resumen etiquetado',
   DOWNLOAD_DELINQUENCY_DATA: 'Descargar datos de morosidad',

@@ -232,8 +232,11 @@ public class CampaignDispatcherService(
             try { await eventDispatcher.DispatchAsync("CampaignStarted", campaignId.ToString(), campaign.TenantId, ct); }
             catch (Exception ex) { logger.LogError(ex, "DispatchAsync CampaignStarted falló (continuamos)."); }
 
-            try { await ScheduleAutoCloseAsync(campaign, ct); }
-            catch (Exception ex) { logger.LogError(ex, "Schedule AutoClose falló para campaña {Id}.", campaignId); }
+            // El auto-cierre es responsabilidad del sweeper global
+            // (CampaignAutoCloseSweepExecutor / cron AUTO_CLOSE_CAMPAIGN_SWEEP).
+            // Antes acá programábamos un job DelayFromEvent por campaña — eso
+            // saturaba ScheduledWebhookJobs. El sweeper tick cada 30 min revisa
+            // todas las Running y cierra las que pasen su AutoCloseHours.
         }
 
         // ── 7. Enviar mensajes uno a uno (con rate limit del tenant) ─────────────────
@@ -305,8 +308,11 @@ public class CampaignDispatcherService(
                     try { await PersistOutboundConversationAsync(campaign, contact, message, result.ExternalMessageId, sendNow, ct); }
                     catch (Exception ex) { logger.LogError(ex, "Persistir conversación inicial falló para {Phone}", contact.PhoneNumber); }
 
-                    try { await ScheduleFollowUpsForContactAsync(campaign, contact, ct); }
-                    catch (Exception ex) { logger.LogError(ex, "Schedule follow-ups falló para {Phone}", contact.PhoneNumber); }
+                    // Los follow-ups los maneja el sweeper global
+                    // (FollowUpSweepExecutor / cron FOLLOW_UP_SWEEP cada 5 min).
+                    // El sweeper lee CampaignContact.SentAt + FollowUpsSentJson
+                    // para saber qué índice toca enviar, sin necesidad de un job
+                    // por contacto. Antes acá programábamos N×M jobs; ahora 0.
                 }
                 else
                 {
@@ -510,99 +516,20 @@ public class CampaignDispatcherService(
         await db.SaveChangesAsync(ct);
     }
 
-    // ── Slugs de ActionDefinitions globales que el seed registra al boot ─────
-    // y que los executors específicos (FollowUpExecutor, CampaignAutoCloseExecutor)
-    // declaran como su Slug. El campo Name de la action en BD coincide con estos.
-    private const string FollowUpActionSlug = "FOLLOW_UP_MESSAGE";
-    private const string AutoCloseActionSlug = "AUTO_CLOSE_CAMPAIGN";
-
-    /// <summary>
-    /// Crea jobs DelayFromEvent (uno por cada hora en CampaignTemplate.FollowUpHours)
-    /// para enviar los mensajes de seguimiento al contacto. Skip silencioso si el
-    /// maestro no tiene seguimientos configurados o no hay mensajes definidos.
-    /// </summary>
-    private async Task ScheduleFollowUpsForContactAsync(
-        Campaign campaign, CampaignContact contact, CancellationToken ct)
-    {
-        // Cargamos el template completo (no proyectado) — necesario para que
-        // BusinessHoursClock pueda leer SendFrom/SendUntil y AttentionDays.
-        var template = await db.CampaignTemplates
-            .FirstOrDefaultAsync(t => t.Id == campaign.CampaignTemplateId, ct);
-        if (template is null) return;
-        if (template.FollowUpHours.Count == 0) return;
-        if (string.IsNullOrEmpty(template.FollowUpMessagesJson)) return;
-
-        var actionId = await GetOrFailActionDefinitionIdAsync(FollowUpActionSlug, ct);
-        if (actionId is null) return;
-
-        // Tenant ya viene cargado en campaign.Tenant (Include en DispatchBatchAsync).
-        var tenant = campaign.Tenant;
-
-        for (var i = 0; i < template.FollowUpHours.Count; i++)
-        {
-            var hours = template.FollowUpHours[i];
-            if (hours <= 0) continue;
-
-            // Calculamos el "candidato" como ahora + horas configuradas, y luego
-            // lo alineamos a la próxima ventana laboral del tenant. Si cae en la
-            // madrugada o en sábado/domingo, el clock lo mueve al próximo lunes 8 AM
-            // (o lo que corresponda) — sin perder el job.
-            var candidateUtc = DateTime.UtcNow.AddMinutes(hours * 60);
-            var alignedUtc   = businessHours.AlignToBusinessHoursUtc(candidateUtc, tenant, template);
-
-            var job = new ScheduledWebhookJob
-            {
-                Id                 = Guid.NewGuid(),
-                ActionDefinitionId = actionId.Value,
-                TriggerType        = "DelayFromEvent",
-                TriggerEvent       = "CampaignContactSent",
-                DelayMinutes       = hours * 60,
-                Scope              = "PerConversation",
-                // Convención del FollowUpExecutor: "{campaignContactId}:{index}".
-                // Sin esto el executor no puede resolver qué contacto seguir.
-                ContextId          = $"{contact.Id}:{i}",
-                IsActive           = true,
-                NextRunAt          = alignedUtc,
-            };
-            await scheduledJobs.AddAsync(job, ct);
-        }
-        logger.LogInformation(
-            "Programados {Count} seguimientos para contacto {Phone}.",
-            template.FollowUpHours.Count, contact.PhoneNumber);
-    }
-
-    /// <summary>
-    /// Crea UN job DelayFromEvent que cierra la campaña al cumplirse AutoCloseHours.
-    /// Skip silencioso si AutoCloseHours = 0.
-    /// </summary>
-    private async Task ScheduleAutoCloseAsync(Campaign campaign, CancellationToken ct)
-    {
-        var template = await db.CampaignTemplates
-            .Where(t => t.Id == campaign.CampaignTemplateId)
-            .Select(t => new { t.AutoCloseHours })
-            .FirstOrDefaultAsync(ct);
-        if (template is null || template.AutoCloseHours <= 0) return;
-
-        var actionId = await GetOrFailActionDefinitionIdAsync(AutoCloseActionSlug, ct);
-        if (actionId is null) return;
-
-        var job = new ScheduledWebhookJob
-        {
-            Id = Guid.NewGuid(),
-            ActionDefinitionId = actionId.Value,
-            TriggerType = "DelayFromEvent",
-            TriggerEvent = "CampaignStarted",
-            DelayMinutes = template.AutoCloseHours * 60,
-            Scope = "PerCampaign",
-            IsActive = true,
-            NextRunAt = DateTime.UtcNow.AddMinutes(template.AutoCloseHours * 60)
-        };
-        await scheduledJobs.AddAsync(job, ct);
-
-        logger.LogInformation(
-            "Auto-cierre programado para campaña {Id} en {Hours}h.",
-            campaign.Id, template.AutoCloseHours);
-    }
+    // ── Modelo viejo (RETIRADO): jobs DelayFromEvent uno por contacto/campaña ──
+    //
+    // Antes acá había:
+    //   ScheduleFollowUpsForContactAsync(...)  — creaba N jobs FOLLOW_UP_MESSAGE
+    //   ScheduleAutoCloseAsync(...)            — creaba 1 job AUTO_CLOSE_CAMPAIGN
+    //
+    // Eso saturaba ScheduledWebhookJobs (un row por cada (contacto × follow-up) +
+    // uno por campaña). Migramos al modelo "sweeper": dos cron jobs globales
+    // (FOLLOW_UP_SWEEP cada 5 min, AUTO_CLOSE_CAMPAIGN_SWEEP cada 30 min) que
+    // recorren CampaignContacts y Campaigns en cada tick. La tabla queda con
+    // tamaño constante sin importar cuántas campañas se lancen.
+    //
+    // Si necesitás revertir, ver commits anteriores a este — el código vive en
+    // la historia de git.
 
     /// <summary>
     /// Resuelve el Id de una ActionDefinition global por su Name. Si no existe,

@@ -244,4 +244,104 @@ Si no hay acceso al API, validar localmente con la sintaxis estándar Cronos: 5 
 | `src/AgentFlow.Infrastructure/ScheduledJobs/ConversationLabelingJob.cs` | Executor `LABEL_CONVERSATIONS` |
 | `src/AgentFlow.Infrastructure/ScheduledJobs/SendLabelingSummaryExecutor.cs` | Executor `SEND_LABELING_SUMMARY` |
 | `src/AgentFlow.Infrastructure/ScheduledJobs/NotifyGestionBatchExecutor.cs` | Executor `NOTIFY_GESTION` |
+| `src/AgentFlow.Infrastructure/ScheduledJobs/FollowUpSweepExecutor.cs` | Executor `FOLLOW_UP_SWEEP` (sweeper de follow-ups con rate limit) |
+| `src/AgentFlow.Infrastructure/ScheduledJobs/CampaignAutoCloseSweepExecutor.cs` | Executor `AUTO_CLOSE_CAMPAIGN_SWEEP` (sweeper de auto-cierre) |
 | `src/AgentFlow.Infrastructure/ScheduledJobs/CampaignAutomationSeeder.cs` | Crea jobs por defecto al iniciar |
+
+---
+
+## ⚠️ REGLA OBLIGATORIA: rate limit en TODO envío masivo saliente
+
+**Aplica a:** campañas iniciales (`CampaignDispatcherService`), follow-ups
+(`FollowUpSweepExecutor`), auto-cierre con mensaje (`CampaignAutoCloseSweepExecutor`),
+y cualquier executor futuro que mande mensajes salientes a múltiples destinatarios.
+
+**Razón:** UltraMsg banea números que envían en ráfaga sin pausa. Un solo job
+que despache 1000 mensajes en 5 segundos puede tirar abajo el WhatsApp del
+tenant por días — y eso es lo que pasaba en TalkIA legacy.
+
+**Topes que SIEMPRE se respetan, leídos desde el `Tenant`:**
+
+| Campo `Tenant` | Default | Qué controla |
+|---|---|---|
+| `CampaignMessagesPerMinute` | 6 | Tasa de envío. Delay base = `60s / N` con jitter ±20% |
+| `CampaignMaxPerHour` | 200 | Tope por hora — se cuenta `Messages.SentAt` Outbound del tenant |
+| `CampaignMaxPerDay` | 1000 | Tope diario — idem, contado desde 00:00 UTC |
+
+Adicional (hardcoded como salvaguardas):
+- `MinDelaySecondsFloor = 3s` — piso absoluto, aunque el tenant configure 100/min
+- `ConsecutiveErrorThreshold = 3` — si UltraMsg falla 3 veces seguidas en un
+  tenant, frena ese tenant en el tick actual (anti-ban del proveedor)
+
+### Patrón obligatorio en cualquier executor de envío masivo
+
+```csharp
+// 1. Agrupar candidatos por tenant
+var byTenant = candidates.GroupBy(c => c.TenantId);
+
+foreach (var group in byTenant)
+{
+    var tenant = ...; // cargar config
+
+    // 2. Verificar tope DIARIO antes de empezar
+    var sentToday = await CountOutboundMessagesAsync(tenant.Id, since: DateTime.UtcNow.Date);
+    if (sentToday >= tenant.CampaignMaxPerDay) continue;
+
+    // 3. Verificar tope HORARIO
+    var sentLastHour = await CountOutboundMessagesAsync(tenant.Id, since: now.AddHours(-1));
+
+    // 4. Calcular delay base
+    var baseDelay = Math.Max(MinDelaySecondsFloor, 60.0 / tenant.CampaignMessagesPerMinute);
+
+    var consecutiveErrors = 0;
+    foreach (var contact in group)
+    {
+        // 5. Re-validar topes en cada iteración (puede haber otros procesos
+        //    enviando al mismo tenant en paralelo — ej: dispatcher inicial)
+        if (sentToday + sent >= maxPerDay) break;
+        if (sentLastHour + sent >= maxPerHour) break;
+
+        var ok = await SendOneAsync(contact);
+
+        if (ok) {
+            // 6. Delay con jitter SOLO entre envíos exitosos
+            var jitter = (rng.NextDouble() * 0.4) - 0.2; // ±20%
+            await Task.Delay(TimeSpan.FromSeconds(baseDelay * (1 + jitter)));
+            consecutiveErrors = 0;
+        } else {
+            // 7. Circuit breaker por tenant
+            if (++consecutiveErrors >= 3) break;
+        }
+    }
+}
+```
+
+### Casos PROHIBIDOS (no merge a main)
+
+```csharp
+// ❌ Loop sin delay — ráfaga directa a UltraMsg
+foreach (var contact in contacts) await provider.SendAsync(contact);
+
+// ❌ Parallel.ForEachAsync — paraleliza al WhatsApp del tenant
+await Parallel.ForEachAsync(contacts, async (c, ct) => await provider.SendAsync(c));
+
+// ❌ Hardcoded delay de 1 segundo — ignora la config del tenant
+foreach (var c in contacts) { await Task.Delay(1000); ... }
+
+// ❌ Solo respetar uno de los topes (ej: solo daily, no hourly)
+```
+
+### Verificación durante code review
+
+Cualquier PR que toque envío masivo debe mostrar:
+1. ✅ `Task.Delay(TimeSpan.FromSeconds(baseDelay * jitter))` entre sends
+2. ✅ `MaxPerDay` chequeado vs `Messages.SentAt` Outbound del tenant
+3. ✅ `MaxPerHour` idem
+4. ✅ `MessagesPerMinute` leído del `Tenant` (no hardcoded)
+5. ✅ Circuit breaker de errores consecutivos
+6. ✅ Agrupación por tenant cuando se procesan múltiples al mismo tiempo
+
+### Referencias canónicas (copiar de aquí)
+
+- `src/AgentFlow.Infrastructure/Campaigns/CampaignDispatcherService.cs` → `DispatchBatchAsync`
+- `src/AgentFlow.Infrastructure/ScheduledJobs/FollowUpSweepExecutor.cs` → `ProcessTenantAsync`
