@@ -1,7 +1,7 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import {
   Calendar, Clock, Play, Pause, Trash2, RefreshCw, Plus,
-  AlertCircle, CheckCircle2, XCircle, Loader2,
+  AlertCircle, CheckCircle2, XCircle, Loader2, EyeOff, Eye,
 } from 'lucide-react'
 import {
   useScheduledJobs, useDeleteScheduledJob, useRunScheduledJobNow,
@@ -21,6 +21,15 @@ export function ScheduledJobsPage() {
   const [editing, setEditing] = useState<ScheduledJob | null>(null)
   const [creating, setCreating] = useState(false)
   const [historyJobId, setHistoryJobId] = useState<string | null>(null)
+  // Por defecto ocultamos los pausados — se acumulan rápido cuando se cancelan
+  // jobs viejos y abruman la lista. Toggle visible para verlos cuando hace falta.
+  const [showPaused, setShowPaused] = useState(false)
+
+  const visibleJobs = useMemo(
+    () => (jobs ?? []).filter(j => showPaused || j.isActive),
+    [jobs, showPaused],
+  )
+  const pausedCount = (jobs ?? []).filter(j => !j.isActive).length
 
   const handleDelete = async (job: ScheduledJob) => {
     if (!confirm(`¿Eliminar el job "${getActionFriendlyName(job.actionName) || job.id}"? El historial también se borrará.`)) return
@@ -42,6 +51,16 @@ export function ScheduledJobsPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          {pausedCount > 0 && (
+            <button
+              onClick={() => setShowPaused(v => !v)}
+              title={showPaused ? 'Ocultar jobs pausados' : 'Mostrar también los pausados'}
+              className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-800"
+            >
+              {showPaused ? <Eye className="h-4 w-4" /> : <EyeOff className="h-4 w-4" />}
+              {showPaused ? `Ocultar pausados (${pausedCount})` : `Mostrar pausados (${pausedCount})`}
+            </button>
+          )}
           <button
             onClick={() => refetch()}
             className="flex items-center gap-1.5 rounded-md border border-gray-700 px-3 py-1.5 text-sm text-gray-300 hover:bg-gray-800"
@@ -79,7 +98,22 @@ export function ScheduledJobsPage() {
         </div>
       )}
 
-      {!isLoading && (jobs?.length ?? 0) > 0 && (
+      {!isLoading && (jobs?.length ?? 0) > 0 && visibleJobs.length === 0 && (
+        <div className="rounded-lg border border-dashed border-gray-700 bg-gray-900/40 p-8 text-center">
+          <EyeOff className="mx-auto mb-2 h-10 w-10 text-gray-600" />
+          <p className="text-gray-400">
+            {pausedCount} job{pausedCount > 1 ? 's' : ''} pausado{pausedCount > 1 ? 's' : ''} oculto{pausedCount > 1 ? 's' : ''}.
+          </p>
+          <button
+            onClick={() => setShowPaused(true)}
+            className="mt-3 text-sm text-blue-400 hover:text-blue-300"
+          >
+            Mostrar pausados
+          </button>
+        </div>
+      )}
+
+      {!isLoading && visibleJobs.length > 0 && (
         <div className="overflow-hidden rounded-lg border border-gray-700">
           <table className="w-full">
             <thead className="bg-gray-900">
@@ -94,7 +128,7 @@ export function ScheduledJobsPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-800 text-sm text-gray-200">
-              {jobs!.map((j) => (
+              {visibleJobs.map((j) => (
                 <tr key={j.id} className="bg-gray-950 hover:bg-gray-900">
                   <td className="px-3 py-2 font-medium">
                     <div>{getActionFriendlyName(j.actionName) || j.actionDefinitionId.slice(0, 8)}</div>
