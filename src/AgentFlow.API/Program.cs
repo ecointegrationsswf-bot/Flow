@@ -50,8 +50,15 @@ else
     builder.Services.AddSingleton<IMessageBufferStore, AgentFlow.Infrastructure.Messaging.InMemoryMessageBufferStore>();
 }
 
-// MessageBufferFlushJob — scoped, invocado por Hangfire con MessageBufferSeconds de delay.
+// MessageBufferFlushJob — LEGACY (Hangfire). Se mantiene registrado por si quedan
+// jobs viejos en BD pero el flujo activo usa InProcessMessageDebouncer.
 builder.Services.AddScoped<AgentFlow.Infrastructure.Messaging.MessageBufferFlushJob>();
+
+// Debouncer in-process — singleton, sin dependencia de Hangfire/Redis.
+// Reemplaza el approach anterior que dependía de Hangfire+Redis para timing,
+// que en Smartasp fallaba por reciclajes de AppPool y silenciosamente caía
+// al flujo directo (mensajes procesados uno por uno sin agrupar).
+builder.Services.AddSingleton<AgentFlow.Infrastructure.Messaging.InProcessMessageDebouncer>();
 
 // ── Anthropic Claude ───────────────────────────────────
 // El sistema usa la API key del tenant (tabla Tenants.LlmApiKey).

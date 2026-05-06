@@ -22,6 +22,7 @@ public class WebhookController(
     IHttpClientFactory httpClientFactory,
     AgentFlow.Domain.Interfaces.ITranscriptionService transcriptionService,
     IMessageBufferStore messageBuffer,
+    AgentFlow.Infrastructure.Messaging.InProcessMessageDebouncer debouncer,
     IBackgroundJobClient? jobClient = null) : ControllerBase
 {
     /// <summary>
@@ -48,32 +49,23 @@ public class WebhookController(
             Console.WriteLine($"[Dispatch] No pude leer MessageBufferSeconds, fallback a directo: {ex.Message}");
         }
 
-        // Intento de buffer con debounce. Si Redis o Hangfire fallan, hacemos fallback
-        // automático al flujo directo (mediator.Send) — el cliente no debe perder el
-        // mensaje por una caída del buffer.
-        if (bufferSec > 0 && jobClient is not null)
+        // Debounce in-process — agrupa mensajes ráfaga del mismo (tenant, phone).
+        // Reset real del timer en cada mensaje nuevo. Sin dependencia de
+        // Hangfire/Redis (más confiable en hosting compartido como Smartasp).
+        if (bufferSec > 0)
         {
             try
             {
-                var buffered = new BufferedMessage(
-                    Content: message ?? string.Empty,
-                    Channel: channel.ToString(),
-                    ClientName: clientName,
-                    ExternalMessageId: externalId,
-                    MediaUrl: mediaUrl,
-                    MediaType: mediaType,
-                    TimestampTicks: DateTime.UtcNow.Ticks);
-
-                await messageBuffer.AppendAsync(tenantId, fromPhone, buffered, ct);
-                jobClient.Schedule<MessageBufferFlushJob>(
-                    svc => svc.RunAsync(tenantId, fromPhone, CancellationToken.None),
-                    TimeSpan.FromSeconds(bufferSec));
+                debouncer.Enqueue(
+                    tenantId, fromPhone, channel,
+                    message ?? string.Empty, clientName, externalId,
+                    mediaUrl, mediaType, bufferSec);
                 return (true, null, null, null);
             }
             catch (Exception ex)
             {
-                // Buffer caído (Redis o Hangfire) — proceso directo para no perder el mensaje.
-                Console.WriteLine($"[Dispatch] Buffer falló ({ex.GetType().Name}: {ex.Message}). Fallback a flujo directo.");
+                // Falla absoluta del debouncer (no debería pasar, in-process) — fallback directo.
+                Console.WriteLine($"[Dispatch] Debouncer falló ({ex.GetType().Name}: {ex.Message}). Fallback a flujo directo.");
             }
         }
 

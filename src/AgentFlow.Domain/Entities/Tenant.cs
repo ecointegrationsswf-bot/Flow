@@ -78,9 +78,9 @@ public class Tenant
     /// mensaje cuando el cliente escribe por partes (ej: "hola", "cómo estás?",
     /// "me puedes ayudar"). Durante el debounce los mensajes se concatenan y se
     /// procesan como un solo turno.
-    /// Rango: 0–15. Default 5. 0 = deshabilitado (comportamiento anterior, procesa cada mensaje al instante).
+    /// Rango: 0–15. Default 8 (captura pausas típicas de tipeo entre frases). 0 = deshabilitado.
     /// </summary>
-    public int MessageBufferSeconds { get; set; } = 5;
+    public int MessageBufferSeconds { get; set; } = 8;
 
     /// <summary>
     /// Interruptor global del Cerebro. Cuando es false el sistema funciona igual que hoy.
