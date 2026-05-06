@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Loader2, Save, Mail, Brain, Clock, Webhook, FileText, ToggleLeft, ToggleRight, Building2 } from 'lucide-react'
+import { Loader2, Save, Mail, Brain, Clock, Webhook, FileText, ToggleLeft, ToggleRight, Building2, Gauge, AlertTriangle } from 'lucide-react'
 import {
   useAdminTenantConfig,
   useAdminUpdateTenantTimezone,
@@ -10,6 +10,7 @@ import {
   useAdminUpdateTenantWebhookContract,
   useAdminUpdateTenantReferenceDocs,
   useAdminUpdateTenantMessageBuffer,
+  useAdminUpdateTenantCampaignRateLimits,
 } from '@/modules/admin/hooks/useAdminTenantConfig'
 
 const TIMEZONES = [
@@ -65,6 +66,7 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
   const updateWebhookContract = useAdminUpdateTenantWebhookContract()
   const updateReferenceDocs = useAdminUpdateTenantReferenceDocs()
   const updateBuffer = useAdminUpdateTenantMessageBuffer()
+  const updateRateLimits = useAdminUpdateTenantCampaignRateLimits()
 
   const [timeZone, setTimeZone] = useState('America/Panama')
   const [timezoneSaved, setTimezoneSaved] = useState(false)
@@ -82,6 +84,14 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
   const [bufferSeconds, setBufferSeconds] = useState(5)
   const [bufferSaved, setBufferSaved] = useState(false)
 
+  // Rate limit
+  const [msgPerMin, setMsgPerMin] = useState(6)
+  const [maxPerHour, setMaxPerHour] = useState(200)
+  const [maxPerDay, setMaxPerDay] = useState(1000)
+  const [dispatchEnabled, setDispatchEnabled] = useState(true)
+  const [rateLimitsSaved, setRateLimitsSaved] = useState(false)
+  const [rateLimitsError, setRateLimitsError] = useState<string | null>(null)
+
   useEffect(() => {
     if (!tenant) return
     setTimeZone(tenant.timeZone ?? 'America/Panama')
@@ -92,6 +102,10 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
     setSenderEmail(tenant.senderEmail ?? '')
     setCampaignDelay(tenant.campaignMessageDelaySeconds ?? 10)
     setBufferSeconds(tenant.messageBufferSeconds ?? 5)
+    setMsgPerMin(tenant.campaignMessagesPerMinute ?? 6)
+    setMaxPerHour(tenant.campaignMaxPerHour ?? 200)
+    setMaxPerDay(tenant.campaignMaxPerDay ?? 1000)
+    setDispatchEnabled(tenant.campaignDispatchEnabled ?? true)
   }, [tenant])
 
   if (isLoading) {
@@ -130,6 +144,33 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
     await updateBuffer.mutateAsync({ tenantId, seconds: bufferSeconds })
     setBufferSaved(true)
     setTimeout(() => setBufferSaved(false), 2500)
+  }
+
+  const handleSaveRateLimits = async () => {
+    setRateLimitsError(null)
+    try {
+      await updateRateLimits.mutateAsync({
+        tenantId,
+        messagesPerMinute: msgPerMin,
+        maxPerHour,
+        maxPerDay,
+        dispatchEnabled,
+      })
+      setRateLimitsSaved(true)
+      setTimeout(() => setRateLimitsSaved(false), 2500)
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } }
+      setRateLimitsError(e.response?.data?.error ?? 'Error al guardar.')
+    }
+  }
+
+  // Estimación: cuánto tarda una campaña de N contactos con la config actual.
+  const estimateHoursForN = (n: number): string => {
+    const ratePerMinute = Math.min(msgPerMin, maxPerHour / 60)
+    const cappedRatePerHour = Math.min(ratePerMinute * 60, maxPerHour)
+    const hours = n / cappedRatePerHour
+    if (hours < 1) return `${Math.ceil(hours * 60)} min`
+    return `~${hours.toFixed(1)}h`
   }
 
   return (
@@ -363,6 +404,171 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
         color="emerald"
         loading={updateReferenceDocs.isPending}
       />
+
+      {/* Rate limit de envíos masivos */}
+      <section className="rounded-lg border border-orange-200 bg-orange-50/30 p-5">
+        <div className="mb-1 flex items-center gap-2">
+          <Gauge className="h-4 w-4 text-orange-600" />
+          <h3 className="text-sm font-semibold text-gray-900">Rate limit de envíos masivos</h3>
+        </div>
+        <p className="mb-4 text-xs text-gray-600">
+          Topes que aplican <strong>al lanzar una campaña inicial</strong> y <strong>al sweeper que envía
+          los seguimientos</strong>. Existen para evitar que UltraMsg banee el WhatsApp del cliente
+          por enviar en ráfaga. Cualquier envío masivo respeta estos límites sin excepción.
+        </p>
+
+        <div className="mb-4 rounded-lg border border-orange-200 bg-white p-3">
+          <p className="text-xs text-gray-700">
+            <strong>Tiempo estimado para lanzar una campaña con la configuración actual:</strong>
+          </p>
+          <div className="mt-2 grid grid-cols-3 gap-3 text-xs">
+            <div className="rounded bg-gray-50 px-2 py-1.5">
+              <span className="block text-gray-500">100 contactos</span>
+              <span className="text-base font-semibold text-gray-900">{estimateHoursForN(100)}</span>
+            </div>
+            <div className="rounded bg-gray-50 px-2 py-1.5">
+              <span className="block text-gray-500">500 contactos</span>
+              <span className="text-base font-semibold text-gray-900">{estimateHoursForN(500)}</span>
+            </div>
+            <div className="rounded bg-gray-50 px-2 py-1.5">
+              <span className="block text-gray-500">1000 contactos</span>
+              <span className="text-base font-semibold text-gray-900">{estimateHoursForN(1000)}</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-5">
+          {/* Mensajes por minuto */}
+          <div>
+            <label className="mb-1 flex items-center justify-between text-sm font-medium text-gray-700">
+              <span>Mensajes por minuto</span>
+              <span className="font-mono text-orange-700">{msgPerMin} msg/min</span>
+            </label>
+            <p className="mb-2 text-xs text-gray-500">
+              Cadencia con la que se envían los mensajes. <strong>Default 6</strong> = un mensaje cada
+              10 segundos. Subir mucho aumenta la velocidad pero también el riesgo de ban.
+              Recomendado: 4–10. <em>Piso técnico:</em> 3 segundos entre mensajes (no se puede ir más rápido).
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="range" min={1} max={20} value={msgPerMin}
+                onChange={(e) => setMsgPerMin(Number(e.target.value))}
+                className="flex-1"
+              />
+              <input
+                type="number" min={1} max={60} value={msgPerMin}
+                onChange={(e) => setMsgPerMin(Number(e.target.value))}
+                className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Tope por hora */}
+          <div>
+            <label className="mb-1 flex items-center justify-between text-sm font-medium text-gray-700">
+              <span>Tope por hora</span>
+              <span className="font-mono text-orange-700">{maxPerHour} msg/h</span>
+            </label>
+            <p className="mb-2 text-xs text-gray-500">
+              Máximo de mensajes que se permite enviar en cualquier ventana de 60 minutos
+              (sliding window). <strong>Default 200</strong>. Cuando se llega al tope, el sweeper
+              pausa hasta que el más viejo cumpla 1 hora. Es el tope que más impacta la
+              duración total de una campaña grande.
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="range" min={20} max={1000} step={10} value={maxPerHour}
+                onChange={(e) => setMaxPerHour(Number(e.target.value))}
+                className="flex-1"
+              />
+              <input
+                type="number" min={1} max={5000} value={maxPerHour}
+                onChange={(e) => setMaxPerHour(Number(e.target.value))}
+                className="w-24 rounded-md border border-gray-300 px-2 py-1 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Tope diario */}
+          <div>
+            <label className="mb-1 flex items-center justify-between text-sm font-medium text-gray-700">
+              <span>Tope diario</span>
+              <span className="font-mono text-orange-700">{maxPerDay} msg/día</span>
+            </label>
+            <p className="mb-2 text-xs text-gray-500">
+              Tope total para todo el día (00:00 a 24:00 UTC). <strong>Default 1000</strong>. Se
+              cuenta sumando todos los mensajes outbound del tenant — campañas + follow-ups +
+              respuestas del agente. Cuando se alcanza, el sweeper se detiene y retoma al día siguiente.
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="range" min={100} max={5000} step={50} value={maxPerDay}
+                onChange={(e) => setMaxPerDay(Number(e.target.value))}
+                className="flex-1"
+              />
+              <input
+                type="number" min={1} max={100000} value={maxPerDay}
+                onChange={(e) => setMaxPerDay(Number(e.target.value))}
+                className="w-24 rounded-md border border-gray-300 px-2 py-1 text-sm"
+              />
+            </div>
+          </div>
+
+          {/* Toggle dispatch */}
+          <div className="rounded-lg border border-gray-200 bg-white p-3">
+            <div className="flex items-center justify-between">
+              <div className="flex-1 pr-4">
+                <p className="text-sm font-medium text-gray-900">Dispatch de campañas habilitado</p>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  Cuando está apagado, el Worker NO procesa las campañas en ejecución de este tenant
+                  (se quedan en cola). Sirve para pausar temporalmente todos los envíos masivos
+                  sin tener que cancelar las campañas. Las conversaciones entrantes
+                  (cliente que escribe primero) NO se ven afectadas.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDispatchEnabled(v => !v)}
+                className="transition-colors"
+              >
+                {dispatchEnabled
+                  ? <ToggleRight className="h-8 w-8 text-orange-600" />
+                  : <ToggleLeft className="h-8 w-8 text-gray-300" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Validación visual */}
+          {maxPerDay < maxPerHour && (
+            <div className="flex items-start gap-2 rounded-md bg-red-50 border border-red-200 p-2 text-xs text-red-700">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>El <strong>Tope diario</strong> debe ser mayor o igual al <strong>Tope por hora</strong>.</span>
+            </div>
+          )}
+          {msgPerMin > 10 && (
+            <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 p-2 text-xs text-amber-800">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              <span>Cadencia alta — riesgo de ban de UltraMsg. Recomendado dejar en 6–10 msg/min.</span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between border-t border-orange-200 pt-3">
+            <p className="text-xs text-gray-500">
+              Los topes se evalúan contra <code className="font-mono text-gray-700">Messages.SentAt</code> Outbound del tenant.
+            </p>
+            <button
+              type="button"
+              onClick={handleSaveRateLimits}
+              disabled={updateRateLimits.isPending || maxPerDay < maxPerHour}
+              className={btnPrimary}
+            >
+              {updateRateLimits.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+              {rateLimitsSaved ? '¡Guardado!' : 'Guardar topes'}
+            </button>
+          </div>
+          {rateLimitsError && <p className="text-xs text-red-600">{rateLimitsError}</p>}
+        </div>
+      </section>
     </div>
   )
 }

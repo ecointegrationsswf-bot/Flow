@@ -267,6 +267,49 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
             t.WebhookContractEnabled,
             t.ReferenceDocumentsEnabled,
             t.MessageBufferSeconds,
+            // Rate limit de envíos masivos (campañas + sweepers de follow-up)
+            t.CampaignMessagesPerMinute,
+            t.CampaignMaxPerHour,
+            t.CampaignMaxPerDay,
+            t.CampaignDispatchEnabled,
+        });
+    }
+
+    public record UpdateCampaignRateLimitsRequest(
+        int MessagesPerMinute,
+        int MaxPerHour,
+        int MaxPerDay,
+        bool DispatchEnabled);
+
+    /// <summary>
+    /// Configura los topes de envío masivo del tenant. Aplica a campañas iniciales
+    /// y al sweeper de follow-ups por igual — todo envío masivo respeta estos
+    /// límites para evitar bans de UltraMsg.
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/campaign-rate-limits")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantCampaignRateLimits(
+        Guid tenantId, [FromBody] UpdateCampaignRateLimitsRequest req, CancellationToken ct)
+    {
+        if (req.MessagesPerMinute < 1 || req.MessagesPerMinute > 60)
+            return BadRequest(new { error = "Mensajes por minuto debe estar entre 1 y 60." });
+        if (req.MaxPerHour < 1 || req.MaxPerHour > 5000)
+            return BadRequest(new { error = "Tope por hora debe estar entre 1 y 5000." });
+        if (req.MaxPerDay < req.MaxPerHour || req.MaxPerDay > 100000)
+            return BadRequest(new { error = "Tope diario debe ser >= tope por hora y <= 100000." });
+
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+
+        t.CampaignMessagesPerMinute = req.MessagesPerMinute;
+        t.CampaignMaxPerHour        = req.MaxPerHour;
+        t.CampaignMaxPerDay         = req.MaxPerDay;
+        t.CampaignDispatchEnabled   = req.DispatchEnabled;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new {
+            t.CampaignMessagesPerMinute, t.CampaignMaxPerHour,
+            t.CampaignMaxPerDay, t.CampaignDispatchEnabled
         });
     }
 

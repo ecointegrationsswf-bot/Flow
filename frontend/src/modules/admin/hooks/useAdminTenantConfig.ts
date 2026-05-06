@@ -28,6 +28,11 @@ export interface AdminTenantConfig {
   webhookContractEnabled: boolean
   referenceDocumentsEnabled: boolean
   messageBufferSeconds: number
+  // Rate limit de envíos masivos (campañas iniciales + follow-ups)
+  campaignMessagesPerMinute: number
+  campaignMaxPerHour: number
+  campaignMaxPerDay: number
+  campaignDispatchEnabled: boolean
 }
 
 export function useAdminTenantConfig(tenantId: string | null | undefined) {
@@ -116,6 +121,28 @@ export function useAdminUpdateTenantMessageBuffer() {
   return useMutation({
     mutationFn: ({ tenantId, seconds }: { tenantId: string; seconds: number }) =>
       adminClient.put(`/admin/tenants/${tenantId}/message-buffer`, { seconds }).then((r: { data: unknown }) => r.data),
+    onSuccess: (_d, v) => invalidateConfig(qc, v.tenantId),
+  })
+}
+
+export interface CampaignRateLimitsPayload {
+  tenantId: string
+  messagesPerMinute: number
+  maxPerHour: number
+  maxPerDay: number
+  dispatchEnabled: boolean
+}
+
+export function useAdminUpdateTenantCampaignRateLimits() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (p: CampaignRateLimitsPayload) =>
+      adminClient.put(`/admin/tenants/${p.tenantId}/campaign-rate-limits`, {
+        messagesPerMinute: p.messagesPerMinute,
+        maxPerHour: p.maxPerHour,
+        maxPerDay: p.maxPerDay,
+        dispatchEnabled: p.dispatchEnabled,
+      }).then((r: { data: unknown }) => r.data),
     onSuccess: (_d, v) => invalidateConfig(qc, v.tenantId),
   })
 }
