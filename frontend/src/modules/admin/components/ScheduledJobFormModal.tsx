@@ -6,6 +6,7 @@ import {
   type ScheduledJob, type TriggerType, type JobScope, type CronPreview,
 } from '@/modules/admin/hooks/useScheduledJobs'
 import { getActionFriendlyName } from '@/shared/actionLabels'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 interface Props {
   job: ScheduledJob | null
@@ -215,6 +216,7 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 }
 
 function CronPreviewBox({ preview }: { preview: CronPreview | null }) {
+  const tt = useTenantTime()
   if (!preview) return null
   if (!preview.valid) {
     return (
@@ -224,24 +226,18 @@ function CronPreviewBox({ preview }: { preview: CronPreview | null }) {
       </div>
     )
   }
-  // El backend devuelve los próximos runs en UTC. Los convertimos a hora Panamá
-  // para que el admin vea la hora real en que va a correr (la cron expression
-  // ya se interpreta en zona Panamá del lado del backend).
-  const fmtPanama = (utcIso: string) => {
-    const d = new Date(utcIso)
-    const date = d.toLocaleDateString('es-PA', { timeZone: 'America/Panama', year: 'numeric', month: '2-digit', day: '2-digit' })
-    const time = d.toLocaleTimeString('es-PA', { timeZone: 'America/Panama', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    return `${date} ${time}`
-  }
+  // El backend devuelve los próximos runs en UTC. Los convertimos a la TZ del
+  // tenant para que el admin vea la hora real en que va a correr (la cron
+  // expression ya se interpreta en zona del tenant del lado del backend).
   return (
     <div className="rounded-md border border-gray-800 bg-gray-950 p-2 text-xs">
       <div className="mb-1 flex items-center gap-1.5 text-green-400">
         <CheckCircle2 className="h-3.5 w-3.5" />
-        <span>Próximas 5 ejecuciones (hora Panamá):</span>
+        <span>Próximas 5 ejecuciones ({tt.label.city}):</span>
       </div>
       <ul className="space-y-0.5 text-gray-400">
         {preview.nextOccurrencesUtc?.map((d) => (
-          <li key={d} className="font-mono">· {fmtPanama(d)}</li>
+          <li key={d} className="font-mono">· {tt.dateTime(d)}</li>
         ))}
       </ul>
     </div>

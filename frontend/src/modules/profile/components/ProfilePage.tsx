@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Camera, Trash2, Upload, Loader2, KeyRound, Eye, EyeOff, Mail, Shield, Calendar, User, Pencil, Phone } from 'lucide-react'
 import { useProfile, useUpdateProfile, useUploadAvatar, useDeleteAvatar, useChangePassword } from '@/shared/hooks/useProfile'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 function getInitials(name: string): string {
   return name
@@ -42,6 +43,7 @@ export function ProfilePage() {
   const uploadAvatar = useUploadAvatar()
   const deleteAvatar = useDeleteAvatar()
   const changePassword = useChangePassword()
+  const tt = useTenantTime()
 
   const [fullName, setFullName] = useState('')
   const [notifyPhone, setNotifyPhone] = useState('')
@@ -275,7 +277,7 @@ export function ProfilePage() {
                   <div>
                     <p className="text-sm font-medium text-gray-500">Miembro desde</p>
                     <p className="mt-1 text-base font-semibold text-gray-900">
-                      {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString('es-PA', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'}
+                      {profile.createdAt ? tt.dateLong(profile.createdAt) : '—'}
                     </p>
                   </div>
                 </div>

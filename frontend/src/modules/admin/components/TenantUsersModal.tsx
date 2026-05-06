@@ -9,6 +9,7 @@ import {
   useChangeTenantUserPassword,
   type AdminTenant,
 } from '@/modules/admin/hooks/useAdminTenants'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 const newUserSchema = z.object({
   fullName: z.string().min(1, 'El nombre es requerido'),
@@ -55,6 +56,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
   const { data: users, isLoading } = useAdminTenantUsers(tenant.id)
   const createUser = useCreateTenantUser()
   const changePassword = useChangeTenantUserPassword()
+  const tt = useTenantTime()
 
   const [showNewUser, setShowNewUser] = useState(false)
   const [createPwValue, setCreatePwValue] = useState('')
@@ -109,13 +111,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'Nunca'
-    return new Date(dateStr).toLocaleDateString('es-PA', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    return tt.dateTime(dateStr)
   }
 
   return (

@@ -7,6 +7,7 @@ import {
   useDeleteCampaignTemplateDocument,
 } from '@/shared/hooks/useCampaignTemplateDocuments'
 import { useTenant } from '@/shared/hooks/useTenant'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { PdfViewerModal } from '@/shared/components/PdfViewerModal'
 
@@ -19,6 +20,7 @@ function formatSize(bytes: number): string {
 export function CampaignTemplateDocumentsSection({ templateId }: { templateId: string }) {
   const { data: docs, isLoading } = useCampaignTemplateDocuments(templateId)
   const { data: tenant } = useTenant()
+  const tt = useTenantTime()
   const uploadMutation = useUploadCampaignTemplateDocument(templateId)
   const updateDescMutation = useUpdateCampaignTemplateDocumentDescription(templateId)
   const deleteMutation = useDeleteCampaignTemplateDocument(templateId)
@@ -278,7 +280,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
                       {doc.fileName}
                     </p>
                     <p className="text-xs text-gray-400">
-                      {formatSize(doc.fileSizeBytes)} — {new Date(doc.uploadedAt).toLocaleDateString('es-PA')}
+                      {formatSize(doc.fileSizeBytes)} — {tt.date(doc.uploadedAt)}
                     </p>
                   </div>
                 </button>

@@ -9,6 +9,7 @@ import {
   useUpdateAdminUser,
   type AdminUser,
 } from '@/modules/admin/hooks/useAdminUsers'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 // ── Password strength ───────────────────────────────
 function getPasswordStrength(pw: string): { level: 'weak' | 'medium' | 'strong'; label: string; color: string; width: string } {
@@ -145,6 +146,7 @@ function AdminUserFormModal({ user, onClose }: { user?: AdminUser; onClose: () =
 export function AdminUsersPage() {
   const { data: users, isLoading } = useAdminUsers()
   const updateMut = useUpdateAdminUser()
+  const tt = useTenantTime()
   const [showForm, setShowForm] = useState(false)
   const [editUser, setEditUser] = useState<AdminUser | undefined>()
 
@@ -198,7 +200,7 @@ export function AdminUsersPage() {
                     </span>
                   </td>
                   <td className="whitespace-nowrap px-6 py-4 text-sm text-gray-500">
-                    {user.lastLoginAt ? new Date(user.lastLoginAt).toLocaleDateString() : '—'}
+                    {user.lastLoginAt ? tt.date(user.lastLoginAt) : '—'}
                   </td>
                   <td className="whitespace-nowrap px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-1">

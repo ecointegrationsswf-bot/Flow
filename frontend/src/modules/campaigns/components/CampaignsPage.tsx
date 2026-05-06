@@ -1,13 +1,13 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { Megaphone, Plus, Loader2, Search, X } from 'lucide-react'
-import { format } from 'date-fns'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { useCampaigns } from '@/shared/hooks/useCampaigns'
 import { usePermissions } from '@/shared/hooks/usePermissions'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 const triggerLabels: Record<string, string> = {
   FileUpload: 'Archivo',
@@ -29,6 +29,7 @@ export function CampaignsPage() {
   const { hasPermission } = usePermissions()
   const canCreate = hasPermission('create_campaigns')
   const { data: campaigns, isLoading, isError } = useCampaigns()
+  const tt = useTenantTime()
   const [launchError, setLaunchError] = useState<string | null>(null)
 
   // Filtros
@@ -54,10 +55,10 @@ export function CampaignsPage() {
         (triggerLabels[c.trigger] ?? c.trigger).toLowerCase().includes(q) ||
         c.channel.toLowerCase().includes(q) ||
         statusLabel.toLowerCase().includes(q) ||
-        format(new Date(c.createdAt), 'dd/MM/yyyy').includes(q)
+        tt.date(c.createdAt).includes(q)
       )
     })
-  }, [campaigns, search, filterStatus, filterChannel])
+  }, [campaigns, search, filterStatus, filterChannel, tt.timeZone])
 
   const hasFilters = search || filterStatus || filterChannel
 
@@ -218,7 +219,7 @@ export function CampaignsPage() {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-500">
-                          {format(new Date(c.createdAt), 'dd/MM/yyyy')}
+                          {tt.date(c.createdAt)}
                         </td>
                         <td className="px-4 py-3 text-xs text-gray-600">
                           {c.createdByUserId || '—'}

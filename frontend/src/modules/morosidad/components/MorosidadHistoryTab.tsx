@@ -11,6 +11,7 @@ import {
   type DelinquencyExecution,
   type FieldMapping,
 } from '../hooks/useMorosidad'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 interface Props {
   actionId: string
@@ -49,23 +50,6 @@ const groupStatusLabel: Record<string, string> = {
   ClientReplied:   'Respondió',
   Notified:        'Notificado',
   Skipped:         'Omitido',
-}
-
-function fmtDateShort(iso: string | null) {
-  if (!iso) return null
-  return new Intl.DateTimeFormat('es-PA', {
-    timeZone: 'America/Panama',
-    day: '2-digit', month: '2-digit',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(new Date(iso))
-}
-
-function fmtDate(iso: string) {
-  return new Intl.DateTimeFormat('es-PA', {
-    timeZone: 'America/Panama',
-    day: '2-digit', month: 'short', year: 'numeric',
-    hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(new Date(iso))
 }
 
 function fmtAmount(n: number) {
@@ -174,6 +158,7 @@ function GroupsPanel({
   const [page, setPage] = useState(1)
   const [expandedGroup, setExpandedGroup] = useState<string | null>(null)
   const { data, isLoading } = useContactGroups(executionId, page)
+  const tt = useTenantTime()
 
   const groups = data?.groups ?? []
   const total  = data?.total ?? 0
@@ -247,10 +232,10 @@ function GroupsPanel({
                       </span>
                     </td>
                     <td className="px-4 py-2.5 text-center font-mono text-xs text-gray-600">
-                      {fmtDateShort(g.firstMessageSentAt) ?? <span className="text-gray-300">—</span>}
+                      {g.firstMessageSentAt ? tt.dateTimeShort(g.firstMessageSentAt) : <span className="text-gray-300">—</span>}
                     </td>
                     <td className="px-4 py-2.5 text-center font-mono text-xs text-gray-600">
-                      {fmtDateShort(g.firstClientReplyAt) ?? <span className="text-gray-300">—</span>}
+                      {g.firstClientReplyAt ? tt.dateTimeShort(g.firstClientReplyAt) : <span className="text-gray-300">—</span>}
                     </td>
                   </tr>
                   {expandedGroup === g.id && (
@@ -299,6 +284,7 @@ export function MorosidadHistoryTab({ actionId, exportButton: ExportButton }: Pr
   const [selectedExecution, setSelectedExecution] = useState<string | null>(null)
   const [from, setFrom] = useState('')
   const [to, setTo]     = useState('')
+  const tt = useTenantTime()
 
   const { data, isLoading, refetch } = useDelinquencyExecutions(actionId, page, from || undefined, to || undefined)
   const { data: mappings = [] } = useFieldMappings(actionId)
@@ -384,7 +370,7 @@ export function MorosidadHistoryTab({ actionId, exportButton: ExportButton }: Pr
             {/* Fecha */}
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium text-gray-800">
-                {fmtDate(ex.startedAt)}
+                {tt.dateTime(ex.startedAt)}
               </p>
               <p className="text-xs text-gray-400">
                 {statusLabel[ex.status] ?? ex.status}

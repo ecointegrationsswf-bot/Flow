@@ -3,8 +3,7 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { StatCard } from './StatCard'
 import { useDashboardStats } from '@/shared/hooks/useDashboard'
-import { formatDistanceToNow } from 'date-fns'
-import { es } from 'date-fns/locale'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 const gestionLabels: Record<string, string> = {
   Pending: 'Pendiente',
@@ -18,6 +17,7 @@ const gestionLabels: Record<string, string> = {
 
 export function DashboardPage() {
   const { data: stats } = useDashboardStats()
+  const tt = useTenantTime()
 
   return (
     <div>
@@ -85,7 +85,7 @@ export function DashboardPage() {
                   <div className="ml-3 flex items-center gap-2">
                     <Badge variant={c.agentType}>{c.agentType}</Badge>
                     <span className="text-xs text-gray-400">
-                      {formatDistanceToNow(new Date(c.lastActivityAt), { addSuffix: true, locale: es })}
+                      {tt.relative(c.lastActivityAt)}
                     </span>
                   </div>
                 </div>

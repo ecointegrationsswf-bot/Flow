@@ -7,6 +7,7 @@ import { useAuthStore } from '@/shared/stores/authStore'
 import { useUiStore } from '@/shared/stores/uiStore'
 import { useWhatsAppStatus } from '@/shared/hooks/useWhatsApp'
 import { usePermissions } from '@/shared/hooks/usePermissions'
+import { TenantTimezoneBadge } from '@/shared/components/TenantTimezoneBadge'
 
 // permission: undefined = visible siempre (ej: Dashboard, Perfil)
 const NAV_ITEMS = [
@@ -110,6 +111,11 @@ export function AppLayout() {
                 </div>
               )}
             </button>
+          )}
+          {!sidebarCollapsed && (
+            <div className="mb-2 px-1">
+              <TenantTimezoneBadge />
+            </div>
           )}
           <button
             onClick={logout}

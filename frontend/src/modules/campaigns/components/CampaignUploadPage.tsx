@@ -10,6 +10,7 @@ import {
   type FixedFormatPreviewResult,
 } from '@/shared/hooks/useCampaigns'
 import { FileDropZone } from './FileDropZone'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 const STEPS = [
   { number: 1, label: 'Configuracion' },
@@ -48,6 +49,7 @@ function JsonModal({ contact, onClose }: { contact: FixedContactPreview; onClose
 // ── Página principal ──────────────────────────────────────────────────────────
 export function CampaignUploadPage() {
   const navigate = useNavigate()
+  const tt = useTenantTime()
   const [step, setStep] = useState(1)
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<FixedFormatPreviewResult | null>(null)
@@ -298,7 +300,7 @@ export function CampaignUploadPage() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-gray-500">Inicio</dt>
-                  <dd className="font-medium text-gray-900">{startDate ? new Date(startDate).toLocaleString('es-PA') : 'Inmediato'}</dd>
+                  <dd className="font-medium text-gray-900">{startDate ? tt.dateTime(startDate) : 'Inmediato'}</dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-gray-500">Seguimientos</dt>

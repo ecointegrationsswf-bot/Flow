@@ -5,6 +5,7 @@ import {
   useScheduledJobExecutionItems,
   type JobExecution,
 } from '@/modules/admin/hooks/useScheduledJobs'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 interface Props {
   jobId: string
@@ -93,6 +94,7 @@ function ExecutionRow({
   isExpanded: boolean
   onToggle: () => void
 }) {
+  const tt = useTenantTime()
   return (
     <>
       <tr className={expandable ? 'cursor-pointer hover:bg-gray-800/50' : ''} onClick={expandable ? onToggle : undefined}>
@@ -102,15 +104,7 @@ function ExecutionRow({
           ) : null}
         </td>
         <td className="px-2 py-1.5 font-mono text-xs text-gray-400">
-          {new Date(execution.startedAt).toLocaleString('es-PA', {
-            timeZone: 'America/Panama',
-            hour12: false,
-            day: '2-digit',
-            month: '2-digit',
-            hour: '2-digit',
-            minute: '2-digit',
-            second: '2-digit',
-          })}
+          {tt.dateTimeShort(execution.startedAt)}
         </td>
         <td className="px-2 py-1.5">
           <ExecStatus status={execution.status} />

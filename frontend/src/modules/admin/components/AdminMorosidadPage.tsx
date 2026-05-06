@@ -8,6 +8,7 @@ import {
   AlertTriangle, ChevronLeft, ChevronRight, Clock, Download,
 } from 'lucide-react'
 import { useToast, ToastContainer } from '@/shared/components/Toast'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 // ─── Tipos ────────────────────────────────────────────────────────────────────
 
@@ -956,10 +957,9 @@ function HistorialTab({ tenantId, actionId }: { tenantId: string; actionId: stri
   const [page, setPage] = useState(1)
   const { data, isLoading, isFetching } = useAdminExecutions(tenantId, actionId, page)
   const [expandedExecution, setExpandedExecution] = useState<string | null>(null)
+  const tt = useTenantTime()
 
-  const fmt = (iso: string | null) => iso
-    ? new Date(iso).toLocaleString('es-PA', { timeZone: 'America/Panama', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })
-    : '—'
+  const fmt = (iso: string | null) => iso ? tt.dateTime(iso) : '—'
 
   if (isLoading) return <div className="flex items-center gap-2 py-10 text-gray-400"><Loader2 className="h-5 w-5 animate-spin" /> Cargando historial...</div>
 
