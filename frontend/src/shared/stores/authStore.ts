@@ -26,6 +26,13 @@ interface AuthState {
 // el primer render del ProtectedRoute ve isAuthenticated=false y redirige a
 // /login antes de que hydrate() corra → forzaba al user a re-loguear cada
 // vez que abría el browser, aunque el JWT estuviera válido en localStorage.
+//
+// AUTH_BUILD_TAG: hardening de sesión 2026-05-06b
+//   - Bundle nuevo + web.config con no-cache en index.html.
+//   - El cache de IIS estaba sirviendo el index.html con max-age=1año, así
+//     que browsers viejos seguían cargando el bundle anterior aunque el fix
+//     ya estuviera publicado. Cambiamos el hash del bundle para forzar
+//     descarga al próximo Ctrl+F5.
 function bootInitialState(): {
   token: string | null
   tenantId: string | null
@@ -57,6 +64,12 @@ function bootInitialState(): {
   } catch {
     return { token: null, tenantId: null, user: null, isAuthenticated: false }
   }
+}
+
+// Tag visible en window para diagnóstico — permite verificar en consola
+// del browser que el bundle nuevo está cargado: window.__AUTH_BUILD__
+if (typeof window !== 'undefined') {
+  ;(window as unknown as { __AUTH_BUILD__: string }).__AUTH_BUILD__ = '2026-05-06-sync-hydration'
 }
 
 const initial = bootInitialState()
