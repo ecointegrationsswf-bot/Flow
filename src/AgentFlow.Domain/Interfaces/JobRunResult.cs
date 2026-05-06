@@ -13,6 +13,14 @@ public sealed record JobRunResult(
     string? Summary = null,
     string? ErrorDetail = null)
 {
+    /// <summary>
+    /// Si el executor decidió "posponer" el job (ej: fuera de horario laboral),
+    /// expone aquí el próximo instante UTC en el que debe correr. El Worker lo
+    /// usará para sobreescribir <c>NextRunAt</c> en lugar de tratar el job como
+    /// completado. NULL = usar el cómputo normal (Cron/null para DelayFromEvent).
+    /// </summary>
+    public DateTime? RescheduleAt { get; init; }
+
     public static JobRunResult Success(int total, string? summary = null)
         => new("Success", total, total, 0, summary);
 
@@ -24,4 +32,12 @@ public sealed record JobRunResult(
 
     public static JobRunResult Skipped(string? reason = null)
         => new("Skipped", 0, 0, 0, reason);
+
+    /// <summary>
+    /// Indica al Worker que el job NO se ejecutó pero debe reintentarse en
+    /// <paramref name="nextUtc"/>. Útil para diferir follow-ups que cayeron
+    /// fuera del horario laboral del tenant.
+    /// </summary>
+    public static JobRunResult Deferred(DateTime nextUtc, string reason)
+        => new("Skipped", 0, 0, 0, reason) { RescheduleAt = nextUtc };
 }

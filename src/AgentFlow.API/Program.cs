@@ -111,6 +111,10 @@ catch (Exception ex)
 // ── Campaign Dispatcher (envío de campañas con rate limiting) ────────
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>();
+// Business hours en TZ del tenant — necesario para programar follow-ups
+// dentro del horario laboral del cliente.
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IBusinessHoursClock,
+    AgentFlow.Infrastructure.Time.BusinessHoursClock>();
 // Generador de mensaje con Claude (paridad con n8n) — usado por el dispatcher v2.
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInitialMessageGenerator,
     AgentFlow.Infrastructure.AI.InitialMessageGenerator>();

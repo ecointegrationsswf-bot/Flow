@@ -106,13 +106,16 @@ public class ScheduledWebhookWorker(
 
         var startedAt = DateTime.UtcNow;
         var executionId = await executions.InsertPendingAsync(
-            job.Id, startedAt, "Worker", contextId: null, ct);
+            job.Id, startedAt, "Worker", contextId: job.ContextId, ct);
 
         JobRunResult result;
         try
         {
             var executor = SelectExecutor(executors, job);
-            var ctx = new ScheduledJobContext("Worker", null, startedAt, executionId);
+            // Propagamos el ContextId del job (ej: "campaignContactId:index" para
+            // FOLLOW_UP_MESSAGE) — sin esto los executors específicos no pueden
+            // resolver qué entidad procesar y devolverían Skipped.
+            var ctx = new ScheduledJobContext("Worker", job.ContextId, startedAt, executionId);
             result = await executor.ExecuteAsync(job, ctx, ct);
         }
         catch (Exception ex)
@@ -131,7 +134,11 @@ public class ScheduledWebhookWorker(
             ? 0
             : job.ConsecutiveFailures + 1;
 
-        var nextRunAt = ComputeNextRunAt(job, completedAt);
+        // Si el executor pidió diferir explícitamente (ej: FollowUp fuera de horario),
+        // respetamos su RescheduleAt en vez del cómputo por defecto. Esto convierte
+        // un job DelayFromEvent "one-shot" en algo reintentable hasta que entre en
+        // horario laboral.
+        var nextRunAt = result.RescheduleAt ?? ComputeNextRunAt(job, completedAt);
         await jobs.UpdateAfterRunAsync(
             job.Id, result.Status, result.Summary,
             nextRunAt, consecutiveFailures, ct);

@@ -19,7 +19,20 @@ using StackExchange.Redis;
 // API, asegurarse de QUITAR la línea AddHostedService<ScheduledWebhookWorker>
 // del API para evitar correr el worker dos veces (la concurrencia optimista
 // MarkRunningAsync evita ejecuciones simultáneas, pero duplica carga BD/CPU).
-var builder = Host.CreateApplicationBuilder(args);
+// AddMediatR registra TODOS los handlers del assembly Application — varios
+// inyectan servicios (IAgentRunner, IDuplicateChecker, IConversationRepository,
+// etc.) que vienen del assembly de la API. En Production estos no se validan
+// al arrancar; en Development el host los valida y rompe el boot. Forzamos
+// Production como entorno por defecto del Worker (no necesita Dev exposures
+// como Swagger/migraciones de seed).
+var settings = new HostApplicationBuilderSettings
+{
+    Args = args,
+    EnvironmentName = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
+                  ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT")
+                  ?? Environments.Production,
+};
+var builder = Host.CreateApplicationBuilder(settings);
 var cfg = builder.Configuration;
 
 // ── Windows Service (no-op en Linux/macOS) ───────────────
@@ -84,6 +97,14 @@ builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();
 
+// ── MediatR ──────────────────────────────────────────────
+// Necesario porque varios executors del Worker (DelinquencyDownloadExecutor →
+// DelinquencyProcessor) inyectan IMediator para disparar comandos como
+// LaunchCampaignV2Command. Sin esto el Worker se cae al construir el DI.
+builder.Services.AddMediatR(c =>
+    c.RegisterServicesFromAssemblies(
+        typeof(AgentFlow.Application.Modules.Webhooks.ProcessIncomingMessageCommand).Assembly));
+
 // ── Webhook Contract System ──────────────────────────────
 builder.Services.AddScoped<ISystemContextBuilder,
     AgentFlow.Infrastructure.Webhooks.SystemContextBuilder>();
@@ -99,6 +120,17 @@ builder.Services.AddScoped<IActionExecutorService,
 builder.Services.AddScoped<IActionPromptBuilder,
     AgentFlow.Infrastructure.Webhooks.ActionPromptBuilder>();
 
+// ── Repos transversales necesarios por handlers MediatR de Application ──
+// Aunque el Worker NO sirve HTTP, AddMediatR registra todos los handlers del
+// assembly de Application — y varios de ellos inyectan estos repos. Sin
+// registrarlos, el contenedor falla validación al arrancar.
+builder.Services.AddScoped<IConversationRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.ConversationRepository>();
+builder.Services.AddScoped<ICampaignRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.CampaignRepository>();
+builder.Services.AddScoped<IContextDispatcher,
+    AgentFlow.Infrastructure.Dispatching.ContextDispatcher>();
+
 // ── Scheduled Jobs (CORE del worker) ─────────────────────
 builder.Services.AddScoped<IScheduledJobRepository,
     AgentFlow.Infrastructure.Persistence.Repositories.ScheduledJobRepository>();
@@ -112,6 +144,11 @@ builder.Services.AddScoped<IWebhookEventDispatcher,
 // Canal — necesario para OutputInterpreter, FollowUpExecutor y CampaignAutoCloseExecutor
 builder.Services.AddScoped<IChannelProviderFactory,
     AgentFlow.Infrastructure.Channels.ChannelProviderFactory>();
+
+// Business hours en TZ del tenant — usado por CampaignDispatcherService al
+// programar follow-ups y por FollowUpExecutor para diferir si está fuera de hora.
+builder.Services.AddSingleton<IBusinessHoursClock,
+    AgentFlow.Infrastructure.Time.BusinessHoursClock>();
 
 // Morosidad
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDelinquencyProcessor,

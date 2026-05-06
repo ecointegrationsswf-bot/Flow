@@ -33,6 +33,7 @@ public class CampaignDispatcherService(
     IWebhookEventDispatcher eventDispatcher,
     IScheduledJobRepository scheduledJobs,
     IInitialMessageGenerator? messageGenerator,
+    IBusinessHoursClock businessHours,
     ILogger<CampaignDispatcherService> logger)
 {
     // ── Mínimos de seguridad — tope inferior aunque la config diga lo contrario ──
@@ -298,6 +299,12 @@ public class CampaignDispatcherService(
                     logger.LogDebug("Campaña {CampaignId}: enviado a {Phone} (#{Count})",
                         campaignId, contact.PhoneNumber, sent);
 
+                    // Persistir Conversation + Message del envío inicial — sin esto el monitor
+                    // no muestra la campaña hasta que el cliente responde (replicaba la lógica
+                    // del N8nCallbackController.cs).
+                    try { await PersistOutboundConversationAsync(campaign, contact, message, result.ExternalMessageId, sendNow, ct); }
+                    catch (Exception ex) { logger.LogError(ex, "Persistir conversación inicial falló para {Phone}", contact.PhoneNumber); }
+
                     try { await ScheduleFollowUpsForContactAsync(campaign, contact, ct); }
                     catch (Exception ex) { logger.LogError(ex, "Schedule follow-ups falló para {Phone}", contact.PhoneNumber); }
                 }
@@ -410,6 +417,99 @@ public class CampaignDispatcherService(
         return string.Join(". ", parts) + ".";
     }
 
+    /// <summary>
+    /// Crea la Conversation + Message correspondiente al primer envío de la campaña.
+    /// Sin esto, el monitor solo ve el contacto cuando el cliente responde.
+    /// Replica la lógica de N8nCallbackController para mantener paridad con el flujo legacy.
+    /// </summary>
+    private async Task PersistOutboundConversationAsync(
+        Campaign campaign,
+        CampaignContact contact,
+        string content,
+        string? externalMessageId,
+        DateTime sentAtUtc,
+        CancellationToken ct)
+    {
+        var tenantId = campaign.TenantId;
+        var phone    = contact.PhoneNumber;
+
+        // 1. Cerrar conversaciones activas previas del mismo número (excepto las
+        //    que están siendo atendidas por un humano). Mantiene el invariante de
+        //    "una sola conversación abierta por contacto".
+        var previousActive = await db.Conversations
+            .Where(c => c.TenantId == tenantId
+                     && c.ClientPhone == phone
+                     && c.Status != ConversationStatus.Closed
+                     && !c.IsHumanHandled)
+            .ToListAsync(ct);
+
+        foreach (var prev in previousActive)
+        {
+            prev.Status         = ConversationStatus.Closed;
+            prev.ClosedAt       = sentAtUtc;
+            prev.LastActivityAt = sentAtUtc;
+
+            db.Set<GestionEvent>().Add(new GestionEvent
+            {
+                Id             = Guid.NewGuid(),
+                ConversationId = prev.Id,
+                Result         = GestionResult.Pending,
+                Origin         = "system:campaign-superseded",
+                Notes          = $"Conversación cerrada automáticamente por nueva campaña {campaign.Name} ({campaign.Id})",
+                OccurredAt     = sentAtUtc,
+            });
+        }
+
+        // 2. Crear la conversación nueva.
+        var conversation = new Conversation
+        {
+            Id             = Guid.NewGuid(),
+            TenantId       = tenantId,
+            ClientPhone    = phone,
+            ClientName     = contact.ClientName,
+            PolicyNumber   = contact.PolicyNumber,
+            Channel        = campaign.Channel,
+            ActiveAgentId  = campaign.AgentDefinitionId,
+            CampaignId     = campaign.Id,
+            Status         = ConversationStatus.WaitingClient,
+            StartedAt      = sentAtUtc,
+            LastActivityAt = sentAtUtc,
+        };
+        db.Conversations.Add(conversation);
+
+        // 3. Persistir el mensaje saliente.
+        db.Set<Message>().Add(new Message
+        {
+            Id                = Guid.NewGuid(),
+            ConversationId    = conversation.Id,
+            Direction         = MessageDirection.Outbound,
+            Status            = MessageStatus.Sent,
+            Content           = content,
+            ExternalMessageId = externalMessageId,
+            IsFromAgent       = true,
+            AgentName         = campaign.CampaignTemplate?.Name ?? campaign.Name,
+            SentAt            = sentAtUtc,
+        });
+
+        // 4. Reflejar el envío en el ContactGroup de morosidad (Descargas → Enviado).
+        // Idempotente — solo marca grupos que aún no tenían FirstMessageSentAt.
+        // Sin esto la columna "Enviado" en la pantalla Descargas queda vacía aunque
+        // el WhatsApp ya salió. Replica la lógica del N8nCallbackController.
+        var groupsToMark = await db.ContactGroups
+            .Where(g => g.CampaignId == campaign.Id
+                     && g.PhoneNormalized == phone
+                     && g.FirstMessageSentAt == null)
+            .ToListAsync(ct);
+        foreach (var g in groupsToMark)
+        {
+            g.FirstMessageSentAt = sentAtUtc;
+            if (g.Status == ContactGroupStatus.Pending || g.Status == ContactGroupStatus.CampaignCreated)
+                g.Status = ContactGroupStatus.MessageSent;
+        }
+
+        await db.SaveChangesAsync(ct);
+    }
+
     // ── Slugs de ActionDefinitions globales que el seed registra al boot ─────
     // y que los executors específicos (FollowUpExecutor, CampaignAutoCloseExecutor)
     // declaran como su Slug. El campo Name de la action en BD coincide con estos.
@@ -424,10 +524,10 @@ public class CampaignDispatcherService(
     private async Task ScheduleFollowUpsForContactAsync(
         Campaign campaign, CampaignContact contact, CancellationToken ct)
     {
+        // Cargamos el template completo (no proyectado) — necesario para que
+        // BusinessHoursClock pueda leer SendFrom/SendUntil y AttentionDays.
         var template = await db.CampaignTemplates
-            .Where(t => t.Id == campaign.CampaignTemplateId)
-            .Select(t => new { t.FollowUpHours, t.FollowUpMessagesJson })
-            .FirstOrDefaultAsync(ct);
+            .FirstOrDefaultAsync(t => t.Id == campaign.CampaignTemplateId, ct);
         if (template is null) return;
         if (template.FollowUpHours.Count == 0) return;
         if (string.IsNullOrEmpty(template.FollowUpMessagesJson)) return;
@@ -435,25 +535,37 @@ public class CampaignDispatcherService(
         var actionId = await GetOrFailActionDefinitionIdAsync(FollowUpActionSlug, ct);
         if (actionId is null) return;
 
+        // Tenant ya viene cargado en campaign.Tenant (Include en DispatchBatchAsync).
+        var tenant = campaign.Tenant;
+
         for (var i = 0; i < template.FollowUpHours.Count; i++)
         {
             var hours = template.FollowUpHours[i];
             if (hours <= 0) continue;
 
+            // Calculamos el "candidato" como ahora + horas configuradas, y luego
+            // lo alineamos a la próxima ventana laboral del tenant. Si cae en la
+            // madrugada o en sábado/domingo, el clock lo mueve al próximo lunes 8 AM
+            // (o lo que corresponda) — sin perder el job.
+            var candidateUtc = DateTime.UtcNow.AddMinutes(hours * 60);
+            var alignedUtc   = businessHours.AlignToBusinessHoursUtc(candidateUtc, tenant, template);
+
             var job = new ScheduledWebhookJob
             {
-                Id = Guid.NewGuid(),
+                Id                 = Guid.NewGuid(),
                 ActionDefinitionId = actionId.Value,
-                TriggerType = "DelayFromEvent",
-                TriggerEvent = "CampaignContactSent",
-                DelayMinutes = hours * 60,
-                Scope = "PerConversation",
-                IsActive = true,
-                NextRunAt = DateTime.UtcNow.AddMinutes(hours * 60)
+                TriggerType        = "DelayFromEvent",
+                TriggerEvent       = "CampaignContactSent",
+                DelayMinutes       = hours * 60,
+                Scope              = "PerConversation",
+                // Convención del FollowUpExecutor: "{campaignContactId}:{index}".
+                // Sin esto el executor no puede resolver qué contacto seguir.
+                ContextId          = $"{contact.Id}:{i}",
+                IsActive           = true,
+                NextRunAt          = alignedUtc,
             };
             await scheduledJobs.AddAsync(job, ct);
         }
-        // Log compacto — útil al revisar la cola.
         logger.LogInformation(
             "Programados {Count} seguimientos para contacto {Phone}.",
             template.FollowUpHours.Count, contact.PhoneNumber);

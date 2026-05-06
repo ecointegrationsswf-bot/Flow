@@ -38,6 +38,18 @@ public class ScheduledWebhookJob
     /// <summary>AllTenants | PerCampaign | PerConversation. Define el routing del Worker.</summary>
     public string Scope { get; set; } = "AllTenants";
 
+    /// <summary>
+    /// Identificador del contexto de ejecución dentro del Scope. El executor lo
+    /// recibe en <c>ScheduledJobContext.ContextId</c> y lo usa para resolver qué
+    /// entidad procesar. Convenciones por Scope:
+    ///   PerCampaign     → CampaignId (Guid)
+    ///   PerConversation → "{CampaignContactId}:{FollowUpIndex}"
+    ///   AllTenants      → null
+    /// Sin esto, los executors específicos (FollowUpExecutor, etc.) no pueden
+    /// asociar el job a su entidad y devuelven Skipped.
+    /// </summary>
+    public string? ContextId { get; set; }
+
     public bool IsActive { get; set; } = true;
 
     /// <summary>UTC. Próxima ejecución programada. NULL hasta que el Worker la calcule.</summary>

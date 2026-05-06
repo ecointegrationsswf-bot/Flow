@@ -16,15 +16,16 @@ namespace AgentFlow.Infrastructure.ScheduledJobs;
 /// El ContextId tiene formato "{campaignContactId}:{followUpIndex}".
 ///
 /// Reglas de omisión silenciosa (NO marcar como fallo):
-/// 1. Conversación no existe o Status != Active (cliente respondió, escaló o cerró).
+/// 1. Conversación no existe o no está esperando respuesta del cliente.
 /// 2. Índice ya en CampaignContact.FollowUpsSentJson (retry idempotente).
 /// 3. Campaign.IsActive = false (campaña cancelada).
 /// 4. CampaignTemplate.FollowUpMessagesJson no tiene mensaje en ese índice.
-/// 5. CampaignTemplate.FollowUpHours no tiene esa hora (config cambió tras el job).
+/// 5. Fuera de horario laboral del tenant → DEFER al próximo turno (no skip permanente).
 /// </summary>
 public class FollowUpExecutor(
     AgentFlowDbContext db,
     IChannelProviderFactory providerFactory,
+    IBusinessHoursClock businessHours,
     ILogger<FollowUpExecutor> log) : IScheduledJobExecutor
 {
     public string Slug => "FOLLOW_UP_MESSAGE";
@@ -40,7 +41,7 @@ public class FollowUpExecutor(
             return JobRunResult.Skipped($"ContextId con formato inválido: '{ctx.ContextId}'.");
 
         var contact = await db.CampaignContacts
-            .Include(c => c.Campaign)
+            .Include(c => c.Campaign).ThenInclude(c => c.Tenant)
             .FirstOrDefaultAsync(c => c.Id == contactId, ct);
         if (contact is null)
             return JobRunResult.Skipped($"CampaignContact {contactId} no existe.");
@@ -56,7 +57,10 @@ public class FollowUpExecutor(
             return JobRunResult.Skipped($"Índice {index} ya enviado.");
         }
 
-        // ── Estado de la conversación: solo enviamos si está Active ─────────
+        // ── Estado de la conversación ────────────────────────────────────────
+        // Solo enviamos seguimiento al cliente que NO ha respondido todavía
+        // (estado WaitingClient). Si ya respondió (Active), escaló (EscalatedToHuman),
+        // se cerró (Closed) o se marcó como Unresponsive, no insistimos.
         var conv = await db.Conversations
             .Where(c => c.TenantId == contact.Campaign.TenantId
                         && c.ClientPhone == contact.PhoneNumber
@@ -69,11 +73,11 @@ public class FollowUpExecutor(
             log.LogInformation("Sin conversación para contacto {Id} — el primer mensaje aún no se procesó.", contactId);
             return JobRunResult.Skipped("Sin conversación activa.");
         }
-        if (conv.Status != ConversationStatus.Active)
+        if (conv.Status != ConversationStatus.WaitingClient)
         {
-            log.LogInformation("Conversación {Conv} en estado {Status} — seguimiento {Idx} omitido.",
+            log.LogInformation("Conversación {Conv} en estado {Status} — seguimiento {Idx} omitido (cliente ya respondió o se cerró).",
                 conv.Id, conv.Status, index);
-            return JobRunResult.Skipped($"Conversación en {conv.Status}.");
+            return JobRunResult.Skipped($"Conversación en {conv.Status} — no requiere seguimiento.");
         }
 
         // ── Resolver mensaje desde CampaignTemplate ─────────────────────────
@@ -84,6 +88,21 @@ public class FollowUpExecutor(
 
         if (string.IsNullOrEmpty(template.FollowUpMessagesJson))
             return JobRunResult.Skipped("Maestro sin FollowUpMessagesJson configurado.");
+
+        // ── Guard de horario laboral del tenant ──────────────────────────────
+        // Si el job dispara fuera del horario configurado (ej: 2 AM PA), NO
+        // mandamos. Devolvemos Deferred con el próximo arranque de ventana en UTC,
+        // y el Worker reagenda el job en lugar de marcarlo completado. Así el
+        // mensaje sale a las 8 AM del próximo día laboral en vez de a la madrugada.
+        var nowUtc = DateTime.UtcNow;
+        if (!businessHours.IsWithinBusinessHours(nowUtc, contact.Campaign.Tenant, template))
+        {
+            var nextWindow = businessHours.NextBusinessWindowStartUtc(nowUtc, contact.Campaign.Tenant, template);
+            log.LogInformation(
+                "FollowUp {Idx} fuera de horario — diferido a {NextUtc} UTC.",
+                index, nextWindow);
+            return JobRunResult.Deferred(nextWindow, "Fuera de horario laboral — reagendado al próximo turno.");
+        }
 
         List<string>? messages;
         try
