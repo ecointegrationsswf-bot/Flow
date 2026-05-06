@@ -147,6 +147,10 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IJobExecutionItemReposito
     AgentFlow.Infrastructure.Persistence.Repositories.JobExecutionItemRepository>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWebhookEventDispatcher,
     AgentFlow.Infrastructure.ScheduledJobs.WebhookEventDispatcher>();
+
+// Auditor compartido — ver skill `scheduled-jobs`.
+builder.Services.AddScoped<AgentFlow.Infrastructure.ScheduledJobs.JobExecutionAuditor>();
+
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.DefaultWebhookExecutor>();
 

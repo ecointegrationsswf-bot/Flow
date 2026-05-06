@@ -161,6 +161,12 @@ builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IConversationNotifier,
     AgentFlow.Infrastructure.ScheduledJobs.NoOpConversationNotifier>();
 
 // Executor genérico (slug "*") + executors específicos.
+// Auditor compartido — TODO executor debe llamar a auditor.RecordFailure(...) y
+// auditor.FlushAsync() para persistir el detalle de fallos en
+// ScheduledWebhookJobExecutionItems. Sin esto, el admin no puede ver POR QUÉ
+// falló cada item ni a QUÉ TENANT pertenecía. Ver skill `scheduled-jobs`.
+builder.Services.AddScoped<AgentFlow.Infrastructure.ScheduledJobs.JobExecutionAuditor>();
+
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.DefaultWebhookExecutor>();
 // LEGACY: per-contacto / per-campaña — siguen registrados por compatibilidad

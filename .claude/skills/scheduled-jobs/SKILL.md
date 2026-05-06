@@ -345,3 +345,97 @@ Cualquier PR que toque envío masivo debe mostrar:
 
 - `src/AgentFlow.Infrastructure/Campaigns/CampaignDispatcherService.cs` → `DispatchBatchAsync`
 - `src/AgentFlow.Infrastructure/ScheduledJobs/FollowUpSweepExecutor.cs` → `ProcessTenantAsync`
+
+---
+
+## ⚠️ REGLA OBLIGATORIA: registrar fallos vía `JobExecutionAuditor`
+
+**Aplica a:** TODO `IScheduledJobExecutor` que procesa una colección
+(conversaciones, contactos, campañas, tenants, etc).
+
+**Razón:** sin item-level audit, el admin solo ve un resumen genérico
+("PartialFailure 10/25 OK · 15 fallos") sin saber QUÉ TENANT falló ni POR QUÉ.
+El usuario tiene que pedirle al desarrollador que mire logs de servidor —
+inaceptable.
+
+**Patrón obligatorio en cualquier executor**:
+
+```csharp
+public class MiExecutor(
+    AgentFlowDbContext db,
+    JobExecutionAuditor auditor,        // ← inyectar SIEMPRE
+    ILogger<MiExecutor> log) : IScheduledJobExecutor
+{
+    public async Task<JobRunResult> ExecuteAsync(
+        ScheduledWebhookJob job, ScheduledJobContext ctx, CancellationToken ct)
+    {
+        var totalOk = 0;
+        var totalFailed = 0;
+
+        foreach (var item in items)
+        {
+            try
+            {
+                await ProcessOneAsync(item, ct);
+                totalOk++;
+            }
+            catch (Exception ex)
+            {
+                totalFailed++;
+                auditor.RecordFailure(
+                    ctx.ExecutionId,
+                    item.TenantId,                                  // tenant del item
+                    JobExecutionAuditor.ContextTypes.Conversation,  // o Campaign / Contact / etc
+                    item.Id.ToString(),
+                    item.HumanReadableName,                         // ej: "Cliente: Bartolo"
+                    ex.Message);                                    // motivo legible
+            }
+        }
+
+        // OBLIGATORIO al final, antes de retornar:
+        await auditor.FlushAsync(ct);
+        return JobRunResult.Partial(...);
+    }
+}
+```
+
+### Reglas
+
+1. **NUNCA** persistir items manualmente (`itemRepo.AddBatchAsync`) en un executor.
+   Siempre pasar por `JobExecutionAuditor` — único punto de entrada.
+2. **SIEMPRE** llamar a `auditor.FlushAsync(ct)` al final de `ExecuteAsync`.
+   Si se olvida, los items quedan en memoria y se pierden al cerrar el scope.
+3. Cuando un método interno retorna `false` sin throw (validación que no es excepción),
+   el caller debe convertir el motivo a string legible y llamar `RecordFailure(...)`
+   con ese motivo.
+4. El `errorMessage` se trunca automáticamente a 500 chars — no hace falta cortarlo
+   manualmente.
+5. Si el item NO falló pero se omitió por una decisión de negocio (ej: fuera de horario,
+   ya etiquetado), usar `auditor.RecordSkipped(...)` en vez de `RecordFailure`.
+6. El `contextType` debe usar las constantes de `JobExecutionAuditor.ContextTypes`
+   (`Conversation`, `Campaign`, `Contact`, `Tenant`, `Template`, `User`).
+
+### Verificación durante code review
+
+Cualquier PR que agregue/modifique un `IScheduledJobExecutor` debe mostrar:
+
+1. ✅ Inyecta `JobExecutionAuditor` en el constructor.
+2. ✅ Llama `auditor.RecordFailure(...)` en cada catch que cuenta como fallo de item.
+3. ✅ Llama `auditor.RecordFailure(...)` también cuando el método interno retorna
+      `false`/error sin throw.
+4. ✅ Llama `auditor.FlushAsync(ct)` al final de `ExecuteAsync`.
+5. ✅ NO crea `ScheduledWebhookJobExecutionItem` directamente (sin pasar por el auditor).
+
+### Ejemplo de qué ve el admin gracias a esta regla
+
+Pantalla "Historial de ejecuciones" → expandir una ejecución:
+
+```
+TENANT             RESULTADO              CAUSA DE FALLOS
+🏢 SOMOS SEGUROS   8 OK · 2 fallos        ×2  El servicio está temporalmente no disponible.
+🏢 Prueba          5 OK · 1 fallo         ×1  Etiqueta 'foo' no está en el catálogo configurado
+```
+
+Si un tenant nuevo aparece con "Sin detalle granular registrado", es señal de
+que el executor que corrió esa ejecución NO respeta esta regla — debe migrarse
+a `JobExecutionAuditor`.

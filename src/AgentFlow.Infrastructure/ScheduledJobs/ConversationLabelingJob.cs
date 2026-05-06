@@ -45,7 +45,7 @@ public class ConversationLabelingJob(
     AnthropicClient anthropic,
     AgentFlow.Infrastructure.AI.AnthropicSettings anthropicSettings,
     IWebhookEventDispatcher eventDispatcher,
-    IJobExecutionItemRepository itemRepo,
+    JobExecutionAuditor auditor,
     ILogger<ConversationLabelingJob> log) : IScheduledJobExecutor
 {
     public string Slug => "LABEL_CONVERSATIONS";
@@ -97,9 +97,6 @@ Formato exacto:
         // Acumulamos hasta los primeros 5 mensajes de error para que aparezcan
         // en el summary del execution (visible en /admin/scheduled-jobs sin tocar logs).
         var errorMessages = new List<string>();
-        // Items granulares: solo persistimos fallos para no inflar la tabla con
-        // cada conversación etiquetada exitosamente.
-        var failedItems = new List<ScheduledWebhookJobExecutionItem>();
 
         // Cache por tenant: AnthropicClient + prompts configurables (analysis + result schema).
         // Si LabelingAnalysisPrompt es null usamos DefaultSystemPromptText.
@@ -171,31 +168,31 @@ Formato exacto:
                 {
                     if (ct.IsCancellationRequested) break;
                     bool labeled;
+                    string? failReason = null;
                     try
                     {
-                        labeled = await ProcessConversationAsync(
+                        var result = await ProcessConversationAsync(
                             tenantClient, convId, tpl.TenantId, labelTuples,
                             tenantAnalysisPrompt, tenantResultSchema, ct);
+                        labeled = result.Ok;
+                        failReason = result.Error;
                     }
                     catch (Exception ex)
                     {
                         log.LogError(ex, "Labeling: error procesando conversación {Conv}.", convId);
-                        if (errorMessages.Count < 5)
-                            errorMessages.Add($"conv {convId}: {ex.Message}");
                         labeled = false;
-                        if (ctx.ExecutionId is Guid execIdConv)
-                        {
-                            failedItems.Add(new ScheduledWebhookJobExecutionItem
-                            {
-                                ExecutionId  = execIdConv,
-                                TenantId     = tpl.TenantId,
-                                ContextType  = "Conversation",
-                                ContextId    = convId.ToString(),
-                                ContextLabel = $"Maestro: {tpl.Name}",
-                                Status       = "Failed",
-                                ErrorMessage = ex.ToString(),
-                            });
-                        }
+                        failReason = ex.Message;
+                    }
+
+                    if (!labeled)
+                    {
+                        var msg = failReason ?? "Falla desconocida (no thrown)";
+                        if (errorMessages.Count < 5)
+                            errorMessages.Add($"conv {convId}: {msg}");
+                        auditor.RecordFailure(
+                            ctx.ExecutionId, tpl.TenantId,
+                            JobExecutionAuditor.ContextTypes.Conversation,
+                            convId.ToString(), $"Maestro: {tpl.Name}", msg);
                     }
                     totalProcessed++;
                     if (labeled) totalLabeled++; else totalFailed++;
@@ -208,24 +205,14 @@ Formato exacto:
                 if (errorMessages.Count < 5)
                     errorMessages.Add($"maestro {tpl.Id}: {ex.Message}");
                 totalFailed++;
-                if (ctx.ExecutionId is Guid execIdTpl)
-                {
-                    failedItems.Add(new ScheduledWebhookJobExecutionItem
-                    {
-                        ExecutionId  = execIdTpl,
-                        TenantId     = tpl.TenantId,
-                        ContextType  = "Template",
-                        ContextId    = tpl.Id.ToString(),
-                        ContextLabel = tpl.Name,
-                        Status       = "Failed",
-                        ErrorMessage = ex.ToString(),
-                    });
-                }
+                auditor.RecordFailure(
+                    ctx.ExecutionId, tpl.TenantId,
+                    JobExecutionAuditor.ContextTypes.Template,
+                    tpl.Id.ToString(), tpl.Name, ex.Message);
             }
         }
 
-        try { await itemRepo.AddBatchAsync(failedItems, ct); }
-        catch (Exception ex) { log.LogWarning(ex, "LabelingJob: no se pudieron persistir items de auditoría."); }
+        await auditor.FlushAsync(ct);
 
         var summary = $"Procesadas={totalProcessed} · Etiquetadas={totalLabeled} · Fallos={totalFailed}";
         if (errorMessages.Count > 0)
@@ -279,7 +266,9 @@ Formato exacto:
     /// Etiqueta UNA conversación. Devuelve true si quedó etiquetada, false si falló.
     /// Tras etiquetar exitosamente, dispara el evento ConversationLabeled.
     /// </summary>
-    private async Task<bool> ProcessConversationAsync(
+    private record LabelingOutcome(bool Ok, string? Error);
+
+    private async Task<LabelingOutcome> ProcessConversationAsync(
         AnthropicClient client,
         Guid conversationId, Guid tenantId,
         List<(Guid Id, string Name, List<string> Keywords)> labels,
@@ -290,7 +279,7 @@ Formato exacto:
         var conv = await db.Conversations
             .Include(c => c.Messages.OrderBy(m => m.SentAt))
             .FirstOrDefaultAsync(c => c.Id == conversationId, ct);
-        if (conv is null) return false;
+        if (conv is null) return new(false, "Conversación no existe");
 
         var history = string.Join("\n",
             conv.Messages.Select(m =>
@@ -330,13 +319,13 @@ Formato exacto:
         catch (Exception ex)
         {
             log.LogError(ex, "Labeling: Claude llamada falló para conv {Conv}.", conversationId);
-            return false;
+            return new(false, $"Claude API: {ex.Message}");
         }
 
         if (parsed is null)
         {
             log.LogWarning("Labeling: respuesta no parseable para conv {Conv}.", conversationId);
-            return false;
+            return new(false, "Respuesta de Claude no es JSON válido");
         }
 
         // Resolver el LabelId por Name (case-insensitive).
@@ -346,7 +335,7 @@ Formato exacto:
         {
             log.LogWarning("Labeling: Claude devolvió '{Label}' que no está en el catálogo de conv {Conv}.",
                 parsed.LabelName, conversationId);
-            return false;
+            return new(false, $"Etiqueta '{parsed.LabelName}' no está en el catálogo configurado");
         }
 
         conv.LabelId = matched.Id;
@@ -365,7 +354,7 @@ Formato exacto:
         try { await eventDispatcher.DispatchAsync("ConversationLabeled", conversationId.ToString(), tenantId, ct); }
         catch (Exception ex) { log.LogWarning(ex, "Labeling: dispatch de ConversationLabeled falló para conv {Conv}.", conversationId); }
 
-        return true;
+        return new(true, null);
     }
 
     private static string BuildClassifierUserPrompt(
