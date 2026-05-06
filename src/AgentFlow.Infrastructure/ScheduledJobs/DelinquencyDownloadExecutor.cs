@@ -35,7 +35,7 @@ public class DelinquencyDownloadExecutor(
     AgentFlowDbContext db,
     IDelinquencyProcessor processor,
     IHttpClientFactory httpFactory,
-    IJobExecutionItemRepository itemRepo,
+    JobExecutionAuditor auditor,
     ILogger<DelinquencyDownloadExecutor> log) : IScheduledJobExecutor
 {
     public string Slug => "DOWNLOAD_DELINQUENCY_DATA";
@@ -71,61 +71,31 @@ public class DelinquencyDownloadExecutor(
         var success = 0;
         var failed  = 0;
         var errors  = new List<string>();
-        var items   = new List<ScheduledWebhookJobExecutionItem>();
 
         foreach (var config in configs)
         {
             if (ct.IsCancellationRequested) break;
 
-            var startedAt = DateTime.UtcNow;
             var tenantLabel = tenantNames.TryGetValue(config.TenantId, out var n) ? n : null;
             try
             {
                 await ProcessTenantAsync(config, actionDef, job.Id, ctx.ExecutionId, ct);
                 success++;
                 log.LogInformation("DelinquencyDownload: tenant {TenantId} OK.", config.TenantId);
-
-                if (ctx.ExecutionId is Guid execIdSuccess)
-                {
-                    items.Add(new ScheduledWebhookJobExecutionItem
-                    {
-                        ExecutionId  = execIdSuccess,
-                        TenantId     = config.TenantId,
-                        ContextType  = "Tenant",
-                        ContextId    = config.TenantId.ToString(),
-                        ContextLabel = tenantLabel,
-                        Status       = "Success",
-                        DurationMs   = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds,
-                    });
-                }
             }
             catch (Exception ex)
             {
                 failed++;
-                var msg = $"Tenant {config.TenantId}: {ex.Message}";
-                if (errors.Count < 5) errors.Add(msg);
+                if (errors.Count < 5) errors.Add($"Tenant {config.TenantId}: {ex.Message}");
                 log.LogError(ex, "DelinquencyDownload: error procesando tenant {TenantId}.", config.TenantId);
-
-                if (ctx.ExecutionId is Guid execIdFail)
-                {
-                    items.Add(new ScheduledWebhookJobExecutionItem
-                    {
-                        ExecutionId  = execIdFail,
-                        TenantId     = config.TenantId,
-                        ContextType  = "Tenant",
-                        ContextId    = config.TenantId.ToString(),
-                        ContextLabel = tenantLabel,
-                        Status       = "Failed",
-                        ErrorMessage = ex.Message,
-                        DurationMs   = (int)(DateTime.UtcNow - startedAt).TotalMilliseconds,
-                    });
-                }
+                auditor.RecordFailure(
+                    ctx.ExecutionId, config.TenantId,
+                    JobExecutionAuditor.ContextTypes.Tenant,
+                    config.TenantId.ToString(), tenantLabel, ex.Message);
             }
         }
 
-        // Persistir items (one-shot al final del run para minimizar I/O).
-        try { await itemRepo.AddBatchAsync(items, ct); }
-        catch (Exception ex) { log.LogWarning(ex, "DelinquencyDownload: no se pudieron persistir items de auditoría."); }
+        await auditor.FlushAsync(ct);
 
         var total   = configs.Count;
         var summary = $"Tenants={total} · OK={success} · Fallos={failed}";

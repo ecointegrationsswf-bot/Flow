@@ -20,6 +20,7 @@ public class CampaignAutoCloseSweepExecutor(
     AgentFlowDbContext db,
     IChannelProviderFactory providerFactory,
     IWebhookEventDispatcher eventDispatcher,
+    JobExecutionAuditor auditor,
     ILogger<CampaignAutoCloseSweepExecutor> log) : IScheduledJobExecutor
 {
     public string Slug => "AUTO_CLOSE_CAMPAIGN_SWEEP";
@@ -68,7 +69,7 @@ public class CampaignAutoCloseSweepExecutor(
 
             try
             {
-                var (closed, failed) = await CloseCampaignAsync(campaign, template, ct);
+                var (closed, failed) = await CloseCampaignAsync(campaign, template, ctx, ct);
                 totalClosed += closed;
                 failures += failed;
                 if (closed > 0) campaignsTouched++;
@@ -77,8 +78,14 @@ public class CampaignAutoCloseSweepExecutor(
             {
                 failures++;
                 log.LogError(ex, "[AutoCloseSweep] Error cerrando campaña {Id}", campaign.Id);
+                auditor.RecordFailure(
+                    ctx.ExecutionId, campaign.TenantId,
+                    JobExecutionAuditor.ContextTypes.Campaign,
+                    campaign.Id.ToString(), campaign.Name, ex.Message);
             }
         }
+
+        await auditor.FlushAsync(ct);
 
         var summary = $"Closed={totalClosed} convs en {campaignsTouched} campañas · failures={failures} · scanned={runningCampaigns.Count}";
         log.LogInformation("[AutoCloseSweep] {Summary}", summary);
@@ -91,7 +98,7 @@ public class CampaignAutoCloseSweepExecutor(
     }
 
     private async Task<(int closed, int failed)> CloseCampaignAsync(
-        Campaign campaign, CampaignTemplate template, CancellationToken ct)
+        Campaign campaign, CampaignTemplate template, ScheduledJobContext ctx, CancellationToken ct)
     {
         var activeConvs = await db.Conversations
             .Where(c => c.CampaignId == campaign.Id
@@ -141,6 +148,12 @@ public class CampaignAutoCloseSweepExecutor(
             {
                 log.LogError(ex, "[AutoCloseSweep] Error cerrando conversación {Conv}", conv.Id);
                 failure++;
+                auditor.RecordFailure(
+                    ctx.ExecutionId, campaign.TenantId,
+                    JobExecutionAuditor.ContextTypes.Conversation,
+                    conv.Id.ToString(),
+                    conv.ClientName ?? conv.ClientPhone,
+                    ex.Message);
             }
         }
         await db.SaveChangesAsync(ct);

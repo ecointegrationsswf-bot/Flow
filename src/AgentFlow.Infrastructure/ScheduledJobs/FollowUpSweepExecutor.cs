@@ -30,6 +30,7 @@ public class FollowUpSweepExecutor(
     AgentFlowDbContext db,
     IChannelProviderFactory providerFactory,
     IBusinessHoursClock businessHours,
+    JobExecutionAuditor auditor,
     ILogger<FollowUpSweepExecutor> log) : IScheduledJobExecutor
 {
     public string Slug => "FOLLOW_UP_SWEEP";
@@ -84,12 +85,14 @@ public class FollowUpSweepExecutor(
         foreach (var group in byTenant)
         {
             if (ct.IsCancellationRequested) break;
-            var (s, sk, f, d) = await ProcessTenantAsync(group.Key, group.ToList(), templates, nowUtc, ct);
+            var (s, sk, f, d) = await ProcessTenantAsync(group.Key, group.ToList(), templates, nowUtc, ctx, ct);
             totalSent += s;
             totalSkipped += sk;
             totalFailed += f;
             totalDeferred += d;
         }
+
+        await auditor.FlushAsync(ct);
 
         var summary = $"Sent={totalSent} | Skipped={totalSkipped} | Deferred={totalDeferred} | Failed={totalFailed} | Scanned={candidates.Count}";
         log.LogInformation("[FollowUpSweep] {Summary}", summary);
@@ -112,6 +115,7 @@ public class FollowUpSweepExecutor(
         List<CampaignContact> contacts,
         IReadOnlyDictionary<Guid, CampaignTemplate> templates,
         DateTime nowUtc,
+        ScheduledJobContext ctx,
         CancellationToken ct)
     {
         if (contacts.Count == 0) return (0, 0, 0, 0);
@@ -171,7 +175,7 @@ public class FollowUpSweepExecutor(
 
             try
             {
-                var (result, _) = await TryDispatchOneAsync(contact, templates, nowUtc, ct);
+                var (result, _, error) = await TryDispatchOneAsync(contact, templates, nowUtc, ct);
                 switch (result)
                 {
                     case DispatchOutcome.Sent:
@@ -187,6 +191,12 @@ public class FollowUpSweepExecutor(
                     case DispatchOutcome.Failed:
                         failed++;
                         consecutiveErrors++;
+                        auditor.RecordFailure(
+                            ctx.ExecutionId, tenantId,
+                            JobExecutionAuditor.ContextTypes.Contact,
+                            contact.Id.ToString(),
+                            contact.ClientName ?? contact.PhoneNumber,
+                            error ?? "Error de envío sin detalle");
                         if (consecutiveErrors >= ConsecutiveErrorThreshold)
                         {
                             log.LogWarning("[FollowUpSweep] Tenant {Id}: {N}+ errores consecutivos — frenando.",
@@ -200,6 +210,12 @@ public class FollowUpSweepExecutor(
             {
                 failed++;
                 log.LogError(ex, "[FollowUpSweep] Error procesando contacto {Id}", contact.Id);
+                auditor.RecordFailure(
+                    ctx.ExecutionId, tenantId,
+                    JobExecutionAuditor.ContextTypes.Contact,
+                    contact.Id.ToString(),
+                    contact.ClientName ?? contact.PhoneNumber,
+                    ex.Message);
             }
         }
         return (sent, skipped, failed, deferred);
@@ -207,18 +223,18 @@ public class FollowUpSweepExecutor(
 
     private enum DispatchOutcome { Sent, Skipped, Deferred, Failed }
 
-    private async Task<(DispatchOutcome, int)> TryDispatchOneAsync(
+    private async Task<(DispatchOutcome Result, int Count, string? Error)> TryDispatchOneAsync(
         CampaignContact contact,
         IReadOnlyDictionary<Guid, CampaignTemplate> templates,
         DateTime nowUtc,
         CancellationToken ct)
     {
-        if (contact.Campaign.CampaignTemplateId is null) return (DispatchOutcome.Skipped, 0);
+        if (contact.Campaign.CampaignTemplateId is null) return (DispatchOutcome.Skipped, 0, null);
         if (!templates.TryGetValue(contact.Campaign.CampaignTemplateId.Value, out var template))
-            return (DispatchOutcome.Skipped, 0);
+            return (DispatchOutcome.Skipped, 0, null);
 
-        if (template.FollowUpHours.Count == 0) return (DispatchOutcome.Skipped, 0);
-        if (string.IsNullOrEmpty(template.FollowUpMessagesJson)) return (DispatchOutcome.Skipped, 0);
+        if (template.FollowUpHours.Count == 0) return (DispatchOutcome.Skipped, 0, null);
+        if (string.IsNullOrEmpty(template.FollowUpMessagesJson)) return (DispatchOutcome.Skipped, 0, null);
 
         var sentIndices = ParseIndices(contact.FollowUpsSentJson);
 
@@ -233,12 +249,12 @@ public class FollowUpSweepExecutor(
             break;
         }
 
-        if (dueIndex is null) return (DispatchOutcome.Skipped, 0);
+        if (dueIndex is null) return (DispatchOutcome.Skipped, 0, null);
 
         // Horario laboral del tenant — si fuera de hora, no enviamos pero
         // tampoco perdemos el job: el próximo tick (5 min después) reevalúa.
         if (!businessHours.IsWithinBusinessHours(nowUtc, contact.Campaign.Tenant, template))
-            return (DispatchOutcome.Deferred, 0);
+            return (DispatchOutcome.Deferred, 0, null);
 
         // Solo seguimos si la conversación está esperando al cliente.
         var conv = await db.Conversations
@@ -248,26 +264,26 @@ public class FollowUpSweepExecutor(
             .OrderByDescending(c => c.LastActivityAt)
             .FirstOrDefaultAsync(ct);
 
-        if (conv is null) return (DispatchOutcome.Skipped, 0);
-        if (conv.Status != ConversationStatus.WaitingClient) return (DispatchOutcome.Skipped, 0);
+        if (conv is null) return (DispatchOutcome.Skipped, 0, null);
+        if (conv.Status != ConversationStatus.WaitingClient) return (DispatchOutcome.Skipped, 0, null);
 
         // Resolver mensaje
         List<string>? messages;
         try { messages = JsonSerializer.Deserialize<List<string>>(template.FollowUpMessagesJson); }
-        catch { return (DispatchOutcome.Skipped, 0); }
+        catch { return (DispatchOutcome.Skipped, 0, null); }
         if (messages is null || dueIndex.Value >= messages.Count
             || string.IsNullOrWhiteSpace(messages[dueIndex.Value]))
-            return (DispatchOutcome.Skipped, 0);
+            return (DispatchOutcome.Skipped, 0, null);
 
         var resolved = ResolveVariables(messages[dueIndex.Value], contact);
 
         // Enviar
         var provider = await providerFactory.GetProviderAsync(contact.Campaign.TenantId, ct);
-        if (provider is null) return (DispatchOutcome.Failed, 0);
+        if (provider is null) return (DispatchOutcome.Failed, 0, "Tenant sin provider WhatsApp activo");
 
         var sendResult = await provider.SendMessageAsync(
             new SendMessageRequest(contact.PhoneNumber, resolved), ct);
-        if (!sendResult.Success) return (DispatchOutcome.Failed, 0);
+        if (!sendResult.Success) return (DispatchOutcome.Failed, 0, sendResult.Error ?? "Provider WhatsApp respondió error sin detalle");
 
         // Persistir Message + actualizar FollowUpsSentJson + LastActivityAt.
         // CRÍTICO: marcar el índice ANTES de SaveChanges para idempotencia frente
@@ -294,7 +310,7 @@ public class FollowUpSweepExecutor(
         log.LogInformation("[FollowUpSweep] Enviado idx={Idx} a {Phone} (campaign {Campaign}).",
             dueIndex.Value, contact.PhoneNumber, contact.CampaignId);
 
-        return (DispatchOutcome.Sent, 1);
+        return (DispatchOutcome.Sent, 1, null);
     }
 
     private static List<int> ParseIndices(string? json)
