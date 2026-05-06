@@ -5,7 +5,6 @@ import {
   useAdminUpdateTenantTimezone,
   useAdminUpdateTenantLlm,
   useAdminUpdateTenantSendGrid,
-  useAdminUpdateTenantCampaignDelay,
   useAdminUpdateTenantBrain,
   useAdminUpdateTenantWebhookContract,
   useAdminUpdateTenantReferenceDocs,
@@ -61,7 +60,6 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
   const updateTimezone = useAdminUpdateTenantTimezone()
   const updateLlm = useAdminUpdateTenantLlm()
   const updateSendGrid = useAdminUpdateTenantSendGrid()
-  const updateDelay = useAdminUpdateTenantCampaignDelay()
   const updateBrain = useAdminUpdateTenantBrain()
   const updateWebhookContract = useAdminUpdateTenantWebhookContract()
   const updateReferenceDocs = useAdminUpdateTenantReferenceDocs()
@@ -77,9 +75,6 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
 
   const [sendGridApiKey, setSendGridApiKey] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
-
-  const [campaignDelay, setCampaignDelay] = useState(10)
-  const [delaySaved, setDelaySaved] = useState(false)
 
   const [bufferSeconds, setBufferSeconds] = useState(5)
   const [bufferSaved, setBufferSaved] = useState(false)
@@ -100,7 +95,6 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
     setLlmModel(tenant.llmModel ?? 'claude-sonnet-4-6')
     setSendGridApiKey('')
     setSenderEmail(tenant.senderEmail ?? '')
-    setCampaignDelay(tenant.campaignMessageDelaySeconds ?? 10)
     setBufferSeconds(tenant.messageBufferSeconds ?? 5)
     setMsgPerMin(tenant.campaignMessagesPerMinute ?? 6)
     setMaxPerHour(tenant.campaignMaxPerHour ?? 200)
@@ -132,12 +126,6 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
     await updateTimezone.mutateAsync({ tenantId, timeZone })
     setTimezoneSaved(true)
     setTimeout(() => setTimezoneSaved(false), 2500)
-  }
-
-  const handleSaveDelay = async () => {
-    await updateDelay.mutateAsync({ tenantId, delaySeconds: campaignDelay })
-    setDelaySaved(true)
-    setTimeout(() => setDelaySaved(false), 2500)
   }
 
   const handleSaveBuffer = async () => {
@@ -252,40 +240,6 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
           </button>
         </div>
         {updateLlm.isSuccess && <p className="mt-2 text-xs text-emerald-700">Configuración de LLM actualizada.</p>}
-      </section>
-
-      {/* Delay */}
-      <section className="rounded-lg border border-gray-200 bg-white p-5">
-        <div className="mb-3 flex items-center gap-2">
-          <Clock className="h-4 w-4 text-emerald-600" />
-          <h3 className="text-sm font-semibold text-gray-900">Delay entre mensajes de campaña</h3>
-        </div>
-        <p className="mb-3 text-xs text-gray-500">Tiempo de espera entre cada mensaje enviado al lanzar una campaña. Valores bajos pueden causar bloqueos de WhatsApp (recomendado 8–15 seg).</p>
-        <div className="flex items-center gap-3">
-          <input
-            type="range"
-            min={3}
-            max={120}
-            value={campaignDelay}
-            onChange={(e) => setCampaignDelay(Number(e.target.value))}
-            className="flex-1"
-          />
-          <div className="w-16 text-right">
-            <input
-              type="number"
-              min={3}
-              max={120}
-              value={campaignDelay}
-              onChange={(e) => setCampaignDelay(Number(e.target.value))}
-              className="w-full rounded-md border border-gray-300 px-2 py-1 text-sm"
-            />
-          </div>
-          <span className="text-xs text-gray-500">seg</span>
-          <button type="button" onClick={handleSaveDelay} disabled={updateDelay.isPending} className={btnPrimary}>
-            {updateDelay.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {delaySaved ? '¡Guardado!' : 'Guardar'}
-          </button>
-        </div>
       </section>
 
       {/* Debounce de mensajes entrantes */}
@@ -405,16 +359,17 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
         loading={updateReferenceDocs.isPending}
       />
 
-      {/* Rate limit de envíos masivos */}
+      {/* Envío masivo (campañas + seguimientos) */}
       <section className="rounded-lg border border-orange-200 bg-orange-50/30 p-5">
         <div className="mb-1 flex items-center gap-2">
           <Gauge className="h-4 w-4 text-orange-600" />
-          <h3 className="text-sm font-semibold text-gray-900">Rate limit de envíos masivos</h3>
+          <h3 className="text-sm font-semibold text-gray-900">Envío masivo (campañas + seguimientos)</h3>
         </div>
         <p className="mb-4 text-xs text-gray-600">
-          Topes que aplican <strong>al lanzar una campaña inicial</strong> y <strong>al sweeper que envía
-          los seguimientos</strong>. Existen para evitar que UltraMsg banee el WhatsApp del cliente
-          por enviar en ráfaga. Cualquier envío masivo respeta estos límites sin excepción.
+          Estos topes regulan TODO envío masivo del tenant: el dispatcher al lanzar
+          una campaña, el sweeper de follow-ups y el auto-cierre con mensaje. Existen
+          para evitar que UltraMsg banee el WhatsApp del cliente por enviar en ráfaga.
+          <strong> Cualquier mensaje masivo saliente respeta estos límites sin excepción.</strong>
         </p>
 
         <div className="mb-4 rounded-lg border border-orange-200 bg-white p-3">

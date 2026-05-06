@@ -23,6 +23,7 @@ export interface AdminTenantConfig {
   llmModel: string
   sendGridApiKey: string | null
   senderEmail: string | null
+  /** @deprecated — usar campaignMessagesPerMinute. Solo lo lee CampaignLauncher legacy de n8n. */
   campaignMessageDelaySeconds: number
   brainEnabled: boolean
   webhookContractEnabled: boolean
@@ -80,6 +81,11 @@ export function useAdminUpdateTenantSendGrid() {
   })
 }
 
+/**
+ * @deprecated — el ritmo de envío ahora se controla con `useAdminUpdateTenantCampaignRateLimits`
+ * (`messagesPerMinute`). Este hook quedó solo por si alguien lo importa, pero el endpoint
+ * ya no afecta al dispatcher v2 ni a los sweepers.
+ */
 export function useAdminUpdateTenantCampaignDelay() {
   const qc = useQueryClient()
   return useMutation({
