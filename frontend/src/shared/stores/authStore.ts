@@ -22,11 +22,50 @@ interface AuthState {
   refreshMe: () => Promise<void>
 }
 
+// Hidratación SÍNCRONA al cargar el módulo. Si esperamos al useEffect del App,
+// el primer render del ProtectedRoute ve isAuthenticated=false y redirige a
+// /login antes de que hydrate() corra → forzaba al user a re-loguear cada
+// vez que abría el browser, aunque el JWT estuviera válido en localStorage.
+function bootInitialState(): {
+  token: string | null
+  tenantId: string | null
+  user: AuthUser | null
+  isAuthenticated: boolean
+} {
+  if (typeof window === 'undefined') {
+    return { token: null, tenantId: null, user: null, isAuthenticated: false }
+  }
+  try {
+    const token = localStorage.getItem('token')
+    const tenantId = localStorage.getItem('tenantId')
+    const userJson = localStorage.getItem('user')
+    if (!token || !tenantId || !userJson) {
+      return { token: null, tenantId: null, user: null, isAuthenticated: false }
+    }
+    // Si el JWT ya expiró por TTL del backend, lo descartamos en lugar de
+    // hidratar y dejar que la primera request tire 401.
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    if (typeof payload.exp === 'number' && payload.exp * 1000 < Date.now()) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('tenantId')
+      localStorage.removeItem('user')
+      return { token: null, tenantId: null, user: null, isAuthenticated: false }
+    }
+    const raw = JSON.parse(userJson)
+    const user: AuthUser = { ...raw, permissions: raw.permissions ?? [] }
+    return { token, tenantId, user, isAuthenticated: true }
+  } catch {
+    return { token: null, tenantId: null, user: null, isAuthenticated: false }
+  }
+}
+
+const initial = bootInitialState()
+
 export const useAuthStore = create<AuthState>((set) => ({
-  token: null,
-  tenantId: null,
-  user: null,
-  isAuthenticated: false,
+  token: initial.token,
+  tenantId: initial.tenantId,
+  user: initial.user,
+  isAuthenticated: initial.isAuthenticated,
 
   login: async (email: string, password: string) => {
     const { data } = await api.post<{
