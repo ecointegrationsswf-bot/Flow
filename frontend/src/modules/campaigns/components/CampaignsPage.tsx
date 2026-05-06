@@ -1,13 +1,18 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Loader2, Search, X } from 'lucide-react'
+import { Megaphone, Plus, Loader2, Search, X, Rocket } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
-import { useCampaigns } from '@/shared/hooks/useCampaigns'
+import { useCampaigns, useLaunchCampaign } from '@/shared/hooks/useCampaigns'
 import { usePermissions } from '@/shared/hooks/usePermissions'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
+
+// Estados desde los cuales se permite re-disparar una campaña.
+// Pendiente = nunca lanzada. Pausada = pausada manualmente.
+// Failed = falló el lanzamiento, el cliente puede reintentar.
+const LAUNCHABLE_STATUSES = new Set(['Pending', 'Paused', 'Failed'])
 
 const triggerLabels: Record<string, string> = {
   FileUpload: 'Archivo',
@@ -28,9 +33,28 @@ const statusConfig: Record<string, { label: string; className: string }> = {
 export function CampaignsPage() {
   const { hasPermission } = usePermissions()
   const canCreate = hasPermission('create_campaigns')
+  const canLaunch = hasPermission('launch_campaigns') || canCreate
   const { data: campaigns, isLoading, isError } = useCampaigns()
+  const launchMutation = useLaunchCampaign()
   const tt = useTenantTime()
   const [launchError, setLaunchError] = useState<string | null>(null)
+  const [launchingId, setLaunchingId] = useState<string | null>(null)
+
+  const handleLaunch = async (campaignId: string, name: string) => {
+    if (!confirm(`¿Lanzar la campaña "${name}"? Se enviarán los mensajes a los contactos.`)) return
+    setLaunchError(null)
+    setLaunchingId(campaignId)
+    try {
+      await launchMutation.mutateAsync(campaignId)
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string; message?: string } }; message?: string }
+      setLaunchError(
+        e.response?.data?.error ?? e.response?.data?.message ?? e.message ?? 'No se pudo lanzar la campaña.',
+      )
+    } finally {
+      setLaunchingId(null)
+    }
+  }
 
   // Filtros
   const [search, setSearch] = useState('')
@@ -173,12 +197,13 @@ export function CampaignsPage() {
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Estado</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Fecha</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Creada por</th>
+                  {canLaunch && <th className="px-2 py-3 text-right text-xs font-medium uppercase text-gray-500 w-12">Acción</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-4 py-10 text-center text-sm text-gray-400">
+                    <td colSpan={canLaunch ? 8 : 7} className="px-4 py-10 text-center text-sm text-gray-400">
                       No se encontraron campañas con los filtros aplicados.
                     </td>
                   </tr>
@@ -188,6 +213,8 @@ export function CampaignsPage() {
                     const status = c.status ?? (c.completedAt ? 'Completed' : c.isActive ? 'Running' : 'Pending')
                     const stCfg = statusConfig[status] ?? statusConfig.Pending
                     const isRunning = status === 'Running' || status === 'Launching'
+                    const isLaunchable = LAUNCHABLE_STATUSES.has(status)
+                    const isThisLaunching = launchingId === c.id
 
                     return (
                       <tr key={c.id} className="hover:bg-gray-50">
@@ -224,6 +251,25 @@ export function CampaignsPage() {
                         <td className="px-4 py-3 text-xs text-gray-600">
                           {c.createdByUserId || '—'}
                         </td>
+                        {canLaunch && (
+                          <td className="px-2 py-3 text-right">
+                            {isLaunchable ? (
+                              <button
+                                onClick={() => handleLaunch(c.id, c.name)}
+                                disabled={isThisLaunching}
+                                title={`Lanzar "${c.name}"`}
+                                className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                              >
+                                {isThisLaunching
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <Rocket className="h-3.5 w-3.5" />}
+                                Lanzar
+                              </button>
+                            ) : (
+                              <span className="text-gray-300">—</span>
+                            )}
+                          </td>
+                        )}
                       </tr>
                     )
                   })
