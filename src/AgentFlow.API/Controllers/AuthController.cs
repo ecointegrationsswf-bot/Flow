@@ -188,7 +188,10 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
             issuer: "agentflow-api",
             audience: "agentflow-app",
             claims: claims,
-            expires: DateTime.UtcNow.AddHours(12),
+            // 8h: el usuario hace login completo (password + 2FA) UNA VEZ por
+            // jornada laboral. Mientras el JWT está en localStorage del browser,
+            // cualquier reapertura de ventana dentro de las 8h omite 2FA.
+            expires: DateTime.UtcNow.AddHours(8),
             signingCredentials: creds
         );
 
