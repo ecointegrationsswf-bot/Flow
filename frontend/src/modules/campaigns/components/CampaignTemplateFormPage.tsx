@@ -425,10 +425,12 @@ export function CampaignTemplateFormPage() {
   // marcar el tab "General" con indicador rojo cuando el form falla validación.
   const hasGeneralErrors = !!(errors.name || errors.agentDefinitionId || errors.sendFrom || errors.sendUntil)
 
+  // Tab "Acciones" oculto a usuarios — la asignación de acciones a maestros
+  // se hace desde Admin → Editar Cliente → "Acciones asignadas". Acá solo
+  // confundía porque el cliente final no debería tocar webhooks.
   const tabs = [
     { key: 'general' as const, label: 'General', icon: Globe, hasError: hasGeneralErrors },
     { key: 'labels' as const, label: 'Etiquetas', icon: Tag, badge: selectedLabelIds.length },
-    { key: 'actions' as const, label: 'Acciones', icon: Zap, badge: selectedActionIds.length, hasError: hasConfigErrors },
     { key: 'prompt' as const, label: 'Prompt', icon: FileText, badge: selectedPromptIds.length },
     { key: 'documents' as const, label: 'Documentos', icon: Paperclip },
   ]
