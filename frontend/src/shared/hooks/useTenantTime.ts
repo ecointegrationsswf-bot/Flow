@@ -33,6 +33,26 @@ function safeTz(raw: string | null | undefined): string {
   }
 }
 
+/**
+ * Parsea un valor ISO/Date asegurando interpretación UTC.
+ *
+ * El backend (.NET) serializa DateTime en formato "2026-05-06T12:00:00.123" SIN
+ * el sufijo "Z" — y JavaScript interpreta strings sin TZ como HORA LOCAL del
+ * navegador. Eso provocaba que las conversiones con `timeZone: 'America/Panama'`
+ * no hicieran nada (si el browser ya estaba en PA) o produjeran offsets dobles.
+ * Si el string no trae Z ni offset (+/-HH:mm), agregamos Z antes de parsear.
+ */
+function toUtcDate(iso: string | Date): Date {
+  if (iso instanceof Date) return iso
+  // Si ya tiene Z, +HH:mm o -HH:mm (offset explícito), trust it.
+  // Detectamos: 'Z' al final, o un signo +/- en posición de TZ tras la T.
+  if (/Z$|[+-]\d{2}:?\d{2}$/.test(iso)) return new Date(iso)
+  // Si es formato ISO sin TZ, asumimos UTC (convención del backend .NET).
+  if (/^\d{4}-\d{2}-\d{2}T/.test(iso)) return new Date(iso + 'Z')
+  // Otros formatos (date-only, etc.): parse normal.
+  return new Date(iso)
+}
+
 /** Etiqueta humana del TZ — ej: "GMT-5 · Panamá". Para el badge del header. */
 function describeTz(tz: string): { offset: string; city: string } {
   // Calculamos offset actual real (resuelve DST automáticamente).
@@ -74,7 +94,7 @@ export function useTenantTime() {
       return new Intl.DateTimeFormat('es-PA', {
         timeZone: tz,
         hour: 'numeric', minute: '2-digit', hour12: true,
-      }).format(new Date(iso))
+      }).format(toUtcDate(iso))
     },
 
     /** "01/05/2026" — fecha corta (numérica). */
@@ -83,7 +103,7 @@ export function useTenantTime() {
       return new Intl.DateTimeFormat('es-PA', {
         timeZone: tz,
         day: '2-digit', month: '2-digit', year: 'numeric',
-      }).format(new Date(iso))
+      }).format(toUtcDate(iso))
     },
 
     /** "06/05" — fecha sin año, para tablas compactas (Descargas). */
@@ -92,7 +112,7 @@ export function useTenantTime() {
       return new Intl.DateTimeFormat('es-PA', {
         timeZone: tz,
         day: '2-digit', month: '2-digit',
-      }).format(new Date(iso))
+      }).format(toUtcDate(iso))
     },
 
     /** "5 de mayo de 2026" — para perfiles, tarjetas. */
@@ -101,7 +121,7 @@ export function useTenantTime() {
       return new Intl.DateTimeFormat('es-PA', {
         timeZone: tz,
         day: 'numeric', month: 'long', year: 'numeric',
-      }).format(new Date(iso))
+      }).format(toUtcDate(iso))
     },
 
     /** "01/05/2026 15:23" */
@@ -111,7 +131,7 @@ export function useTenantTime() {
         timeZone: tz,
         day: '2-digit', month: '2-digit', year: 'numeric',
         hour: '2-digit', minute: '2-digit', hour12: false,
-      }).format(new Date(iso))
+      }).format(toUtcDate(iso))
     },
 
     /** "06/05, 12:57" — fecha+hora compacta (tablas). */
@@ -119,10 +139,10 @@ export function useTenantTime() {
       if (!iso) return ''
       const date = new Intl.DateTimeFormat('es-PA', {
         timeZone: tz, day: '2-digit', month: '2-digit',
-      }).format(new Date(iso))
+      }).format(toUtcDate(iso))
       const time = new Intl.DateTimeFormat('es-PA', {
         timeZone: tz, hour: '2-digit', minute: '2-digit', hour12: false,
-      }).format(new Date(iso))
+      }).format(toUtcDate(iso))
       return `${date}, ${time}`
     },
 
@@ -131,7 +151,7 @@ export function useTenantTime() {
       if (!iso) return ''
       return new Intl.DateTimeFormat('es-PA', {
         timeZone: tz, month: 'short', year: 'numeric',
-      }).format(new Date(iso))
+      }).format(toUtcDate(iso))
     },
 
     /**
@@ -140,7 +160,7 @@ export function useTenantTime() {
      */
     relative: (iso: string | Date | null | undefined) => {
       if (!iso) return ''
-      const date = new Date(iso)
+      const date = toUtcDate(iso)
       const diffMs = Date.now() - date.getTime()
       const diffMin = Math.floor(diffMs / 60000)
       if (diffMin < 1) return 'ahora'
@@ -161,7 +181,7 @@ export function useTenantTime() {
       const fmt = new Intl.DateTimeFormat('es-PA', {
         timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit',
       })
-      return fmt.format(new Date(iso)) === fmt.format(new Date())
+      return fmt.format(toUtcDate(iso)) === fmt.format(new Date())
     },
 
     /** Detecta si fue ayer en el TZ del tenant. */
@@ -172,7 +192,7 @@ export function useTenantTime() {
       })
       const yest = new Date()
       yest.setDate(yest.getDate() - 1)
-      return fmt.format(new Date(iso)) === fmt.format(yest)
+      return fmt.format(toUtcDate(iso)) === fmt.format(yest)
     },
   }
 }
