@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Check, Loader2, Eye, X, AlertTriangle, Users } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Eye, X, AlertTriangle, Users, Search } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { useCampaignTemplates } from '@/shared/hooks/useCampaignTemplates'
 import {
@@ -55,6 +55,19 @@ function ContactsDetailModal({
   onClose: () => void
   onShowJson: (c: FixedContactPreview) => void
 }) {
+  const [search, setSearch] = useState('')
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    if (!q) return preview.contacts
+    return preview.contacts.filter((c) =>
+      (c.nombreCliente ?? '').toLowerCase().includes(q) ||
+      (c.phone ?? '').toLowerCase().includes(q) ||
+      (c.keyValue ?? '').toLowerCase().includes(q) ||
+      (c.contactDataJson ?? '').toLowerCase().includes(q),
+    )
+  }, [preview.contacts, search])
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
       <div
@@ -98,42 +111,79 @@ function ContactsDetailModal({
           </div>
         )}
 
+        {/* Buscador */}
+        <div className="border-b border-gray-200 px-5 py-3">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400 pointer-events-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Buscar por nombre, celular, KeyValue o cualquier dato del JSON..."
+              className="w-full rounded-lg border border-gray-300 pl-9 pr-9 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              autoFocus
+            />
+            {search && (
+              <button
+                onClick={() => setSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+                title="Limpiar"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {search && (
+            <p className="mt-2 text-xs text-gray-500">
+              {filtered.length} de {preview.contacts.length} contacto{preview.contacts.length === 1 ? '' : 's'}
+              {filtered.length === 0 && ' — sin coincidencias'}
+            </p>
+          )}
+        </div>
+
         {/* Tabla */}
         <div className="flex-1 overflow-auto">
-          <table className="min-w-full divide-y divide-gray-100 text-sm">
-            <thead className="sticky top-0 bg-gray-50">
-              <tr>
-                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">NombreCliente</th>
-                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">Celular (E.164)</th>
-                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">KeyValue</th>
-                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-500">Registros</th>
-                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-500">JSON</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {preview.contacts.map((c, i) => (
-                <tr key={i} className="hover:bg-gray-50">
-                  <td className="px-4 py-2.5 font-medium text-gray-900">{c.nombreCliente}</td>
-                  <td className="px-4 py-2.5 font-mono text-gray-700">{c.phone}</td>
-                  <td className="max-w-[180px] truncate px-4 py-2.5 text-gray-600" title={c.keyValue}>{c.keyValue}</td>
-                  <td className="px-4 py-2.5 text-center">
-                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.totalRegistros > 1 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
-                      {c.totalRegistros}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-center">
-                    <button
-                      onClick={() => onShowJson(c)}
-                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                      title="Ver JSON generado"
-                    >
-                      <Eye className="h-4 w-4" />
-                    </button>
-                  </td>
+          {filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-16 text-center text-gray-500">
+              <Search className="h-8 w-8 text-gray-300 mb-2" />
+              <p className="text-sm">No hay contactos que coincidan con "{search}"</p>
+            </div>
+          ) : (
+            <table className="min-w-full divide-y divide-gray-100 text-sm">
+              <thead className="sticky top-0 bg-gray-50">
+                <tr>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">NombreCliente</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">Celular (E.164)</th>
+                  <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">KeyValue</th>
+                  <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-500">Registros</th>
+                  <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-500">JSON</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filtered.map((c, i) => (
+                  <tr key={i} className="hover:bg-gray-50">
+                    <td className="px-4 py-2.5 font-medium text-gray-900">{c.nombreCliente}</td>
+                    <td className="px-4 py-2.5 font-mono text-gray-700">{c.phone}</td>
+                    <td className="max-w-[180px] truncate px-4 py-2.5 text-gray-600" title={c.keyValue}>{c.keyValue}</td>
+                    <td className="px-4 py-2.5 text-center">
+                      <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.totalRegistros > 1 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {c.totalRegistros}
+                      </span>
+                    </td>
+                    <td className="px-4 py-2.5 text-center">
+                      <button
+                        onClick={() => onShowJson(c)}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                        title="Ver JSON generado"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
         </div>
 
         {/* Footer */}
