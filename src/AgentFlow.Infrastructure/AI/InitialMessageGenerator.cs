@@ -26,29 +26,47 @@ public class InitialMessageGenerator(
         CampaignContact contact,
         CancellationToken ct = default)
     {
-        // Resolver prompt del CampaignTemplate (primer PromptTemplateId).
+        // Resolver prompt: SIEMPRE preferimos la copia local del maestro
+        // (CampaignTemplate.SystemPrompt). Es lo que el usuario edita en la UI
+        // bajo "Prompt del maestro (copia editable)" — ese debe ser el source
+        // of truth. Solo si está vacío caemos al PromptTemplate global como
+        // fallback (típicamente en maestros recién creados que no se han editado).
         if (campaign.CampaignTemplate is null)
         {
             campaign.CampaignTemplate = await db.CampaignTemplates
                 .FirstOrDefaultAsync(t => t.Id == campaign.CampaignTemplateId, ct);
         }
-        var promptIds = campaign.CampaignTemplate?.PromptTemplateIds;
-        if (promptIds is null || promptIds.Count == 0)
-        {
-            logger.LogWarning("Campaign {Id}: sin PromptTemplateIds — fallback al template básico.", campaign.Id);
-            return null;
-        }
 
-        var promptId = promptIds[0];
-        var prompt = await db.PromptTemplates
-            .Where(p => p.Id == promptId)
-            .Select(p => p.SystemPrompt)
-            .FirstOrDefaultAsync(ct);
+        string? prompt = campaign.CampaignTemplate?.SystemPrompt;
+
         if (string.IsNullOrWhiteSpace(prompt))
         {
-            logger.LogWarning("Campaign {Id}: PromptTemplate {Pid} sin SystemPrompt — fallback al template básico.",
+            var promptIds = campaign.CampaignTemplate?.PromptTemplateIds;
+            if (promptIds is null || promptIds.Count == 0)
+            {
+                logger.LogWarning(
+                    "Campaign {Id}: maestro sin SystemPrompt local ni PromptTemplateIds — fallback al template básico.",
+                    campaign.Id);
+                return null;
+            }
+
+            var promptId = promptIds[0];
+            prompt = await db.PromptTemplates
+                .Where(p => p.Id == promptId)
+                .Select(p => p.SystemPrompt)
+                .FirstOrDefaultAsync(ct);
+
+            if (string.IsNullOrWhiteSpace(prompt))
+            {
+                logger.LogWarning(
+                    "Campaign {Id}: PromptTemplate {Pid} sin SystemPrompt y maestro tampoco lo tiene local — fallback al template básico.",
+                    campaign.Id, promptId);
+                return null;
+            }
+
+            logger.LogInformation(
+                "Campaign {Id}: usando prompt global del PromptTemplate {Pid} (maestro local vacío).",
                 campaign.Id, promptId);
-            return null;
         }
 
         // Tenant cargado para resolver LlmApiKey.
