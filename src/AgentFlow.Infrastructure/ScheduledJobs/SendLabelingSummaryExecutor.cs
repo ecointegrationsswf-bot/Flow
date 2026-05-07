@@ -75,92 +75,158 @@ public class SendLabelingSummaryExecutor(
         {
             if (ct.IsCancellationRequested) break;
 
-            // Saltar marcadores no humanos (jobs automáticos, system).
             var key = group.Key;
-            if (string.IsNullOrEmpty(key)
-                || key.Equals("system", StringComparison.OrdinalIgnoreCase))
-            {
-                log.LogInformation("Summary: omitido marcador '{Key}' ({Count} campañas).", key, group.Count());
-                continue;
-            }
-
-            // 3. Resolver el usuario. Campaign.LaunchedByUserId puede contener:
-            //    - Guid (id de AppUser/SuperAdmin)
-            //    - Email
-            //    - FullName (lo que ocurre en este entorno)
-            // Buscamos en AppUsers primero y caemos a SuperAdmins. Tomamos el primero con email.
-            var user = await db.AppUsers
-                .Where(u => (u.Id.ToString() == key || u.Email == key || u.FullName == key)
-                            && !string.IsNullOrEmpty(u.Email))
-                .Select(u => new { u.FullName, u.Email })
-                .FirstOrDefaultAsync(ct);
-
-            if (user is null)
-            {
-                var sa = await db.SuperAdmins
-                    .Where(s => (s.Id.ToString() == key || s.Email == key || s.FullName == key)
-                                && s.IsActive
-                                && !string.IsNullOrEmpty(s.Email))
-                    .Select(s => new { s.FullName, s.Email })
-                    .FirstOrDefaultAsync(ct);
-                if (sa is not null) user = sa;
-            }
-
-            // El TenantId del grupo: tomamos el del primer campaign para tagging del item.
-            // Nota: si un usuario carga campañas de varios tenants, el item se atribuye al primero.
             var groupTenantId = group.Select(g => g.TenantId).FirstOrDefault();
-            var startedAt = DateTime.UtcNow;
+            var campaignIds = group.Select(g => g.Id).ToList();
 
-            if (user is null || string.IsNullOrEmpty(user.Email))
+            // ── Resolver destinatarios del resumen ─────────────────────────────
+            // Caso A — Marcador automático (system, system:download, system:cron, etc.):
+            //   No hay un usuario humano "owner". Enviamos el resumen a TODOS los
+            //   AppUsers activos del tenant con email válido. Esto cubre las campañas
+            //   creadas por descargas automáticas de morosidad u otros jobs internos
+            //   sin generar fallos cuando el "usuario" no es humano.
+            // Caso B — Usuario humano (LaunchedByUserId con Guid, email o nombre):
+            //   Lo resolvemos individualmente en AppUsers o SuperAdmins (legacy).
+            var isAutomated = string.IsNullOrEmpty(key)
+                || key.Equals("system", StringComparison.OrdinalIgnoreCase)
+                || key.StartsWith("system:", StringComparison.OrdinalIgnoreCase);
+
+            List<(string FullName, string Email)> recipients;
+
+            if (isAutomated)
             {
-                log.LogWarning("Summary: usuario '{UserKey}' no encontrado o sin email — {Count} campañas omitidas.",
-                    key, group.Count());
-                failed++;
-                auditor.RecordFailure(
-                    ctx.ExecutionId, groupTenantId,
-                    JobExecutionAuditor.ContextTypes.User, key, key,
-                    $"Usuario '{key}' no encontrado en AppUsers ni SuperAdmins, o sin email — {group.Count()} campañas omitidas.");
-                continue;
+                var rows = await db.AppUsers
+                    .Where(u => u.TenantId == groupTenantId
+                                && u.IsActive
+                                && !string.IsNullOrEmpty(u.Email))
+                    .Select(u => new { u.FullName, u.Email })
+                    .ToListAsync(ct);
+
+                recipients = rows.Select(x => (FullName: x.FullName, Email: x.Email)).ToList();
+
+                if (recipients.Count == 0)
+                {
+                    // No hay usuarios activos con email en el tenant — no es un fallo
+                    // (es un caso esperado de un tenant en setup); solo loguear y omitir.
+                    log.LogInformation(
+                        "Summary: marcador automático '{Key}' sin AppUsers activos con email en tenant {TenantId} — {Count} campañas omitidas.",
+                        key, groupTenantId, group.Count());
+                    continue;
+                }
+
+                log.LogInformation(
+                    "Summary: marcador automático '{Key}' → enviando resumen a {Count} usuarios del tenant {TenantId} ({Campaigns} campañas).",
+                    key, recipients.Count, groupTenantId, group.Count());
+            }
+            else
+            {
+                var user = await db.AppUsers
+                    .Where(u => (u.Id.ToString() == key || u.Email == key || u.FullName == key)
+                                && !string.IsNullOrEmpty(u.Email))
+                    .Select(u => new { u.FullName, u.Email })
+                    .FirstOrDefaultAsync(ct);
+
+                if (user is null)
+                {
+                    var sa = await db.SuperAdmins
+                        .Where(s => (s.Id.ToString() == key || s.Email == key || s.FullName == key)
+                                    && s.IsActive
+                                    && !string.IsNullOrEmpty(s.Email))
+                        .Select(s => new { s.FullName, s.Email })
+                        .FirstOrDefaultAsync(ct);
+                    if (sa is not null) user = sa;
+                }
+
+                if (user is null || string.IsNullOrEmpty(user.Email))
+                {
+                    log.LogWarning("Summary: usuario '{UserKey}' no encontrado o sin email — {Count} campañas omitidas.",
+                        key, group.Count());
+                    failed++;
+                    auditor.RecordFailure(
+                        ctx.ExecutionId, groupTenantId,
+                        JobExecutionAuditor.ContextTypes.User, key, key,
+                        $"Usuario '{key}' no encontrado en AppUsers ni SuperAdmins, o sin email — {group.Count()} campañas omitidas.");
+                    continue;
+                }
+
+                recipients = new List<(string FullName, string Email)>
+                {
+                    (FullName: user.FullName, Email: user.Email)
+                };
             }
 
+            // ── Enviar resumen ────────────────────────────────────────────────
             try
             {
-                var campaignIds = group.Select(g => g.Id).ToList();
                 var (excelBytes, perCampaignSummary) = await BuildExcelAndSummaryAsync(campaignIds, ct);
 
-                // 4. Subir a Azure Blob — container "sumary" PRIVADO.
-                // Generamos un SAS firmado válido por 2 días para que el destinatario
-                // pueda descargar desde el email sin exponer el container.
+                // Folder en blob — para automatizadas, namespace por tenant; para
+                // humanas, namespace por email del usuario (legacy).
                 var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
-                var safeUserKey = SafeFolderName(user.Email);
-                var blobPath = $"{safeUserKey}/Reporte_{stamp}.xlsx";
+                var safeFolder = isAutomated
+                    ? $"system_{groupTenantId:N}"
+                    : SafeFolderName(recipients[0].Email);
+                var blobPath = $"{safeFolder}/Reporte_{stamp}.xlsx";
                 var url = await blobStorage.UploadAndGetSasUrlAsync(
                     ContainerName, blobPath, excelBytes,
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     TimeSpan.FromDays(2), ct);
 
-                // 5. Enviar email (con copia oculta a todos los super admins activos).
-                await emailService.SendLabelingSummaryAsync(
-                    user.Email, user.FullName, url, perCampaignSummary,
-                    bccEmails: superAdminEmails, ct: ct);
+                // Enviar email a cada destinatario (con copia oculta a super admins).
+                // Si falla un destinatario individual, no abortamos el grupo entero —
+                // contamos parciales para que el job no se desactive por casos edge.
+                var perGroupSent = 0;
+                var perGroupFailed = 0;
+                foreach (var r in recipients)
+                {
+                    try
+                    {
+                        await emailService.SendLabelingSummaryAsync(
+                            r.Email, r.FullName, url, perCampaignSummary,
+                            bccEmails: superAdminEmails, ct: ct);
+                        perGroupSent++;
+                    }
+                    catch (Exception exMail)
+                    {
+                        perGroupFailed++;
+                        log.LogError(exMail,
+                            "Summary: error enviando email a {Email} (grupo '{Key}', tenant {TenantId}).",
+                            r.Email, key, groupTenantId);
+                        auditor.RecordFailure(
+                            ctx.ExecutionId, groupTenantId,
+                            JobExecutionAuditor.ContextTypes.User, r.Email,
+                            $"{r.FullName} <{r.Email}>", exMail.Message);
+                    }
+                }
 
-                // 6. Marcar campañas como enviadas (en lote).
-                await db.Campaigns
-                    .Where(c => campaignIds.Contains(c.Id))
-                    .ExecuteUpdateAsync(s => s.SetProperty(c => c.LabelingSummarySentAt, DateTime.UtcNow), ct);
+                if (perGroupSent > 0)
+                {
+                    // Solo marcamos las campañas como "enviadas" si al menos un
+                    // destinatario recibió el correo, para no perder reintentos
+                    // cuando el envío falla totalmente.
+                    await db.Campaigns
+                        .Where(c => campaignIds.Contains(c.Id))
+                        .ExecuteUpdateAsync(s => s.SetProperty(c => c.LabelingSummarySentAt, DateTime.UtcNow), ct);
 
-                log.LogInformation("Summary: enviado a {Email} con {Count} campañas. URL={Url}",
-                    user.Email, campaignIds.Count, url);
-                sent++;
+                    log.LogInformation(
+                        "Summary: grupo '{Key}' enviado a {Sent}/{Total} destinatarios con {Count} campañas. URL={Url}",
+                        key, perGroupSent, recipients.Count, campaignIds.Count, url);
+                    sent++;
+                }
+                else
+                {
+                    failed++;
+                }
             }
             catch (Exception ex)
             {
-                log.LogError(ex, "Summary: error procesando usuario {UserKey}.", group.Key);
+                log.LogError(ex, "Summary: error procesando grupo '{Key}'.", key);
                 failed++;
                 auditor.RecordFailure(
                     ctx.ExecutionId, groupTenantId,
-                    JobExecutionAuditor.ContextTypes.User, user.Email,
-                    $"{user.FullName} <{user.Email}>", ex.Message);
+                    JobExecutionAuditor.ContextTypes.User, key,
+                    isAutomated ? $"[automated] {key}" : key,
+                    ex.Message);
             }
         }
 
