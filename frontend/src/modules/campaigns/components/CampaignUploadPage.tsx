@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Check, Loader2, Eye, X, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, Check, Loader2, Eye, X, AlertTriangle, Users } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { useCampaignTemplates } from '@/shared/hooks/useCampaignTemplates'
 import {
@@ -14,18 +14,17 @@ import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 const STEPS = [
   { number: 1, label: 'Configuracion' },
-  { number: 2, label: 'Vista previa' },
-  { number: 3, label: 'Confirmacion' },
+  { number: 2, label: 'Confirmacion' },
 ]
 
-// ── Modal JSON ────────────────────────────────────────────────────────────────
+// ── Modal JSON (per-contacto) ─────────────────────────────────────────────────
 function JsonModal({ contact, onClose }: { contact: FixedContactPreview; onClose: () => void }) {
   let formatted = contact.contactDataJson
   try { formatted = JSON.stringify(JSON.parse(contact.contactDataJson), null, 2) } catch { }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-xl bg-white shadow-xl">
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div className="flex max-h-[80vh] w-full max-w-2xl flex-col rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between border-b border-gray-200 px-5 py-4">
           <div>
             <p className="font-semibold text-gray-900">{contact.nombreCliente}</p>
@@ -46,6 +45,111 @@ function JsonModal({ contact, onClose }: { contact: FixedContactPreview; onClose
   )
 }
 
+// ── Modal con el detalle completo de contactos ───────────────────────────────
+function ContactsDetailModal({
+  preview,
+  onClose,
+  onShowJson,
+}: {
+  preview: FixedFormatPreviewResult
+  onClose: () => void
+  onShowJson: (c: FixedContactPreview) => void
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="flex max-h-[85vh] w-full max-w-4xl flex-col rounded-xl bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-gray-200 px-5 py-4">
+          <div>
+            <p className="text-base font-semibold text-gray-900">
+              Detalle de contactos
+            </p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              {preview.contacts.length} contacto{preview.contacts.length === 1 ? '' : 's'} únicos
+              {' — '}
+              {preview.totalRowsRead} fila{preview.totalRowsRead === 1 ? '' : 's'} leída{preview.totalRowsRead === 1 ? '' : 's'}
+            </p>
+            {preview.extraColumns.length > 0 && (
+              <p className="text-[11px] text-gray-400 mt-1 max-w-2xl">
+                Columnas extra: {preview.extraColumns.join(', ')}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+          >
+            <X className="h-5 w-5" />
+          </button>
+        </div>
+
+        {/* Warnings */}
+        {preview.warnings.length > 0 && (
+          <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3">
+            <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500 mt-0.5" />
+            <ul className="space-y-0.5">
+              {preview.warnings.map((w, i) => (
+                <li key={i} className="text-xs text-amber-700">{w}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {/* Tabla */}
+        <div className="flex-1 overflow-auto">
+          <table className="min-w-full divide-y divide-gray-100 text-sm">
+            <thead className="sticky top-0 bg-gray-50">
+              <tr>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">NombreCliente</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">Celular (E.164)</th>
+                <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">KeyValue</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-500">Registros</th>
+                <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-500">JSON</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {preview.contacts.map((c, i) => (
+                <tr key={i} className="hover:bg-gray-50">
+                  <td className="px-4 py-2.5 font-medium text-gray-900">{c.nombreCliente}</td>
+                  <td className="px-4 py-2.5 font-mono text-gray-700">{c.phone}</td>
+                  <td className="max-w-[180px] truncate px-4 py-2.5 text-gray-600" title={c.keyValue}>{c.keyValue}</td>
+                  <td className="px-4 py-2.5 text-center">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.totalRegistros > 1 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                      {c.totalRegistros}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-center">
+                    <button
+                      onClick={() => onShowJson(c)}
+                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                      title="Ver JSON generado"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Footer */}
+        <div className="border-t border-gray-200 px-5 py-3 flex justify-end">
+          <button
+            onClick={onClose}
+            className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Página principal ──────────────────────────────────────────────────────────
 export function CampaignUploadPage() {
   const navigate = useNavigate()
@@ -57,6 +161,7 @@ export function CampaignUploadPage() {
   const [startDate, setStartDate] = useState(new Date().toISOString().slice(0, 16))
   const [error, setError] = useState<string | null>(null)
   const [selectedJson, setSelectedJson] = useState<FixedContactPreview | null>(null)
+  const [showContactsDetail, setShowContactsDetail] = useState(false)
 
   const { data: templates } = useCampaignTemplates()
   const previewMutation = usePreviewFixedFormat()
@@ -103,6 +208,13 @@ export function CampaignUploadPage() {
   return (
     <>
       {selectedJson && <JsonModal contact={selectedJson} onClose={() => setSelectedJson(null)} />}
+      {showContactsDetail && preview && (
+        <ContactsDetailModal
+          preview={preview}
+          onClose={() => setShowContactsDetail(false)}
+          onShowJson={(c) => setSelectedJson(c)}
+        />
+      )}
 
       <div className="mx-auto max-w-3xl">
         <PageHeader
@@ -136,7 +248,7 @@ export function CampaignUploadPage() {
 
         {error && <div className="mb-4 rounded-md bg-red-50 p-3 text-center text-sm text-red-600">{error}</div>}
 
-        {/* Step 1: Select template + file + date */}
+        {/* Step 1: Configuracion */}
         {step === 1 && (
           <div className="space-y-6">
             <section className="rounded-lg bg-white p-5 shadow-sm">
@@ -194,93 +306,21 @@ export function CampaignUploadPage() {
           </div>
         )}
 
-        {/* Step 2: Preview de contactos */}
-        {step === 2 && preview && (
-          <div className="space-y-6">
-            <div className="rounded-lg bg-white shadow-sm overflow-hidden">
-              <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
-                <p className="text-sm font-semibold text-gray-900">
-                  {preview.contacts.length} contactos únicos — {preview.totalRowsRead} filas leídas
-                </p>
-                {preview.extraColumns.length > 0 && (
-                  <p className="text-xs text-gray-500">
-                    Extra: {preview.extraColumns.join(', ')}
-                  </p>
-                )}
-              </div>
-
-              {preview.warnings.length > 0 && (
-                <div className="flex items-start gap-2 border-b border-amber-200 bg-amber-50 px-5 py-3">
-                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500 mt-0.5" />
-                  <ul className="space-y-0.5">
-                    {preview.warnings.map((w, i) => (
-                      <li key={i} className="text-xs text-amber-700">{w}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-100 text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">NombreCliente</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">Celular (E.164)</th>
-                      <th className="px-4 py-2.5 text-left text-xs font-medium text-gray-500">KeyValue</th>
-                      <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-500">Registros</th>
-                      <th className="px-4 py-2.5 text-center text-xs font-medium text-gray-500">JSON</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {preview.contacts.map((c, i) => (
-                      <tr key={i} className="hover:bg-gray-50">
-                        <td className="px-4 py-2.5 font-medium text-gray-900">{c.nombreCliente}</td>
-                        <td className="px-4 py-2.5 font-mono text-gray-700">{c.phone}</td>
-                        <td className="max-w-[180px] truncate px-4 py-2.5 text-gray-600" title={c.keyValue}>{c.keyValue}</td>
-                        <td className="px-4 py-2.5 text-center">
-                          <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${c.totalRegistros > 1 ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
-                            {c.totalRegistros}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-center">
-                          <button
-                            onClick={() => setSelectedJson(c)}
-                            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                            title="Ver JSON generado"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="flex justify-between">
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-              >
-                <ArrowLeft className="h-4 w-4" /> Atras
-              </button>
-              <button
-                onClick={() => setStep(3)}
-                className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-              >
-                Continuar
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Step 3: Confirmation */}
-        {step === 3 && preview && selectedTemplate && (
+        {/* Step 2: Confirmacion (con modal de detalle) */}
+        {step === 2 && preview && selectedTemplate && (
           <div className="space-y-6">
             <section className="rounded-lg bg-white p-5 shadow-sm">
-              <h2 className="mb-4 text-sm font-semibold text-gray-900">Resumen</h2>
+              <div className="mb-4 flex items-center justify-between">
+                <h2 className="text-sm font-semibold text-gray-900">Resumen</h2>
+                <button
+                  type="button"
+                  onClick={() => setShowContactsDetail(true)}
+                  className="flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 transition-colors"
+                >
+                  <Users className="h-3.5 w-3.5" />
+                  Ver detalle de contactos
+                </button>
+              </div>
               <dl className="space-y-3 text-sm">
                 <div className="flex justify-between">
                   <dt className="text-gray-500">Maestro</dt>
@@ -311,12 +351,26 @@ export function CampaignUploadPage() {
                   <dd className="font-medium text-gray-900">{selectedTemplate.autoCloseHours}h</dd>
                 </div>
               </dl>
+
+              {preview.warnings.length > 0 && (
+                <div className="mt-4 flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                  <AlertTriangle className="h-4 w-4 shrink-0 text-amber-500 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <p className="text-xs font-medium text-amber-800">Advertencias en el archivo:</p>
+                    <ul className="space-y-0.5">
+                      {preview.warnings.map((w, i) => (
+                        <li key={i} className="text-xs text-amber-700">{w}</li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              )}
             </section>
 
             <div className="flex justify-between">
               <button
                 type="button"
-                onClick={() => setStep(2)}
+                onClick={() => setStep(1)}
                 className="flex items-center gap-1.5 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
               >
                 <ArrowLeft className="h-4 w-4" /> Atras
