@@ -62,21 +62,28 @@ public class SendLabelingSummaryExecutor(
         if (campaignsWithChanges.Count == 0)
             return JobRunResult.Skipped("Sin campañas con cambios desde el último envío.");
 
-        // 2. Agrupar por usuario que cargó.
-        var byUser = campaignsWithChanges
-            .GroupBy(c => c.LaunchedByUserId!)
+        // 2. Agrupar por (usuario, tenant) — CRÍTICO: agrupar solo por
+        //    LaunchedByUserId mezcla campañas de diferentes tenants en un único
+        //    grupo cuando el marker se repite (ej: 'system:download' aparece en
+        //    todos los tenants que tienen descarga de morosidad). Eso provocaba
+        //    un data leak: el Excel del grupo mezclaba campañas de tenants
+        //    distintos y se enviaba a los usuarios de un solo tenant.
+        //    Agrupando por (UserId, TenantId) garantizamos que cada grupo es de
+        //    un único tenant y los recipients corresponden al MISMO tenant.
+        var byUserAndTenant = campaignsWithChanges
+            .GroupBy(c => new { UserKey = c.LaunchedByUserId!, c.TenantId })
             .ToList();
 
-        var totalUsers = byUser.Count;
+        var totalUsers = byUserAndTenant.Count;
         var sent = 0;
         var failed = 0;
 
-        foreach (var group in byUser)
+        foreach (var group in byUserAndTenant)
         {
             if (ct.IsCancellationRequested) break;
 
-            var key = group.Key;
-            var groupTenantId = group.Select(g => g.TenantId).FirstOrDefault();
+            var key = group.Key.UserKey;
+            var groupTenantId = group.Key.TenantId;
             var campaignIds = group.Select(g => g.Id).ToList();
 
             // ── Resolver destinatarios del resumen ─────────────────────────────
