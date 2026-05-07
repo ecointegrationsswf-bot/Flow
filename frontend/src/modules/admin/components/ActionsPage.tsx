@@ -10,6 +10,7 @@ import {
   type ActionPayload,
 } from '../hooks/useAdminActions'
 import { useAdminTenants } from '../hooks/useAdminTenants'
+import { confirmDialog } from '@/shared/components/dialog'
 
 // Reusamos el catálogo único de friendly names — incluye también las acciones
 // internas del Campaign Automation Worker (FOLLOW_UP_MESSAGE, AUTO_CLOSE_CAMPAIGN,
@@ -91,7 +92,8 @@ export function ActionsPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar esta accion?')) return
+    const ok = await confirmDialog({ title: 'Eliminar acción', description: '¿Seguro que quieres eliminar esta acción? Esta operación no se puede deshacer.', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 

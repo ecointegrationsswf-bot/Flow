@@ -8,6 +8,7 @@ import {
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
+import { toast } from '@/shared/components/dialog'
 import {
   useWhatsAppLines, useCreateWhatsAppLine, useUpdateWhatsAppLine, useDeleteWhatsAppLine,
   useLineStatus, useLineQr, useRestartLine, useLogoutLine, useSendTestMessage,
@@ -381,7 +382,7 @@ export function WhatsAppTab() {
     } catch (err: any) {
       const msg = err?.response?.data?.error ?? err?.message ?? 'Error desconocido'
       console.error('[DELETE] Error:', err?.response?.status, msg, err)
-      alert(`No se pudo eliminar la linea: ${msg}`)
+      toast.error(`No se pudo eliminar la línea: ${msg}`)
     }
   }
 

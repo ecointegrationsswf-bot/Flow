@@ -6,6 +6,7 @@ import {
   useUpdateCategory,
   useDeleteCategory,
 } from '@/modules/admin/hooks/useAdminCategories'
+import { confirmDialog } from '@/shared/components/dialog'
 
 export function CategoriesPage() {
   const { data: categories, isLoading } = useAdminCategories()
@@ -43,7 +44,8 @@ export function CategoriesPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar esta categoria?')) return
+    const ok = await confirmDialog({ title: 'Eliminar categoría', description: '¿Seguro que quieres eliminar esta categoría?', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 

@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '@/shared/api/client'
+import { toast } from '@/shared/components/dialog'
 import type { ConversationSummary, Conversation } from '@/shared/types'
 
 export interface ConversationsFilter {
@@ -73,7 +74,7 @@ export function useSendReply() {
 
     onError: (err: any) => {
       const detail = err?.response?.data?.error ?? err?.message ?? 'Error desconocido'
-      alert(`Error al enviar: ${detail}`)
+      toast.error(`Error al enviar: ${detail}`)
     },
 
     onSettled: (_, __, { id }) => {
@@ -112,7 +113,7 @@ export function useSendFile() {
     },
     onError: (err: any) => {
       const detail = err?.response?.data?.error ?? err?.message ?? 'Error desconocido'
-      alert(`Error al enviar archivo: ${detail}`)
+      toast.error(`Error al enviar archivo: ${detail}`)
     },
   })
 }

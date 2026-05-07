@@ -11,6 +11,7 @@ import { useTenantTime } from '@/shared/hooks/useTenantTime'
 import { getActionFriendlyName } from '@/shared/actionLabels'
 import { ScheduledJobFormModal } from './ScheduledJobFormModal'
 import { ScheduledJobHistoryModal } from './ScheduledJobHistoryModal'
+import { confirmDialog } from '@/shared/components/dialog'
 
 export function ScheduledJobsPage() {
   const { data: jobs, isLoading, refetch } = useScheduledJobs()
@@ -32,7 +33,13 @@ export function ScheduledJobsPage() {
   const pausedCount = (jobs ?? []).filter(j => !j.isActive).length
 
   const handleDelete = async (job: ScheduledJob) => {
-    if (!confirm(`¿Eliminar el job "${getActionFriendlyName(job.actionName) || job.id}"? El historial también se borrará.`)) return
+    const ok = await confirmDialog({
+      title: 'Eliminar job programado',
+      description: `¿Eliminar el job "${getActionFriendlyName(job.actionName) || job.id}"? El historial también se borrará.`,
+      confirmLabel: 'Eliminar',
+      variant: 'danger',
+    })
+    if (!ok) return
     await deleteJob.mutateAsync(job.id)
   }
 

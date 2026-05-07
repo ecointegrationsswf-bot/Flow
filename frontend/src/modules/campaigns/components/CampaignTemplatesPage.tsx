@@ -7,6 +7,7 @@ import {
   useDuplicateCampaignTemplate,
 } from '@/shared/hooks/useCampaignTemplates'
 import { usePermissions } from '@/shared/hooks/usePermissions'
+import { confirmDialog } from '@/shared/components/dialog'
 
 export function CampaignTemplatesPage() {
   const { hasPermission } = usePermissions()
@@ -25,7 +26,8 @@ export function CampaignTemplatesPage() {
   const [newName, setNewName] = useState('')
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar este maestro de campana?')) return
+    const ok = await confirmDialog({ title: 'Eliminar maestro', description: '¿Seguro que quieres eliminar este maestro de campaña?', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 

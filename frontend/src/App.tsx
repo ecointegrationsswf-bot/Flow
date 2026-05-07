@@ -37,6 +37,7 @@ import { TenantActionsPage } from '@/modules/actions/components/TenantActionsPag
 import { MorosidadPage } from '@/modules/morosidad/components/MorosidadPage'
 import { ForgotPasswordPage } from '@/modules/auth/components/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/modules/auth/components/ResetPasswordPage'
+import { DialogHost } from '@/shared/components/dialog'
 
 export default function App() {
   const hydrate = useAuthStore((s) => s.hydrate)
@@ -49,6 +50,8 @@ export default function App() {
   }, [hydrate, hydrateSa, refreshMe])
 
   return (
+    <>
+    <DialogHost />
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -122,5 +125,6 @@ export default function App() {
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
+    </>
   )
 }
