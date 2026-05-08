@@ -493,6 +493,16 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
             totalConv += c.CountsByLabel.Values.Sum() + c.Unlabeled;
         }
 
+        // Cultura es-PA para que la fecha del header salga en español aunque
+        // el server tenga el locale en inglés (caso común en Windows en-US).
+        var esCulture = new System.Globalization.CultureInfo("es-PA");
+        // Fecha actual en hora de Panamá (UTC-5).
+        var nowPa = DateTime.UtcNow.AddHours(-5);
+        var headerDate = nowPa.ToString("dddd dd 'de' MMMM 'de' yyyy", esCulture);
+        // Capitalizar la primera letra ("lunes 8..." → "Lunes 8...").
+        if (headerDate.Length > 0)
+            headerDate = char.ToUpper(headerDate[0], esCulture) + headerDate[1..];
+
         // Mapear cada etiqueta a un color estable basado en orden alfabético del set global.
         var orderedLabels = globalLabelCounts.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
         var labelColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -630,7 +640,7 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
                     </td></tr>
                   </table>
                   <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;line-height:1.2;">Resumen del etiquetado</h1>
-                  <p style="margin:10px 0 0;color:#ffffff;font-size:14px;font-family:'Segoe UI',Roboto,Arial,sans-serif;opacity:0.9;">{{DateTime.UtcNow.AddHours(-5):dddd dd 'de' MMMM 'de' yyyy}}</p>
+                  <p style="margin:10px 0 0;color:#ffffff;font-size:14px;font-family:'Segoe UI',Roboto,Arial,sans-serif;opacity:0.9;">{{headerDate}}</p>
                 </td></tr>
 
                 <!-- Saludo -->
