@@ -525,8 +525,8 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
                 </tr>
               </table>
               <!-- Progress bar -->
-              <div style="margin:8px 0 10px;height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;">
-                <div style="height:6px;width:{cPct}%;background:linear-gradient(90deg,#3b82f6,#1d4ed8);border-radius:3px;"></div>
+              <div style="margin:8px 0 10px;height:6px;background-color:#e2e8f0;border-radius:3px;overflow:hidden;">
+                <div style="height:6px;width:{cPct}%;background-color:#3b82f6;background-image:linear-gradient(90deg,#3b82f6,#1d4ed8);border-radius:3px;"></div>
               </div>
             """);
 
@@ -612,13 +612,15 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
           <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7;padding:40px 0;">
             <tr><td align="center">
               <table width="640" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.08);">
-                <!-- Header con gradient -->
-                <tr><td style="background:linear-gradient(135deg,#1e3a8a 0%,#3b82f6 60%,#06b6d4 100%);padding:36px 40px;text-align:center;">
-                  <div style="display:inline-block;background:rgba(255,255,255,0.15);padding:6px 14px;border-radius:999px;margin-bottom:14px;">
-                    <span style="color:#ffffff;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">TalkIA · Resumen IA</span>
-                  </div>
-                  <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.4px;">Resumen del etiquetado</h1>
-                  <p style="margin:8px 0 0;color:#dbeafe;font-size:14px;">{{DateTime.UtcNow.AddHours(-5):dddd dd 'de' MMMM 'de' yyyy}}</p>
+                <!-- Header — bgcolor solid + gradient como enhancement -->
+                <tr><td bgcolor="#1e3a8a" style="background-color:#1e3a8a;background-image:linear-gradient(135deg,#1e3a8a 0%,#3b82f6 60%,#06b6d4 100%);padding:36px 40px;text-align:center;">
+                  <table cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto 14px;">
+                    <tr><td bgcolor="#3b5cb8" style="background-color:#3b5cb8;background-color:rgba(255,255,255,0.18);padding:6px 14px;border-radius:999px;">
+                      <span style="color:#ffffff;font-size:11px;font-weight:700;letter-spacing:1px;text-transform:uppercase;font-family:'Segoe UI',Roboto,Arial,sans-serif;">TalkIA · Resumen IA</span>
+                    </td></tr>
+                  </table>
+                  <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;line-height:1.2;">Resumen del etiquetado</h1>
+                  <p style="margin:10px 0 0;color:#ffffff;font-size:14px;font-family:'Segoe UI',Roboto,Arial,sans-serif;opacity:0.9;">{{DateTime.UtcNow.AddHours(-5):dddd dd 'de' MMMM 'de' yyyy}}</p>
                 </td></tr>
 
                 <!-- Saludo -->
@@ -633,26 +635,32 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
                 <tr><td style="padding:18px 40px 12px;">
                   <table width="100%" cellpadding="0" cellspacing="0">
                     <tr>
-                      <td width="33%" style="padding:0 5px 0 0;">
-                        <div style="background:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%);border:1px solid #bfdbfe;border-radius:10px;padding:14px 12px;text-align:center;">
-                          <div style="font-size:11px;color:#1e40af;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">Etiquetadas</div>
-                          <div style="font-size:28px;color:#1e3a8a;font-weight:700;line-height:1.1;margin-top:4px;">{{totalEtiq}}</div>
-                          <div style="font-size:11px;color:#3b82f6;font-weight:600;margin-top:2px;">{{pct}}%</div>
-                        </div>
+                      <td width="33%" valign="top" style="padding:0 5px 0 0;">
+                        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                          <tr><td bgcolor="#dbeafe" style="background-color:#dbeafe;background-image:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%);border:1px solid #bfdbfe;border-radius:10px;padding:14px 12px;text-align:center;">
+                            <div style="font-size:11px;color:#1e40af;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Etiquetadas</div>
+                            <div style="font-size:28px;color:#1e3a8a;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{totalEtiq}}</div>
+                            <div style="font-size:11px;color:#3b82f6;font-weight:700;margin-top:2px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{pct}}%</div>
+                          </td></tr>
+                        </table>
                       </td>
-                      <td width="33%" style="padding:0 5px;">
-                        <div style="background:linear-gradient(135deg,#f1f5f9 0%,#f8fafc 100%);border:1px solid #e2e8f0;border-radius:10px;padding:14px 12px;text-align:center;">
-                          <div style="font-size:11px;color:#475569;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">Total convs</div>
-                          <div style="font-size:28px;color:#0f172a;font-weight:700;line-height:1.1;margin-top:4px;">{{totalConv}}</div>
-                          <div style="font-size:11px;color:#64748b;font-weight:600;margin-top:2px;">procesadas</div>
-                        </div>
+                      <td width="33%" valign="top" style="padding:0 5px;">
+                        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                          <tr><td bgcolor="#f1f5f9" style="background-color:#f1f5f9;background-image:linear-gradient(135deg,#f1f5f9 0%,#f8fafc 100%);border:1px solid #e2e8f0;border-radius:10px;padding:14px 12px;text-align:center;">
+                            <div style="font-size:11px;color:#475569;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Total convs</div>
+                            <div style="font-size:28px;color:#0f172a;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{totalConv}}</div>
+                            <div style="font-size:11px;color:#64748b;font-weight:700;margin-top:2px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">procesadas</div>
+                          </td></tr>
+                        </table>
                       </td>
-                      <td width="33%" style="padding:0 0 0 5px;">
-                        <div style="background:linear-gradient(135deg,#fef3c7 0%,#fffbeb 100%);border:1px solid #fde68a;border-radius:10px;padding:14px 12px;text-align:center;">
-                          <div style="font-size:11px;color:#a16207;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">Campañas</div>
-                          <div style="font-size:28px;color:#78350f;font-weight:700;line-height:1.1;margin-top:4px;">{{campaigns.Count}}</div>
-                          <div style="font-size:11px;color:#a16207;font-weight:600;margin-top:2px;">en el reporte</div>
-                        </div>
+                      <td width="33%" valign="top" style="padding:0 0 0 5px;">
+                        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                          <tr><td bgcolor="#fef3c7" style="background-color:#fef3c7;background-image:linear-gradient(135deg,#fef3c7 0%,#fffbeb 100%);border:1px solid #fde68a;border-radius:10px;padding:14px 12px;text-align:center;">
+                            <div style="font-size:11px;color:#a16207;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Campañas</div>
+                            <div style="font-size:28px;color:#78350f;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{campaigns.Count}}</div>
+                            <div style="font-size:11px;color:#a16207;font-weight:700;margin-top:2px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">en el reporte</div>
+                          </td></tr>
+                        </table>
                       </td>
                     </tr>
                   </table>
@@ -669,13 +677,17 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
                   </table>
                 </td></tr>
 
-                <!-- CTA -->
+                <!-- CTA — botón bulletproof (table + bgcolor) compatible con Outlook -->
                 <tr><td align="center" style="padding:28px 40px 8px;">
-                  <a href="{{System.Net.WebUtility.HtmlEncode(excelUrl)}}"
-                     style="display:inline-block;background:linear-gradient(135deg,#1d4ed8 0%,#3b82f6 100%);color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:14px 36px;border-radius:10px;box-shadow:0 4px 12px rgba(29,78,216,0.3);">
-                    📊 Descargar reporte completo (Excel)
-                  </a>
-                  <p style="margin:14px 0 0;font-size:11px;color:#94a3b8;">
+                  <table cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto;">
+                    <tr><td align="center" bgcolor="#1d4ed8" style="background-color:#1d4ed8;background-image:linear-gradient(135deg,#1d4ed8 0%,#3b82f6 100%);border-radius:10px;mso-padding-alt:0;">
+                      <a href="{{System.Net.WebUtility.HtmlEncode(excelUrl)}}"
+                         style="display:inline-block;color:#ffffff;text-decoration:none;font-weight:700;font-size:15px;padding:14px 36px;font-family:'Segoe UI',Roboto,Arial,sans-serif;border:1px solid #1d4ed8;border-radius:10px;mso-border-alt:none;">
+                        Descargar reporte completo (Excel)
+                      </a>
+                    </td></tr>
+                  </table>
+                  <p style="margin:14px 0 0;font-size:11px;color:#94a3b8;font-family:'Segoe UI',Roboto,Arial,sans-serif;">
                     El enlace de descarga es válido por 48 horas.
                   </p>
                 </td></tr>
