@@ -588,18 +588,28 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
             """);
         }
 
+        // Chart section bulletproof: bgcolor sólido en TD (no en table; Outlook
+        // ignora padding/background en table). Padding aplicado vía padding del td.
+        // La imagen del chart va en una table interna por compatibilidad.
         var chartSection = chartUrl is null ? "" : $"""
-        <tr><td style="padding:8px 40px 16px;">
-          <h3 style="margin:0 0 12px;font-size:13px;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Distribución de etiquetas</h3>
-          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;">
-            <tr>
-              <td width="220" valign="middle" align="center">
-                <img src="{System.Net.WebUtility.HtmlEncode(chartUrl)}" alt="Distribución de etiquetas" width="200" style="display:block;border:0;outline:none;text-decoration:none;max-width:100%;height:auto;" />
-              </td>
-              <td valign="middle" style="padding-left:16px;">
-                <table cellpadding="0" cellspacing="0" width="100%">{legendItems}</table>
-              </td>
-            </tr>
+        <tr><td style="padding:8px 40px 16px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">
+          <h3 style="margin:0 0 12px;font-size:13px;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Distribución de etiquetas</h3>
+          <table width="100%" cellpadding="0" cellspacing="0" border="0">
+            <tr><td bgcolor="#f8fafc" style="background-color:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;">
+              <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                <tr>
+                  <td width="220" valign="top" align="center" style="padding-right:12px;">
+                    <img src="{System.Net.WebUtility.HtmlEncode(chartUrl)}"
+                         alt="Distribución de etiquetas"
+                         width="200" height="200"
+                         style="display:block;border:0;outline:none;text-decoration:none;width:200px;height:200px;max-width:200px;" />
+                  </td>
+                  <td valign="middle" style="padding-left:8px;">
+                    <table cellpadding="0" cellspacing="0" border="0" width="100%">{legendItems}</table>
+                  </td>
+                </tr>
+              </table>
+            </td></tr>
           </table>
         </td></tr>
         """;
