@@ -450,125 +450,233 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         await SendAsync(toEmail, fullName, subject, html, ct, bccEmails);
     }
 
+    // Paleta de 8 colores distinguibles para etiquetas; el último (gris) reservado a "Sin etiqueta".
+    private static readonly string[] LabelPalette =
+    {
+        "#3b82f6", // blue-500
+        "#22c55e", // green-500
+        "#f59e0b", // amber-500
+        "#a855f7", // purple-500
+        "#14b8a6", // teal-500
+        "#ec4899", // pink-500
+        "#6366f1", // indigo-500
+        "#ef4444", // red-500
+    };
+    private const string UnlabeledColor = "#cbd5e1"; // slate-300
+
     private static string BuildLabelingSummaryTemplate(
         string fullName, string excelUrl,
         IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns)
     {
-        var sb = new System.Text.StringBuilder();
         var totalConv = 0;
         var totalEtiq = 0;
+        var totalUnlabeled = 0;
+
+        // Agregar global para el chart: etiqueta → conteo total entre todas las campañas
+        var globalLabelCounts = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var c in campaigns)
         {
-            totalEtiq += c.CountsByLabel.Values.Sum();
+            foreach (var (label, count) in c.CountsByLabel)
+            {
+                globalLabelCounts.TryGetValue(label, out var prev);
+                globalLabelCounts[label] = prev + count;
+                totalEtiq += count;
+            }
+            totalUnlabeled += c.Unlabeled;
             totalConv += c.CountsByLabel.Values.Sum() + c.Unlabeled;
         }
 
-        // Bloque por campaña: nombre + lista de etiquetas con conteo
-        var campaignRows = new System.Text.StringBuilder();
+        // Mapear cada etiqueta a un color estable basado en orden alfabético del set global.
+        var orderedLabels = globalLabelCounts.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+        var labelColors = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 0; i < orderedLabels.Count; i++)
+            labelColors[orderedLabels[i]] = LabelPalette[i % LabelPalette.Length];
+
+        var pct = totalConv == 0 ? 0 : (int)Math.Round(totalEtiq * 100.0 / totalConv);
+
+        // ── URL del pie chart vía QuickChart.io ──────────────────────────────
+        // QuickChart renderiza Chart.js a PNG. Funciona en todos los clientes
+        // de email (incluido Gmail/Outlook que filtran SVG/JS).
+        var chartUrl = totalEtiq + totalUnlabeled == 0
+            ? null
+            : BuildPieChartUrl(globalLabelCounts, totalUnlabeled, labelColors);
+
+        // Bloque de campañas con progress bars
+        var campaignBlocks = new System.Text.StringBuilder();
         foreach (var c in campaigns)
         {
-            campaignRows.Append($"""
-            <tr>
-              <td style="padding:14px 18px;border-top:1px solid #e2e8f0;">
-                <div style="font-weight:600;color:#0f172a;font-size:14px;margin-bottom:6px;">{System.Net.WebUtility.HtmlEncode(c.CampaignName)}</div>
+            var cTotal = c.CountsByLabel.Values.Sum() + c.Unlabeled;
+            var cEtiq = c.CountsByLabel.Values.Sum();
+            var cPct = cTotal == 0 ? 0 : (int)Math.Round(cEtiq * 100.0 / cTotal);
+
+            campaignBlocks.Append($"""
+            <tr><td style="padding:14px 20px;border-top:1px solid #e2e8f0;">
+              <table width="100%" cellpadding="0" cellspacing="0">
+                <tr>
+                  <td style="font-weight:600;color:#0f172a;font-size:14px;">{System.Net.WebUtility.HtmlEncode(c.CampaignName)}</td>
+                  <td style="text-align:right;font-size:12px;color:#64748b;white-space:nowrap;">{cEtiq} / {cTotal} · {cPct}%</td>
+                </tr>
+              </table>
+              <!-- Progress bar -->
+              <div style="margin:8px 0 10px;height:6px;background:#e2e8f0;border-radius:3px;overflow:hidden;">
+                <div style="height:6px;width:{cPct}%;background:linear-gradient(90deg,#3b82f6,#1d4ed8);border-radius:3px;"></div>
+              </div>
             """);
+
             if (c.CountsByLabel.Count == 0)
             {
-                campaignRows.Append("""
-                <div style="font-size:12px;color:#64748b;">Sin conversaciones etiquetadas todavía.</div>
+                campaignBlocks.Append("""
+                <div style="font-size:12px;color:#94a3b8;font-style:italic;">Sin conversaciones etiquetadas todavía.</div>
                 """);
             }
             else
             {
+                campaignBlocks.Append("<div>");
                 foreach (var (label, count) in c.CountsByLabel.OrderByDescending(kv => kv.Value))
                 {
-                    campaignRows.Append($"""
-                    <div style="display:flex;justify-content:space-between;font-size:13px;color:#334155;margin:2px 0;">
-                      <span style="color:#475569;">• {System.Net.WebUtility.HtmlEncode(label)}</span>
-                      <span style="font-weight:600;color:#0f172a;">{count}</span>
-                    </div>
+                    var color = labelColors.TryGetValue(label, out var lc) ? lc : LabelPalette[0];
+                    campaignBlocks.Append($"""
+                    <span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 10px;font-size:12px;border-radius:999px;background:{color}22;color:{color};font-weight:600;border:1px solid {color}44;">
+                      {System.Net.WebUtility.HtmlEncode(label)} · {count}
+                    </span>
                     """);
                 }
                 if (c.Unlabeled > 0)
                 {
-                    campaignRows.Append($"""
-                    <div style="display:flex;justify-content:space-between;font-size:12px;color:#94a3b8;margin:2px 0;font-style:italic;">
-                      <span>• Sin etiqueta</span>
-                      <span>{c.Unlabeled}</span>
-                    </div>
+                    campaignBlocks.Append($"""
+                    <span style="display:inline-block;margin:2px 4px 2px 0;padding:3px 10px;font-size:12px;border-radius:999px;background:#f1f5f9;color:#64748b;font-weight:500;border:1px solid #e2e8f0;">
+                      Sin etiqueta · {c.Unlabeled}
+                    </span>
                     """);
                 }
+                campaignBlocks.Append("</div>");
             }
-            campaignRows.Append("</td></tr>");
+            campaignBlocks.Append("</td></tr>");
         }
 
-        sb.Append($"""
+        // Leyenda de colores para el chart (visible aún si la imagen no carga)
+        var legendItems = new System.Text.StringBuilder();
+        foreach (var lbl in orderedLabels)
+        {
+            var color = labelColors[lbl];
+            var count = globalLabelCounts[lbl];
+            var lblPct = totalConv == 0 ? 0 : (int)Math.Round(count * 100.0 / totalConv);
+            legendItems.Append($"""
+            <tr>
+              <td width="14" style="padding:4px 0;"><div style="width:10px;height:10px;background:{color};border-radius:2px;"></div></td>
+              <td style="padding:4px 8px;font-size:12px;color:#334155;">{System.Net.WebUtility.HtmlEncode(lbl)}</td>
+              <td style="padding:4px 0;font-size:12px;color:#0f172a;font-weight:600;text-align:right;white-space:nowrap;">{count} <span style="color:#94a3b8;font-weight:400;">({lblPct}%)</span></td>
+            </tr>
+            """);
+        }
+        if (totalUnlabeled > 0)
+        {
+            var ulPct = totalConv == 0 ? 0 : (int)Math.Round(totalUnlabeled * 100.0 / totalConv);
+            legendItems.Append($"""
+            <tr>
+              <td width="14" style="padding:4px 0;"><div style="width:10px;height:10px;background:{UnlabeledColor};border-radius:2px;"></div></td>
+              <td style="padding:4px 8px;font-size:12px;color:#64748b;font-style:italic;">Sin etiqueta</td>
+              <td style="padding:4px 0;font-size:12px;color:#64748b;font-weight:500;text-align:right;white-space:nowrap;">{totalUnlabeled} <span style="color:#94a3b8;font-weight:400;">({ulPct}%)</span></td>
+            </tr>
+            """);
+        }
+
+        var chartSection = chartUrl is null ? "" : $"""
+        <tr><td style="padding:8px 40px 16px;">
+          <h3 style="margin:0 0 12px;font-size:13px;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Distribución de etiquetas</h3>
+          <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px;">
+            <tr>
+              <td width="220" valign="middle" align="center">
+                <img src="{System.Net.WebUtility.HtmlEncode(chartUrl)}" alt="Distribución de etiquetas" width="200" style="display:block;border:0;outline:none;text-decoration:none;max-width:100%;height:auto;" />
+              </td>
+              <td valign="middle" style="padding-left:16px;">
+                <table cellpadding="0" cellspacing="0" width="100%">{legendItems}</table>
+              </td>
+            </tr>
+          </table>
+        </td></tr>
+        """;
+
+        var html = $$"""
         <!DOCTYPE html>
         <html>
-        <head><meta charset="utf-8"></head>
+        <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>
         <body style="margin:0;padding:0;background-color:#f4f5f7;font-family:'Segoe UI',Roboto,Arial,sans-serif;">
           <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f5f7;padding:40px 0;">
             <tr><td align="center">
-              <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-                <!-- Header -->
-                <tr>
-                  <td style="background:linear-gradient(135deg,#1e40af 0%,#3b82f6 100%);padding:32px 40px;text-align:center;">
-                    <h1 style="margin:0;color:#ffffff;font-size:26px;font-weight:700;letter-spacing:-0.3px;">Resumen del etiquetado IA</h1>
-                    <p style="margin:8px 0 0;color:#dbeafe;font-size:14px;">TalkIA · {DateTime.UtcNow.AddHours(-5):dddd dd 'de' MMMM, yyyy}</p>
-                  </td>
-                </tr>
+              <table width="640" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 4px 16px rgba(15,23,42,0.08);">
+                <!-- Header con gradient -->
+                <tr><td style="background:linear-gradient(135deg,#1e3a8a 0%,#3b82f6 60%,#06b6d4 100%);padding:36px 40px;text-align:center;">
+                  <div style="display:inline-block;background:rgba(255,255,255,0.15);padding:6px 14px;border-radius:999px;margin-bottom:14px;">
+                    <span style="color:#ffffff;font-size:11px;font-weight:600;letter-spacing:1px;text-transform:uppercase;">TalkIA · Resumen IA</span>
+                  </div>
+                  <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.4px;">Resumen del etiquetado</h1>
+                  <p style="margin:8px 0 0;color:#dbeafe;font-size:14px;">{{DateTime.UtcNow.AddHours(-5):dddd dd 'de' MMMM 'de' yyyy}}</p>
+                </td></tr>
 
                 <!-- Saludo -->
                 <tr><td style="padding:28px 40px 0;">
-                  <h2 style="margin:0 0 8px;color:#0f172a;font-size:18px;">Hola {System.Net.WebUtility.HtmlEncode(fullName)},</h2>
-                  <p style="margin:0 0 20px;color:#475569;font-size:14px;line-height:1.6;">
-                    Procesamos las conversaciones de tus campañas y asignamos etiquetas con IA.
-                    A continuación tienes el detalle por campaña, y al final un botón para descargar
-                    el reporte completo en Excel.
+                  <h2 style="margin:0 0 8px;color:#0f172a;font-size:19px;font-weight:600;">Hola {{System.Net.WebUtility.HtmlEncode(fullName)}} 👋</h2>
+                  <p style="margin:0 0 8px;color:#475569;font-size:14px;line-height:1.6;">
+                    Aquí tienes el resumen del análisis automático de tus conversaciones por la IA.
                   </p>
                 </td></tr>
 
-                <!-- Totales -->
-                <tr><td style="padding:0 40px 16px;">
-                  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f1f5f9;border-radius:10px;padding:14px 18px;">
+                <!-- KPI Cards -->
+                <tr><td style="padding:18px 40px 12px;">
+                  <table width="100%" cellpadding="0" cellspacing="0">
                     <tr>
-                      <td style="font-size:13px;color:#475569;">Conversaciones etiquetadas</td>
-                      <td style="font-size:18px;font-weight:700;color:#1e40af;text-align:right;">{totalEtiq}</td>
-                    </tr>
-                    <tr>
-                      <td style="font-size:12px;color:#64748b;">Total de conversaciones (incluye sin etiqueta)</td>
-                      <td style="font-size:13px;color:#64748b;text-align:right;">{totalConv}</td>
-                    </tr>
-                    <tr>
-                      <td style="font-size:12px;color:#64748b;">Campañas en el reporte</td>
-                      <td style="font-size:13px;color:#64748b;text-align:right;">{campaigns.Count}</td>
+                      <td width="33%" style="padding:0 5px 0 0;">
+                        <div style="background:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%);border:1px solid #bfdbfe;border-radius:10px;padding:14px 12px;text-align:center;">
+                          <div style="font-size:11px;color:#1e40af;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">Etiquetadas</div>
+                          <div style="font-size:28px;color:#1e3a8a;font-weight:700;line-height:1.1;margin-top:4px;">{{totalEtiq}}</div>
+                          <div style="font-size:11px;color:#3b82f6;font-weight:600;margin-top:2px;">{{pct}}%</div>
+                        </div>
+                      </td>
+                      <td width="33%" style="padding:0 5px;">
+                        <div style="background:linear-gradient(135deg,#f1f5f9 0%,#f8fafc 100%);border:1px solid #e2e8f0;border-radius:10px;padding:14px 12px;text-align:center;">
+                          <div style="font-size:11px;color:#475569;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">Total convs</div>
+                          <div style="font-size:28px;color:#0f172a;font-weight:700;line-height:1.1;margin-top:4px;">{{totalConv}}</div>
+                          <div style="font-size:11px;color:#64748b;font-weight:600;margin-top:2px;">procesadas</div>
+                        </div>
+                      </td>
+                      <td width="33%" style="padding:0 0 0 5px;">
+                        <div style="background:linear-gradient(135deg,#fef3c7 0%,#fffbeb 100%);border:1px solid #fde68a;border-radius:10px;padding:14px 12px;text-align:center;">
+                          <div style="font-size:11px;color:#a16207;text-transform:uppercase;letter-spacing:0.6px;font-weight:600;">Campañas</div>
+                          <div style="font-size:28px;color:#78350f;font-weight:700;line-height:1.1;margin-top:4px;">{{campaigns.Count}}</div>
+                          <div style="font-size:11px;color:#a16207;font-weight:600;margin-top:2px;">en el reporte</div>
+                        </div>
+                      </td>
                     </tr>
                   </table>
                 </td></tr>
 
+                <!-- Pie chart + leyenda -->
+                {{chartSection}}
+
                 <!-- Detalle por campaña -->
                 <tr><td style="padding:8px 40px 8px;">
-                  <h3 style="margin:0 0 4px;font-size:14px;color:#1e293b;text-transform:uppercase;letter-spacing:0.4px;">Detalle por campaña</h3>
-                  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:8px;background:#ffffff;">
-                    {campaignRows}
+                  <h3 style="margin:0 0 12px;font-size:13px;color:#1e293b;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Detalle por campaña</h3>
+                  <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e2e8f0;border-radius:10px;background:#ffffff;overflow:hidden;">
+                    {{campaignBlocks}}
                   </table>
                 </td></tr>
 
                 <!-- CTA -->
                 <tr><td align="center" style="padding:28px 40px 8px;">
-                  <a href="{System.Net.WebUtility.HtmlEncode(excelUrl)}"
-                     style="display:inline-block;background-color:#1d4ed8;color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:12px 32px;border-radius:8px;">
-                    📊 Descargar reporte (Excel)
+                  <a href="{{System.Net.WebUtility.HtmlEncode(excelUrl)}}"
+                     style="display:inline-block;background:linear-gradient(135deg,#1d4ed8 0%,#3b82f6 100%);color:#ffffff;text-decoration:none;font-weight:600;font-size:14px;padding:14px 36px;border-radius:10px;box-shadow:0 4px 12px rgba(29,78,216,0.3);">
+                    📊 Descargar reporte completo (Excel)
                   </a>
                   <p style="margin:14px 0 0;font-size:11px;color:#94a3b8;">
-                    El archivo está disponible para descarga directa desde Azure.
+                    El enlace de descarga es válido por 48 horas.
                   </p>
                 </td></tr>
 
                 <!-- Footer -->
                 <tr><td style="padding:24px 40px 32px;text-align:center;border-top:1px solid #e2e8f0;margin-top:16px;">
-                  <p style="margin:0;font-size:11px;color:#94a3b8;">
-                    Este es un mensaje automático de TalkIA. No respondas a este correo.
+                  <p style="margin:0;font-size:11px;color:#94a3b8;line-height:1.6;">
+                    Este es un mensaje automático de <strong style="color:#475569;">TalkIA</strong>. No respondas a este correo.
                   </p>
                 </td></tr>
               </table>
@@ -576,8 +684,71 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
           </table>
         </body>
         </html>
-        """);
+        """;
 
-        return sb.ToString();
+        return html;
+    }
+
+    /// <summary>
+    /// Construye URL de QuickChart.io que renderiza un doughnut chart como PNG.
+    /// Compatible con todos los clientes de email (incluyendo Gmail/Outlook que
+    /// filtran SVG inline). El chart muestra distribución de etiquetas globales
+    /// + segmento "Sin etiqueta" si aplica.
+    /// </summary>
+    private static string BuildPieChartUrl(
+        IReadOnlyDictionary<string, int> labels,
+        int unlabeledTotal,
+        IReadOnlyDictionary<string, string> labelColors)
+    {
+        var labelsArr = labels.Keys.OrderBy(k => k, StringComparer.OrdinalIgnoreCase).ToList();
+        var dataValues = labelsArr.Select(l => labels[l]).ToList();
+        var colors = labelsArr.Select(l => labelColors[l]).ToList();
+
+        if (unlabeledTotal > 0)
+        {
+            labelsArr.Add("Sin etiqueta");
+            dataValues.Add(unlabeledTotal);
+            colors.Add(UnlabeledColor);
+        }
+
+        // Chart.js config — versión compacta para URL.
+        var config = new
+        {
+            type = "doughnut",
+            data = new
+            {
+                labels = labelsArr,
+                datasets = new[]
+                {
+                    new
+                    {
+                        data = dataValues,
+                        backgroundColor = colors,
+                        borderColor = "#ffffff",
+                        borderWidth = 2,
+                    },
+                },
+            },
+            options = new
+            {
+                cutout = "60%",
+                plugins = new
+                {
+                    legend = new { display = false },
+                    datalabels = new
+                    {
+                        color = "#0f172a",
+                        font = new { size = 11, weight = "bold" },
+                        formatter = "(value) => value > 0 ? value : ''",
+                    },
+                },
+            },
+        };
+
+        var json = System.Text.Json.JsonSerializer.Serialize(config);
+        var encoded = Uri.EscapeDataString(json);
+
+        // bkg=white para que se vea bien en clientes de email con dark mode también.
+        return $"https://quickchart.io/chart?w=240&h=240&bkg=white&c={encoded}";
     }
 }
