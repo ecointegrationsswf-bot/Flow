@@ -323,6 +323,15 @@ Formato exacto:
                     Content = [new TextContent { Text = userPrompt }]
                 }],
                 Stream = false,
+                // Caching automático del system prompt. Como el analysisPrompt es
+                // idéntico para todas las conversaciones del mismo tenant en una
+                // corrida (sale de CampaignTemplate.SystemPrompt o el global),
+                // la 1a llamada paga el write (+25%) y de la 2a en adelante el
+                // SDK reutiliza el cache: 90% menos costo, 10% menos rate-limit
+                // consumption en la parte cached. Tenant-isolated automáticamente
+                // porque cada tenant usa su propia LlmApiKey (cache namespace
+                // por API key).
+                PromptCaching = PromptCacheType.AutomaticToolsAndSystem,
             }, conversationId, ct);
 
             var raw = response.Content.OfType<TextContent>().FirstOrDefault()?.Text ?? "";
