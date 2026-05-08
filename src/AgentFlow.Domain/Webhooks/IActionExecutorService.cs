@@ -22,5 +22,6 @@ public interface IActionExecutorService
         string? agentSlug = null,
         Guid? jobExecutionId = null,
         Guid? jobId = null,
+        IReadOnlyDictionary<string, string?>? systemContextOverrides = null,
         CancellationToken ct = default);
 }

@@ -49,6 +49,7 @@ public class ActionExecutorService(
         string? agentSlug = null,
         Guid? jobExecutionId = null,
         Guid? jobId = null,
+        IReadOnlyDictionary<string, string?>? systemContextOverrides = null,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(actionSlug))
@@ -181,6 +182,17 @@ public class ActionExecutorService(
 
         var systemCtx = await systemContextBuilder.BuildAsync(
             tenantId, runtimeCampaignId, contactPhone, conversationId, agentSlug, ct);
+
+        // Aplicar overrides al SystemContext después del Build. Útil para handlers
+        // que iteran multiples records de un mismo CampaignContact (ej: NOTIFY_GESTION
+        // multi-póliza) y necesitan inyectar el KeyValue/policyNumber/etc específico
+        // de cada iteración pisando el primer record que el SystemContextBuilder
+        // aplana por defecto.
+        if (systemContextOverrides is not null)
+        {
+            foreach (var (key, value) in systemContextOverrides)
+                systemCtx.Set(key, value);
+        }
 
         object payload;
         try
