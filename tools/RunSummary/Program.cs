@@ -80,15 +80,34 @@ var db = sp.GetRequiredService<AgentFlowDbContext>();
 var executor = sp.GetRequiredService<SendLabelingSummaryExecutor>();
 var execRepo = sp.GetRequiredService<IJobExecutionRepository>();
 
-const string JobIdStr = "1428BC93-8F9C-4A4F-822A-3464A9DECAAC";
-var jobId = Guid.Parse(JobIdStr);
+// JobId esperado como primer argumento posicional o desde env var RUNSUMMARY_JOBID.
+// Sin valor por defecto (no asumir un tenant/job específico).
+var jobIdStr = args.FirstOrDefault()
+               ?? Environment.GetEnvironmentVariable("RUNSUMMARY_JOBID");
+if (string.IsNullOrWhiteSpace(jobIdStr))
+{
+    Console.WriteLine("Uso: dotnet run -- <jobId>");
+    Console.WriteLine("  o:  RUNSUMMARY_JOBID=<jobId> dotnet run");
+    Console.WriteLine();
+    Console.WriteLine("Para obtener el JobId del SEND_LABELING_SUMMARY de un tenant:");
+    Console.WriteLine("  SELECT j.Id FROM ScheduledWebhookJobs j");
+    Console.WriteLine("  INNER JOIN ActionDefinitions ad ON ad.Id = j.ActionDefinitionId");
+    Console.WriteLine("  WHERE ad.Name = 'SEND_LABELING_SUMMARY'");
+    Console.WriteLine("    AND ad.TenantId = '<TenantId>';");
+    return 1;
+}
+if (!Guid.TryParse(jobIdStr, out var jobId))
+{
+    Console.WriteLine($"ERROR: '{jobIdStr}' no es un GUID válido.");
+    return 1;
+}
 
 var job = await db.Set<ScheduledWebhookJob>()
     .FirstOrDefaultAsync(j => j.Id == jobId);
 
 if (job is null)
 {
-    Console.WriteLine($"ERROR: Job {JobIdStr} no encontrado.");
+    Console.WriteLine($"ERROR: Job {jobIdStr} no encontrado.");
     return 1;
 }
 
