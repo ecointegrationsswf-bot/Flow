@@ -34,7 +34,7 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         await SendAsync(toEmail, fullName, subject, html, ct);
     }
 
-    private async Task SendAsync(
+    protected virtual async Task SendAsync(
         string toEmail, string toName, string subject, string htmlContent,
         CancellationToken ct,
         IEnumerable<string>? bccEmails = null)
