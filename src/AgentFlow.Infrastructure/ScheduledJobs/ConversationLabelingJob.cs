@@ -197,12 +197,24 @@ Formato exacto:
                     totalProcessed++;
                     if (labeled) totalLabeled++; else totalFailed++;
 
-                    // Delay base entre calls para suavizar el ritmo y no golpear
-                    // el rate limit de Anthropic (30k input tokens/min). 1s base ≈
-                    // 60 calls/min máximo. Si una conv golpea el rate limit, el
-                    // CallClaudeWithRetryAsync tiene su propio backoff (30s/60s/120s).
+                    // Delay base entre calls — calculado para respetar el rate
+                    // limit de Anthropic de 30k input tokens/min en el peor caso
+                    // (sin cache hits). Cada llamada usa ~2k tokens en promedio
+                    // (system prompt + history); 30k/2k = 15 calls/min máximo,
+                    // o sea 1 call cada 4s. Usamos 5s para tener margen.
+                    //
+                    // Con prompt caching activo (PromptCacheType.Automatic...),
+                    // las llamadas posteriores a la 1ra de cada tenant pagan
+                    // ~10% de tokens contra el rate limit, lo que daría margen
+                    // para 60+ calls/min. Pero como no podemos asumir que el
+                    // cache siempre está activo (mínimo 1024 tokens, TTL 5min,
+                    // múltiples tenants en paralelo), nos quedamos con el
+                    // cálculo del peor caso: 5s = 12 calls/min reales.
+                    //
+                    // Para 38 convs el job tarda ~3 min extra, aceptable para
+                    // un cron nocturno.
                     if (!ct.IsCancellationRequested)
-                        await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                        await Task.Delay(TimeSpan.FromSeconds(5), ct);
                 }
             }
             catch (Exception ex)
