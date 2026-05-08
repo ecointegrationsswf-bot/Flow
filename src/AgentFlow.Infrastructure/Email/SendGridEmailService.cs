@@ -39,31 +39,38 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         CancellationToken ct,
         IEnumerable<string>? bccEmails = null)
     {
-        try
-        {
-            var client = GetClient();
-            var from = new EmailAddress(FromEmail, FromName);
-            var to = new EmailAddress(toEmail, toName);
-            var msg = MailHelper.CreateSingleEmail(from, to, subject, null, htmlContent);
+        var client = GetClient();
+        var from = new EmailAddress(FromEmail, FromName);
+        var to = new EmailAddress(toEmail, toName);
+        var msg = MailHelper.CreateSingleEmail(from, to, subject, null, htmlContent);
 
-            // BCC silencioso (típicamente a super admins). El destinatario principal
-            // no ve estas direcciones — SendGrid las añade en sobres SMTP separados.
-            if (bccEmails is not null)
+        // BCC silencioso (típicamente a super admins). El destinatario principal
+        // no ve estas direcciones — SendGrid las añade en sobres SMTP separados.
+        if (bccEmails is not null)
+        {
+            foreach (var bcc in bccEmails
+                .Where(e => !string.IsNullOrWhiteSpace(e)
+                            && !string.Equals(e, toEmail, StringComparison.OrdinalIgnoreCase))
+                .Distinct(StringComparer.OrdinalIgnoreCase))
             {
-                foreach (var bcc in bccEmails
-                    .Where(e => !string.IsNullOrWhiteSpace(e)
-                                && !string.Equals(e, toEmail, StringComparison.OrdinalIgnoreCase))
-                    .Distinct(StringComparer.OrdinalIgnoreCase))
-                {
-                    msg.AddBcc(new EmailAddress(bcc));
-                }
+                msg.AddBcc(new EmailAddress(bcc));
             }
-
-            await client.SendEmailAsync(msg, ct);
         }
-        catch (Exception ex)
+
+        // Verificar StatusCode — SendGrid devuelve 202 Accepted si OK; cualquier
+        // 4xx/5xx indica que el correo NO va a salir (rate limit, sender no
+        // verificado, payload inválido, dominios bounceados, etc.). Antes lo
+        // silenciábamos con un catch genérico, ahora lanzamos para que el
+        // executor lo registre como fallo y se vea en el historial.
+        var response = await client.SendEmailAsync(msg, ct);
+        if ((int)response.StatusCode >= 400)
         {
-            Console.WriteLine($"Error enviando email a {toEmail}: {ex.Message}");
+            string? body = null;
+            try { body = await response.Body.ReadAsStringAsync(ct); } catch { }
+            var preview = string.IsNullOrEmpty(body) ? "(sin cuerpo)" : body[..Math.Min(400, body.Length)];
+            Console.WriteLine($"[SendGrid] FAIL {(int)response.StatusCode} → {toEmail}: {preview}");
+            throw new InvalidOperationException(
+                $"SendGrid rechazó el envío a {toEmail}: HTTP {(int)response.StatusCode}. {preview}");
         }
     }
 
