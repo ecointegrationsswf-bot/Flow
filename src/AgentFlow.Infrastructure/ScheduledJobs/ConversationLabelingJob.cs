@@ -196,6 +196,13 @@ Formato exacto:
                     }
                     totalProcessed++;
                     if (labeled) totalLabeled++; else totalFailed++;
+
+                    // Delay base entre calls para suavizar el ritmo y no golpear
+                    // el rate limit de Anthropic (30k input tokens/min). 1s base ≈
+                    // 60 calls/min máximo. Si una conv golpea el rate limit, el
+                    // CallClaudeWithRetryAsync tiene su propio backoff (30s/60s/120s).
+                    if (!ct.IsCancellationRequested)
+                        await Task.Delay(TimeSpan.FromSeconds(1), ct);
                 }
             }
             catch (Exception ex)
@@ -299,7 +306,12 @@ Formato exacto:
         LabelingResult? parsed;
         try
         {
-            var response = await client.Messages.GetClaudeMessageAsync(new MessageParameters
+            // Llamada con retry + exponential backoff para sobrevivir al
+            // rate_limit_error de Anthropic (30k input tokens/min organization-wide).
+            // El job procesa N conversaciones en serie; en runs grandes (38+) suele
+            // golpear el techo. Antes esto resultaba en 13-30 fallos por corrida y
+            // PartialFailure persistente.
+            var response = await CallClaudeWithRetryAsync(client, new MessageParameters
             {
                 Model = ClassifierModel,
                 MaxTokens = maxTokens,
@@ -311,7 +323,7 @@ Formato exacto:
                     Content = [new TextContent { Text = userPrompt }]
                 }],
                 Stream = false,
-            }, ct);
+            }, conversationId, ct);
 
             var raw = response.Content.OfType<TextContent>().FirstOrDefault()?.Text ?? "";
             parsed = TryParseLabelingResult(raw);
@@ -418,5 +430,65 @@ Formato exacto:
             return new LabelingResult(name, conf, reason, date, resultJson);
         }
         catch { return null; }
+    }
+
+    // ── Retry helper para rate_limit_error de Anthropic ────────────────────
+    // El plan org tiene 30k input tokens/min. Un run grande (38+ convs) golpea
+    // el techo a mitad de camino. Esta wrapper:
+    //   1. Detecta rate_limit_error en el mensaje de la excepción.
+    //   2. Espera 30s, 60s, 120s (backoff exponencial truncado).
+    //   3. Reintenta hasta MaxRetries (3) veces.
+    //   4. Si pasa, sigue normal. Si todos fallan, propaga la última excepción.
+    //
+    // Para errores que NO son rate limit, propaga inmediatamente (no tiene
+    // sentido reintentar errores de validación, auth, modelo no disponible, etc).
+    //
+    // El reintento es secuencial dentro del job, así que si una conv tarda
+    // 3 minutos por backoff, las siguientes esperan. Aceptable para un job
+    // nocturno; mejor demorar 3 min que perder 13 conversations por rate limit.
+    private const int RetryMaxAttempts = 3;
+    private static readonly TimeSpan[] RetryDelays =
+    [
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromSeconds(60),
+        TimeSpan.FromSeconds(120),
+    ];
+
+    private async Task<MessageResponse> CallClaudeWithRetryAsync(
+        AnthropicClient client,
+        MessageParameters parameters,
+        Guid conversationId,
+        CancellationToken ct)
+    {
+        Exception? lastException = null;
+        for (var attempt = 0; attempt <= RetryMaxAttempts; attempt++)
+        {
+            try
+            {
+                return await client.Messages.GetClaudeMessageAsync(parameters, ct);
+            }
+            catch (Exception ex) when (IsRateLimitError(ex) && attempt < RetryMaxAttempts)
+            {
+                lastException = ex;
+                var delay = RetryDelays[Math.Min(attempt, RetryDelays.Length - 1)];
+                log.LogWarning(
+                    "Labeling: rate limit Anthropic en conv {Conv}, intento {Attempt}/{Max}. Esperando {Delay}s antes de reintentar.",
+                    conversationId, attempt + 1, RetryMaxAttempts + 1, (int)delay.TotalSeconds);
+                await Task.Delay(delay, ct);
+            }
+        }
+        // Si llegamos aquí, agotamos retries por rate limit.
+        throw lastException ?? new InvalidOperationException("Labeling: retries agotados sin causa identificada.");
+    }
+
+    private static bool IsRateLimitError(Exception ex)
+    {
+        // Anthropic SDK lanza Exception genérica con el cuerpo de error en Message.
+        // Detectamos por substring para evitar atarnos a un tipo específico del SDK
+        // que puede cambiar entre versiones.
+        var msg = ex.Message ?? string.Empty;
+        return msg.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("HTTP 429", StringComparison.Ordinal);
     }
 }
