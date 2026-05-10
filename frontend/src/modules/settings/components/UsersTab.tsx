@@ -3,13 +3,14 @@ import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import {
-  UserPlus, Users, Trash2, Pencil, Loader2, AlertCircle,
+  UserPlus, Users, Trash2, Pencil, Loader2, AlertCircle, Mail,
   ShieldCheck, X, Check, Shield,
 } from 'lucide-react'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
-import { useUsers, useCreateUser, useUpdateUser, useDeleteUser } from '@/shared/hooks/useUsers'
+import { useUsers, useCreateUser, useUpdateUser, useDeleteUser, useResendWelcome } from '@/shared/hooks/useUsers'
+import { useToast, ToastContainer } from '@/shared/components/Toast'
 import { useAgents } from '@/shared/hooks/useAgents'
 import type { AppUser } from '@/shared/types'
 
@@ -235,10 +236,13 @@ export function UsersTab() {
   const createMutation = useCreateUser()
   const updateMutation = useUpdateUser()
   const deleteMutation = useDeleteUser()
+  const resendMutation = useResendWelcome()
+  const { toasts, remove, toast } = useToast()
 
   const [showForm, setShowForm] = useState(false)
   const [editUser, setEditUser] = useState<AppUser | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AppUser | null>(null)
+  const [resendTarget, setResendTarget] = useState<AppUser | null>(null)
   const [permissionsUser, setPermissionsUser] = useState<AppUser | null>(null)
 
   const [selectedAgentIds, setSelectedAgentIds] = useState<string[]>([])
@@ -297,6 +301,19 @@ export function UsersTab() {
     if (!deleteTarget) return
     await deleteMutation.mutateAsync(deleteTarget.id)
     setDeleteTarget(null)
+  }
+
+  const handleResend = async () => {
+    if (!resendTarget) return
+    try {
+      await resendMutation.mutateAsync(resendTarget.id)
+      toast.success(`Correo de bienvenida reenviado a ${resendTarget.email} con contraseña nueva.`)
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } }
+      toast.error(e.response?.data?.error ?? 'Error al reenviar el correo de bienvenida.')
+    } finally {
+      setResendTarget(null)
+    }
   }
 
   const AgentSelector = ({ selected, onChange }: { selected: string[]; onChange: (ids: string[]) => void }) => (
@@ -477,6 +494,12 @@ export function UsersTab() {
                         className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors" title="Editar">
                         <Pencil className="h-4 w-4" />
                       </button>
+                      <button onClick={() => setResendTarget(u)}
+                        disabled={!u.isActive}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-emerald-600 transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+                        title={u.isActive ? "Reenviar bienvenida con nueva contraseña" : "Usuario inactivo — actívalo primero"}>
+                        <Mail className="h-4 w-4" />
+                      </button>
                       <button onClick={() => setDeleteTarget(u)}
                         className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors" title="Eliminar">
                         <Trash2 className="h-4 w-4" />
@@ -510,6 +533,21 @@ export function UsersTab() {
         confirmLabel="Eliminar"
         variant="danger"
       />
+
+      {/* ── Confirmar reenvío de bienvenida ── */}
+      <ConfirmDialog
+        open={!!resendTarget}
+        onClose={() => setResendTarget(null)}
+        onConfirm={handleResend}
+        title="Reenviar bienvenida"
+        description={
+          `Se generará una contraseña temporal NUEVA y se enviará por correo a ` +
+          `"${resendTarget?.email}". La contraseña anterior dejará de funcionar.`
+        }
+        confirmLabel="Reenviar"
+      />
+
+      <ToastContainer toasts={toasts} onRemove={remove} />
     </div>
   )
 }

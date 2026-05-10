@@ -65,3 +65,16 @@ export function useDeleteUser() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['users'] }),
   })
 }
+
+/**
+ * Genera una nueva contraseña temporal para el usuario y le envía un correo
+ * de bienvenida con ella. La contraseña anterior queda invalidada.
+ */
+export function useResendWelcome() {
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await api.post(`/users/${id}/resend-welcome`)
+      return data as { message: string }
+    },
+  })
+}

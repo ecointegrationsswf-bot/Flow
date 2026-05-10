@@ -213,4 +213,70 @@ public class UsersController(
 
         return NoContent();
     }
+
+    /// <summary>
+    /// Reenvía el correo de bienvenida con una contraseña NUEVA generada al
+    /// instante. La contraseña anterior queda invalidada (ya no se conoce en
+    /// claro tras el hash original). El usuario tendrá que cambiarla en el
+    /// primer login (MustChangePassword=true).
+    ///
+    /// Útil cuando el correo original cayó a la lista de supresión de Resend
+    /// o el usuario lo perdió.
+    /// </summary>
+    [HttpPost("{id:guid}/resend-welcome")]
+    public async Task<IActionResult> ResendWelcome(Guid id, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+
+        var user = await db.AppUsers
+            .FirstOrDefaultAsync(u => u.Id == id && u.TenantId == tenantId, ct);
+        if (user is null)
+            return NotFound(new { error = "Usuario no encontrado." });
+
+        if (!user.IsActive)
+            return BadRequest(new { error = "El usuario está inactivo. Actívalo primero." });
+
+        var newPassword = GenerateTempPassword(12);
+        user.PasswordHash = AuthController.HashPassword(newPassword);
+        user.MustChangePassword = true;
+        await db.SaveChangesAsync(ct);
+
+        var tenantName = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => t.Name)
+            .FirstOrDefaultAsync(ct) ?? "";
+        var bccSuperAdmins = await db.SuperAdmins
+            .Where(a => a.IsActive)
+            .Select(a => a.Email)
+            .ToListAsync(ct);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await emailService.SendWelcomeTenantEmailAsync(
+                    user.Email, user.FullName, newPassword, tenantName, bccSuperAdmins, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "Resend welcome failed for user {Email} (tenant {TenantId}).",
+                    user.Email, tenantId);
+            }
+        }, CancellationToken.None);
+
+        return Ok(new { message = "Correo de bienvenida reenviado con contraseña temporal nueva." });
+    }
+
+    // Sin caracteres ambiguos (0/O/1/l/I) para que no se preste a confusión al
+    // teclearla. Mezcla letras + dígitos garantizada via el set.
+    private static string GenerateTempPassword(int length)
+    {
+        const string chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+        var bytes = new byte[length];
+        System.Security.Cryptography.RandomNumberGenerator.Fill(bytes);
+        var sb = new System.Text.StringBuilder(length);
+        foreach (var b in bytes) sb.Append(chars[b % chars.Length]);
+        return sb.ToString();
+    }
 }
