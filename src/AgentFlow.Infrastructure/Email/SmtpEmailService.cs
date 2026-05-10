@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Mail;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 
@@ -44,12 +45,18 @@ public class SmtpEmailService(IConfiguration config, ILogger<SmtpEmailService> l
         CancellationToken ct,
         IEnumerable<string>? bccEmails = null)
     {
+        // UTF-8 explícito en Subject + Body. Sin esto, MailMessage codifica como
+        // ASCII y los acentos/emojis llegan corruptos (PÃ³liza, SofÃ­a, ðŸ˜Š).
         using var msg = new MailMessage
         {
             From = new MailAddress(SmtpFromEmail, SmtpFromName),
             Subject = subject,
+            SubjectEncoding = Encoding.UTF8,
             Body = htmlContent,
+            BodyEncoding = Encoding.UTF8,
+            BodyTransferEncoding = System.Net.Mime.TransferEncoding.Base64,
             IsBodyHtml = true,
+            HeadersEncoding = Encoding.UTF8,
         };
         msg.To.Add(new MailAddress(toEmail, toName));
 
