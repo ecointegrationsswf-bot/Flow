@@ -89,11 +89,18 @@ Console.WriteLine(hasGlobalKey
     : "[Worker] Anthropic: usando API key por tenant.");
 
 // ── Email + Storage ──────────────────────────────────────
-// Email provider seleccionable: "Smtp" usa SmtpEmailService (Gmail, Office365,
-// etc. con creds de variables de entorno), cualquier otro valor (o ausente)
-// usa SendGrid como antes.
+// Email provider seleccionable:
+//   "Resend" → ResendEmailService (HTTP a api.resend.com)
+//   "Smtp"   → SmtpEmailService (SMTP estándar — Gmail, Office365, Brevo)
+//   otro     → SendGridEmailService (default histórico)
 var emailProvider = cfg["Email:Provider"] ?? "SendGrid";
-if (string.Equals(emailProvider, "Smtp", StringComparison.OrdinalIgnoreCase))
+if (string.Equals(emailProvider, "Resend", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+        AgentFlow.Infrastructure.Email.ResendEmailService>();
+    Console.WriteLine($"[Worker] Email provider: Resend (from={cfg["Resend:FromEmail"]}).");
+}
+else if (string.Equals(emailProvider, "Smtp", StringComparison.OrdinalIgnoreCase))
 {
     builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
         AgentFlow.Infrastructure.Email.SmtpEmailService>();

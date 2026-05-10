@@ -77,8 +77,31 @@ Console.WriteLine(!string.IsNullOrEmpty(cfg["OpenAI:ApiKey"]) && cfg["OpenAI:Api
     ? "OpenAI Whisper configurado — transcripción de notas de voz activa."
     : "OpenAI Whisper no configurado — notas de voz sin transcripción.");
 
-// ── Email (SendGrid) ────────────────────────────────────
-builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService, AgentFlow.Infrastructure.Email.SendGridEmailService>();
+// ── Email provider seleccionable ────────────────────────
+// "Resend" → ResendEmailService (HTTP a api.resend.com)
+// "Smtp"   → SmtpEmailService (SMTP estándar — Gmail, Office365, Brevo)
+// otro/null → SendGridEmailService (default histórico)
+{
+    var emailProvider = cfg["Email:Provider"] ?? "SendGrid";
+    if (string.Equals(emailProvider, "Resend", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+            AgentFlow.Infrastructure.Email.ResendEmailService>();
+        Console.WriteLine($"Email provider: Resend (from={cfg["Resend:FromEmail"]}).");
+    }
+    else if (string.Equals(emailProvider, "Smtp", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+            AgentFlow.Infrastructure.Email.SmtpEmailService>();
+        Console.WriteLine($"Email provider: SMTP ({cfg["Smtp:Host"]}:{cfg["Smtp:Port"] ?? "587"}).");
+    }
+    else
+    {
+        builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+            AgentFlow.Infrastructure.Email.SendGridEmailService>();
+        Console.WriteLine("Email provider: SendGrid.");
+    }
+}
 
 // ── MediatR ────────────────────────────────────────────
 builder.Services.AddMediatR(c =>
