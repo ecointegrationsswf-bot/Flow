@@ -13,13 +13,13 @@ import { TenantTimezoneBadge } from '@/shared/components/TenantTimezoneBadge'
 const NAV_ITEMS = [
   { to: '/dashboard',          icon: LayoutDashboard, label: 'Dashboard',        permission: undefined },
   { to: '/monitor',            icon: MessageSquare,   label: 'Monitor',           permission: 'view_monitor' },
-  { to: '/campaign-templates', icon: ClipboardList,   label: 'Maestro Campanas',  permission: 'view_campaign_templates' },
-  { to: '/campaigns',          icon: Megaphone,       label: 'Campanas',          permission: 'view_campaigns' },
+  { to: '/campaign-templates', icon: ClipboardList,   label: 'Maestro Campañas',  permission: 'view_campaign_templates' },
+  { to: '/campaigns',          icon: Megaphone,       label: 'Campañas',          permission: 'view_campaigns' },
   { to: '/downloads',          icon: Download,        label: 'Descargas',         permission: undefined },
   { to: '/agents',             icon: Bot,             label: 'Agentes IA',        permission: 'view_agents' },
   { to: '/labels',             icon: Tag,             label: 'Etiquetas',         permission: undefined },
   { to: '/brain',              icon: Brain,           label: 'Cerebro',           permission: undefined },
-  { to: '/settings',           icon: Settings,        label: 'Configuracion',     permission: undefined },
+  { to: '/settings',           icon: Settings,        label: 'Configuración',     permission: undefined },
   { to: '/profile',            icon: User,            label: 'Mi Perfil',         permission: undefined },
 ] as const
 
@@ -122,7 +122,7 @@ export function AppLayout() {
             className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 hover:text-gray-900"
           >
             <LogOut className="h-4 w-4 shrink-0" />
-            {!sidebarCollapsed && <span>Cerrar sesion</span>}
+            {!sidebarCollapsed && <span>Cerrar sesión</span>}
           </button>
         </div>
       </aside>
