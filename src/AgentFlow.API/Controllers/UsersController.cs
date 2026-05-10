@@ -110,16 +110,21 @@ public class UsersController(
         // (el usuario debe cambiarla en el primer login). Fire-and-forget para
         // no bloquear la respuesta si SendGrid se demora; cualquier fallo se
         // loguea pero no rompe la creación.
+        // BCC silencioso a todos los super admins activos para auditoría.
         var tenantName = await db.Tenants
             .Where(t => t.Id == tenantId)
             .Select(t => t.Name)
             .FirstOrDefaultAsync(ct) ?? "";
+        var bccSuperAdmins = await db.SuperAdmins
+            .Where(a => a.IsActive)
+            .Select(a => a.Email)
+            .ToListAsync(ct);
         _ = Task.Run(async () =>
         {
             try
             {
                 await emailService.SendWelcomeTenantEmailAsync(
-                    req.Email, req.FullName, req.Password, tenantName, CancellationToken.None);
+                    req.Email, req.FullName, req.Password, tenantName, bccSuperAdmins, CancellationToken.None);
             }
             catch (Exception ex)
             {

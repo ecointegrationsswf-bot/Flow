@@ -686,7 +686,11 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         await db.SaveChangesAsync(ct);
 
         var tenantName = await db.Tenants.Where(t => t.Id == tenantId).Select(t => t.Name).FirstOrDefaultAsync(ct) ?? "";
-        _ = emailService.SendWelcomeTenantEmailAsync(req.Email, req.FullName, req.Password, tenantName, ct);
+        var bccSuperAdmins = await db.SuperAdmins
+            .Where(a => a.IsActive)
+            .Select(a => a.Email)
+            .ToListAsync(ct);
+        _ = emailService.SendWelcomeTenantEmailAsync(req.Email, req.FullName, req.Password, tenantName, bccSuperAdmins, ct);
 
         return Ok(new { user.Id, user.FullName, user.Email, Role = user.Role.ToString(), user.IsActive });
     }
@@ -738,7 +742,12 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         db.SuperAdmins.Add(admin);
         await db.SaveChangesAsync(ct);
 
-        _ = emailService.SendWelcomeAdminEmailAsync(req.Email, req.FullName, req.Password, ct);
+        // BCC a otros super admins activos (excluye al recién creado).
+        var bccOthers = await db.SuperAdmins
+            .Where(a => a.IsActive && a.Id != admin.Id)
+            .Select(a => a.Email)
+            .ToListAsync(ct);
+        _ = emailService.SendWelcomeAdminEmailAsync(req.Email, req.FullName, req.Password, bccOthers, ct);
 
         return Ok(new { admin.Id, admin.FullName, admin.Email, admin.IsActive, admin.CreatedAt });
     }

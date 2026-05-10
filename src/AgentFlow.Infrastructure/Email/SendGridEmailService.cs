@@ -13,18 +13,18 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
     private string FromName => config["SendGrid:FromName"] ?? "TalkIA";
     private string AppUrl => config["App:Url"] ?? "https://app.talkia.com";
 
-    public async Task SendWelcomeAdminEmailAsync(string toEmail, string fullName, string password, CancellationToken ct = default)
+    public async Task SendWelcomeAdminEmailAsync(string toEmail, string fullName, string password, IEnumerable<string>? bccEmails = null, CancellationToken ct = default)
     {
         var subject = "Bienvenido al Panel Administrativo - TalkIA";
         var html = BuildAdminTemplate(fullName, toEmail, password);
-        await SendAsync(toEmail, fullName, subject, html, ct);
+        await SendAsync(toEmail, fullName, subject, html, ct, bccEmails);
     }
 
-    public async Task SendWelcomeTenantEmailAsync(string toEmail, string fullName, string password, string tenantName, CancellationToken ct = default)
+    public async Task SendWelcomeTenantEmailAsync(string toEmail, string fullName, string password, string tenantName, IEnumerable<string>? bccEmails = null, CancellationToken ct = default)
     {
         var subject = $"Bienvenido a TalkIA - {tenantName}";
         var html = BuildTenantTemplate(fullName, toEmail, password, tenantName);
-        await SendAsync(toEmail, fullName, subject, html, ct);
+        await SendAsync(toEmail, fullName, subject, html, ct, bccEmails);
     }
 
     public async Task SendTwoFactorCodeAsync(string toEmail, string fullName, string code, CancellationToken ct = default)
