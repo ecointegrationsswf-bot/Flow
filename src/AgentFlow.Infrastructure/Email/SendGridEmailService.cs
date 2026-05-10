@@ -37,12 +37,21 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
     protected virtual async Task SendAsync(
         string toEmail, string toName, string subject, string htmlContent,
         CancellationToken ct,
-        IEnumerable<string>? bccEmails = null)
+        IEnumerable<string>? bccEmails = null,
+        string? ccEmail = null)
     {
         var client = GetClient();
         var from = new EmailAddress(FromEmail, FromName);
         var to = new EmailAddress(toEmail, toName);
         var msg = MailHelper.CreateSingleEmail(from, to, subject, null, htmlContent);
+
+        // CC visible (a diferencia del BCC). Útil para el supervisor que también
+        // debe ver el resumen.
+        if (!string.IsNullOrWhiteSpace(ccEmail)
+            && !string.Equals(ccEmail, toEmail, StringComparison.OrdinalIgnoreCase))
+        {
+            msg.AddCc(new EmailAddress(ccEmail));
+        }
 
         // BCC silencioso (típicamente a super admins). El destinatario principal
         // no ve estas direcciones — SendGrid las añade en sobres SMTP separados.
@@ -235,27 +244,13 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         List<(string Who, string Text)> messages,
         CancellationToken ct = default)
     {
-        var subject = $"Resumen de gestion - {clientName}";
+        var subject = $"Resumen de gestión - {clientName}";
         var html = BuildConversationResumeTemplate(clientName, clientPhone, policyNumber, messages);
-        await SendWithCcAsync(toEmail, ccEmail, subject, html, ct);
-    }
-
-    private async Task SendWithCcAsync(string toEmail, string? ccEmail, string subject, string htmlContent, CancellationToken ct)
-    {
-        try
-        {
-            var client = GetClient();
-            var from = new EmailAddress(FromEmail, FromName);
-            var to = new EmailAddress(toEmail);
-            var msg = MailHelper.CreateSingleEmail(from, to, subject, null, htmlContent);
-            if (!string.IsNullOrEmpty(ccEmail))
-                msg.AddCc(new EmailAddress(ccEmail));
-            await client.SendEmailAsync(msg, ct);
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Error enviando email a {toEmail}: {ex.Message}");
-        }
+        // Usa SendAsync con CC visible — respeta el provider seleccionado
+        // (Resend/SendGrid/SMTP) y propaga errores. Antes había un
+        // SendWithCcAsync separado que siempre usaba SendGrid y silenciaba
+        // errores con catch + Console.WriteLine.
+        await SendAsync(toEmail, clientName, subject, html, ct, bccEmails: null, ccEmail: ccEmail);
     }
 
     private string BuildConversationResumeTemplate(
@@ -280,7 +275,7 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         }
 
         var policyRow = policyNumber is not null
-            ? $"""<tr><td style="padding:6px 0;color:#64748b;font-size:13px;width:120px;">Poliza:</td><td style="padding:6px 0;color:#1e293b;font-size:13px;font-weight:600;">{System.Net.WebUtility.HtmlEncode(policyNumber)}</td></tr>"""
+            ? $"""<tr><td style="padding:6px 0;color:#64748b;font-size:13px;width:120px;">Póliza:</td><td style="padding:6px 0;color:#1e293b;font-size:13px;font-weight:600;">{System.Net.WebUtility.HtmlEncode(policyNumber)}</td></tr>"""
             : "";
 
         var now = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow,
@@ -299,7 +294,7 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
                 <tr>
                   <td style="background:linear-gradient(135deg,#1e40af 0%,#3b82f6 100%);padding:28px 40px;">
                     <h1 style="margin:0;color:#ffffff;font-size:22px;font-weight:700;">TalkIA</h1>
-                    <p style="margin:6px 0 0;color:#bfdbfe;font-size:14px;">Resumen de gestion completada</p>
+                    <p style="margin:6px 0 0;color:#bfdbfe;font-size:14px;">Resumen de gestión completada</p>
                   </td>
                 </tr>
                 <!-- Client info -->
@@ -308,20 +303,20 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
                     <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;">
                       <tr>
                         <td style="padding:16px 20px;">
-                          <p style="margin:0 0 10px;color:#15803d;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">✅ Gestion exitosa</p>
+                          <p style="margin:0 0 10px;color:#15803d;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">✅ Gestión exitosa</p>
                           <table width="100%" cellpadding="0" cellspacing="0">
                             <tr>
                               <td style="padding:6px 0;color:#64748b;font-size:13px;width:120px;">Cliente:</td>
                               <td style="padding:6px 0;color:#1e293b;font-size:13px;font-weight:600;">{System.Net.WebUtility.HtmlEncode(clientName)}</td>
                             </tr>
                             <tr>
-                              <td style="padding:6px 0;color:#64748b;font-size:13px;">Telefono:</td>
+                              <td style="padding:6px 0;color:#64748b;font-size:13px;">Teléfono:</td>
                               <td style="padding:6px 0;color:#1e293b;font-size:13px;font-weight:600;">{System.Net.WebUtility.HtmlEncode(clientPhone)}</td>
                             </tr>
                             {policyRow}
                             <tr>
                               <td style="padding:6px 0;color:#64748b;font-size:13px;">Fecha:</td>
-                              <td style="padding:6px 0;color:#1e293b;font-size:13px;">{now:dd/MM/yyyy HH:mm} (Panama)</td>
+                              <td style="padding:6px 0;color:#1e293b;font-size:13px;">{now:dd/MM/yyyy HH:mm} (Panamá)</td>
                             </tr>
                           </table>
                         </td>
@@ -332,7 +327,7 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
                 <!-- Conversation -->
                 <tr>
                   <td style="padding:24px 40px 0;">
-                    <h2 style="margin:0 0 16px;color:#1e293b;font-size:16px;font-weight:600;">Resumen de la conversacion</h2>
+                    <h2 style="margin:0 0 16px;color:#1e293b;font-size:16px;font-weight:600;">Resumen de la conversación</h2>
                     <table width="100%" cellpadding="0" cellspacing="0">
                       {messagesHtml}
                     </table>

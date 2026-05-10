@@ -43,7 +43,8 @@ public class SmtpEmailService(IConfiguration config, ILogger<SmtpEmailService> l
     protected override async Task SendAsync(
         string toEmail, string toName, string subject, string htmlContent,
         CancellationToken ct,
-        IEnumerable<string>? bccEmails = null)
+        IEnumerable<string>? bccEmails = null,
+        string? ccEmail = null)
     {
         // UTF-8 explícito en Subject + Body. Sin esto, MailMessage codifica como
         // ASCII y los acentos/emojis llegan corruptos (PÃ³liza, SofÃ­a, ðŸ˜Š).
@@ -59,6 +60,13 @@ public class SmtpEmailService(IConfiguration config, ILogger<SmtpEmailService> l
             HeadersEncoding = Encoding.UTF8,
         };
         msg.To.Add(new MailAddress(toEmail, toName));
+
+        if (!string.IsNullOrWhiteSpace(ccEmail)
+            && !string.Equals(ccEmail, toEmail, StringComparison.OrdinalIgnoreCase))
+        {
+            try { msg.CC.Add(new MailAddress(ccEmail)); }
+            catch (FormatException) { log.LogWarning("[SMTP] CC inválido ignorado: {Cc}", ccEmail); }
+        }
 
         if (bccEmails is not null)
         {

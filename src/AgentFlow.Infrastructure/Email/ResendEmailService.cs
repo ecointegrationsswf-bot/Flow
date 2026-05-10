@@ -37,7 +37,8 @@ public class ResendEmailService(
     protected override async Task SendAsync(
         string toEmail, string toName, string subject, string htmlContent,
         CancellationToken ct,
-        IEnumerable<string>? bccEmails = null)
+        IEnumerable<string>? bccEmails = null,
+        string? ccEmail = null)
     {
         var bccList = bccEmails?
             .Where(e => !string.IsNullOrWhiteSpace(e)
@@ -55,6 +56,11 @@ public class ResendEmailService(
             ["subject"] = subject,
             ["html"]    = htmlContent,
         };
+        if (!string.IsNullOrWhiteSpace(ccEmail)
+            && !string.Equals(ccEmail, toEmail, StringComparison.OrdinalIgnoreCase))
+        {
+            payload["cc"] = new[] { ccEmail };
+        }
         if (bccList is { Length: > 0 })
             payload["bcc"] = bccList;
 
