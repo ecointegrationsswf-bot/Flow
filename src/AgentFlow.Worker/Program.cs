@@ -89,29 +89,13 @@ Console.WriteLine(hasGlobalKey
     : "[Worker] Anthropic: usando API key por tenant.");
 
 // ── Email + Storage ──────────────────────────────────────
-// Email provider seleccionable:
-//   "Resend" → ResendEmailService (HTTP a api.resend.com)
-//   "Smtp"   → SmtpEmailService (SMTP estándar — Gmail, Office365, Brevo)
-//   otro     → SendGridEmailService (default histórico)
-var emailProvider = cfg["Email:Provider"] ?? "SendGrid";
-if (string.Equals(emailProvider, "Resend", StringComparison.OrdinalIgnoreCase))
-{
-    builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
-        AgentFlow.Infrastructure.Email.ResendEmailService>();
-    Console.WriteLine($"[Worker] Email provider: Resend (from={cfg["Resend:FromEmail"]}).");
-}
-else if (string.Equals(emailProvider, "Smtp", StringComparison.OrdinalIgnoreCase))
-{
-    builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
-        AgentFlow.Infrastructure.Email.SmtpEmailService>();
-    Console.WriteLine($"[Worker] Email provider: SMTP ({cfg["Smtp:Host"]}:{cfg["Smtp:Port"] ?? "587"}).");
-}
-else
-{
-    builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
-        AgentFlow.Infrastructure.Email.SendGridEmailService>();
-    Console.WriteLine("[Worker] Email provider: SendGrid.");
-}
+// El Worker NO conoce el proveedor de correo. Delega al API vía endpoints
+// internos /api/internal/email/* protegidos con X-Internal-Email-Key. Esto
+// centraliza credenciales (Resend/SendGrid/SMTP) en el API y permite cambiar
+// de proveedor redespliegando solo el API.
+builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+    AgentFlow.Infrastructure.Email.ApiEmailService>();
+Console.WriteLine($"[Worker] Email vía API: {cfg["EmailApi:BaseUrl"] ?? "(no configurado)"}.");
 builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
 
 // ── HTTP + Cache ─────────────────────────────────────────

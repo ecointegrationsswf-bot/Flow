@@ -103,6 +103,9 @@ Console.WriteLine(!string.IsNullOrEmpty(cfg["OpenAI:ApiKey"]) && cfg["OpenAI:Api
     }
 }
 
+// Filter del controller InternalEmailController — valida X-Internal-Email-Key.
+builder.Services.AddScoped<AgentFlow.API.Controllers.InternalEmailKeyFilter>();
+
 // ── MediatR ────────────────────────────────────────────
 builder.Services.AddMediatR(c =>
     c.RegisterServicesFromAssemblies(
