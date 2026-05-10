@@ -1,5 +1,6 @@
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Email;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -11,7 +12,11 @@ public record UpdateUserRequest(string FullName, string Email, string Role, bool
 
 [ApiController]
 [Route("api/users")]
-public class UsersController(AgentFlowDbContext db, ITenantContext tenantCtx) : ControllerBase
+public class UsersController(
+    AgentFlowDbContext db,
+    ITenantContext tenantCtx,
+    IEmailService emailService,
+    ILogger<UsersController> logger) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)
@@ -100,6 +105,29 @@ public class UsersController(AgentFlowDbContext db, ITenantContext tenantCtx) : 
 
         db.AppUsers.Add(user);
         await db.SaveChangesAsync(ct);
+
+        // Correo de bienvenida con el link al portal y la contraseña en claro
+        // (el usuario debe cambiarla en el primer login). Fire-and-forget para
+        // no bloquear la respuesta si SendGrid se demora; cualquier fallo se
+        // loguea pero no rompe la creación.
+        var tenantName = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => t.Name)
+            .FirstOrDefaultAsync(ct) ?? "";
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await emailService.SendWelcomeTenantEmailAsync(
+                    req.Email, req.FullName, req.Password, tenantName, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex,
+                    "Welcome email failed for new user {Email} (tenant {TenantId}). Usuario creado igual; reenviar manualmente.",
+                    req.Email, tenantId);
+            }
+        }, CancellationToken.None);
 
         return Ok(new
         {
