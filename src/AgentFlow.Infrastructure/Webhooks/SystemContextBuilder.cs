@@ -1,6 +1,7 @@
 using AgentFlow.Domain.Webhooks;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace AgentFlow.Infrastructure.Webhooks;
 
@@ -14,7 +15,7 @@ namespace AgentFlow.Infrastructure.Webhooks;
 /// - tenant.* → Tenant entity
 /// - conversation.* → Conversation entity
 /// </summary>
-public class SystemContextBuilder(AgentFlowDbContext db) : ISystemContextBuilder
+public class SystemContextBuilder(AgentFlowDbContext db, ILogger<SystemContextBuilder> log) : ISystemContextBuilder
 {
     public async Task<SystemContext> BuildAsync(
         Guid tenantId,
@@ -164,27 +165,27 @@ public class SystemContextBuilder(AgentFlowDbContext db) : ISystemContextBuilder
 
                         if (records is { Count: > 0 })
                         {
-                            // Si hay 1 registro, aplanar cada campo al contexto
-                            if (records.Count == 1)
+                            // Aplanar SIEMPRE el primer record como contact.{fieldName}.
+                            // El executor que itera multi-record (NotifyGestionBatchExecutor)
+                            // PISA estos valores por iteración via systemContextOverrides
+                            // del IActionExecutorService.
+                            foreach (var (key, val) in records[0])
                             {
-                                foreach (var (key, val) in records[0])
-                                {
-                                    var strVal = val.ValueKind == System.Text.Json.JsonValueKind.String
-                                        ? val.GetString() ?? ""
-                                        : val.ToString();
-                                    if (!string.IsNullOrEmpty(strVal))
-                                        ctx.Set($"contact.{key}", strVal);
-                                }
+                                var strVal = val.ValueKind == System.Text.Json.JsonValueKind.String
+                                    ? val.GetString() ?? ""
+                                    : val.ToString();
+                                if (!string.IsNullOrEmpty(strVal))
+                                    ctx.Set($"contact.{key}", strVal);
                             }
-                            // Múltiples registros: guardar el array completo
-                            else
+
+                            if (records.Count > 1)
                             {
                                 ctx.Set("contact.records", campaignContact.ContactDataJson);
                                 ctx.Set("contact.totalRecords", records.Count.ToString());
                             }
                         }
                     }
-                    catch { /* JSON inválido — ignorar */ }
+                    catch (Exception jsonEx) { log.LogWarning("[SystemCtx] ContactDataJson inválido para CampaignContact {Id}: {Err}", campaignContact.Id, jsonEx.Message); }
                 }
             }
         }

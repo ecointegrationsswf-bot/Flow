@@ -11,6 +11,7 @@ import {
 } from '../hooks/useAdminAgentRegistry'
 import { useAdminTenants } from '../hooks/useAdminTenants'
 import { adminClient } from '@/shared/api/adminClient'
+import { confirmDialog } from '@/shared/components/dialog'
 
 interface AgentDef { id: string; name: string }
 
@@ -87,7 +88,8 @@ export function AgentRegistryPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar este agente del registro?')) return
+    const ok = await confirmDialog({ title: 'Eliminar agente', description: '¿Eliminar este agente del registro?', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 

@@ -196,6 +196,25 @@ Formato exacto:
                     }
                     totalProcessed++;
                     if (labeled) totalLabeled++; else totalFailed++;
+
+                    // Delay base entre calls — calculado para respetar el rate
+                    // limit de Anthropic de 30k input tokens/min en el peor caso
+                    // (sin cache hits). Cada llamada usa ~2k tokens en promedio
+                    // (system prompt + history); 30k/2k = 15 calls/min máximo,
+                    // o sea 1 call cada 4s. Usamos 5s para tener margen.
+                    //
+                    // Con prompt caching activo (PromptCacheType.Automatic...),
+                    // las llamadas posteriores a la 1ra de cada tenant pagan
+                    // ~10% de tokens contra el rate limit, lo que daría margen
+                    // para 60+ calls/min. Pero como no podemos asumir que el
+                    // cache siempre está activo (mínimo 1024 tokens, TTL 5min,
+                    // múltiples tenants en paralelo), nos quedamos con el
+                    // cálculo del peor caso: 5s = 12 calls/min reales.
+                    //
+                    // Para 38 convs el job tarda ~3 min extra, aceptable para
+                    // un cron nocturno.
+                    if (!ct.IsCancellationRequested)
+                        await Task.Delay(TimeSpan.FromSeconds(5), ct);
                 }
             }
             catch (Exception ex)
@@ -299,7 +318,12 @@ Formato exacto:
         LabelingResult? parsed;
         try
         {
-            var response = await client.Messages.GetClaudeMessageAsync(new MessageParameters
+            // Llamada con retry + exponential backoff para sobrevivir al
+            // rate_limit_error de Anthropic (30k input tokens/min organization-wide).
+            // El job procesa N conversaciones en serie; en runs grandes (38+) suele
+            // golpear el techo. Antes esto resultaba en 13-30 fallos por corrida y
+            // PartialFailure persistente.
+            var response = await CallClaudeWithRetryAsync(client, new MessageParameters
             {
                 Model = ClassifierModel,
                 MaxTokens = maxTokens,
@@ -311,7 +335,16 @@ Formato exacto:
                     Content = [new TextContent { Text = userPrompt }]
                 }],
                 Stream = false,
-            }, ct);
+                // Caching automático del system prompt. Como el analysisPrompt es
+                // idéntico para todas las conversaciones del mismo tenant en una
+                // corrida (sale de CampaignTemplate.SystemPrompt o el global),
+                // la 1a llamada paga el write (+25%) y de la 2a en adelante el
+                // SDK reutiliza el cache: 90% menos costo, 10% menos rate-limit
+                // consumption en la parte cached. Tenant-isolated automáticamente
+                // porque cada tenant usa su propia LlmApiKey (cache namespace
+                // por API key).
+                PromptCaching = PromptCacheType.AutomaticToolsAndSystem,
+            }, conversationId, ct);
 
             var raw = response.Content.OfType<TextContent>().FirstOrDefault()?.Text ?? "";
             parsed = TryParseLabelingResult(raw);
@@ -328,14 +361,61 @@ Formato exacto:
             return new(false, "Respuesta de Claude no es JSON válido");
         }
 
-        // Resolver el LabelId por Name (case-insensitive).
-        var matched = labels.FirstOrDefault(l =>
-            string.Equals(l.Name, parsed.LabelName, StringComparison.OrdinalIgnoreCase));
+        // Resolver el LabelId por Name (case-insensitive). Si Claude alucinó un
+        // nombre fuera del catálogo, reintentar UNA vez con feedback explícito.
+        var matched = TryMatchLabel(labels, parsed.LabelName);
         if (matched.Id == Guid.Empty)
         {
-            log.LogWarning("Labeling: Claude devolvió '{Label}' que no está en el catálogo de conv {Conv}.",
+            log.LogWarning("Labeling: Claude devolvió '{Label}' fuera del catálogo en conv {Conv} — reintentando con feedback.",
                 parsed.LabelName, conversationId);
-            return new(false, $"Etiqueta '{parsed.LabelName}' no está en el catálogo configurado");
+
+            try
+            {
+                var correctionPrompt = BuildCorrectionUserPrompt(labels, history, resultSchemaPrompt, parsed.LabelName);
+                // Temperature alta en el retry para romper el determinismo: a 0.0
+                // Claude tiende a repetir su misma alucinación. A 0.7 explora otras
+                // etiquetas del catálogo. Como ya validamos contra el catálogo
+                // exacto después, la variabilidad es segura.
+                var retryResponse = await CallClaudeWithRetryAsync(client, new MessageParameters
+                {
+                    Model = ClassifierModel,
+                    MaxTokens = maxTokens,
+                    Temperature = 0.7m,
+                    System = [new SystemMessage(analysisPrompt)],
+                    Messages = [new Anthropic.SDK.Messaging.Message
+                    {
+                        Role = RoleType.User,
+                        Content = [new TextContent { Text = correctionPrompt }]
+                    }],
+                    Stream = false,
+                    PromptCaching = PromptCacheType.AutomaticToolsAndSystem,
+                }, conversationId, ct);
+
+                var retryRaw = retryResponse.Content.OfType<TextContent>().FirstOrDefault()?.Text ?? "";
+                var retryParsed = TryParseLabelingResult(retryRaw);
+                if (retryParsed is not null)
+                {
+                    var retryMatched = TryMatchLabel(labels, retryParsed.LabelName);
+                    if (retryMatched.Id != Guid.Empty)
+                    {
+                        log.LogInformation("Labeling: corrección OK para conv {Conv} → '{Label}'.",
+                            conversationId, retryMatched.Name);
+                        matched = retryMatched;
+                        parsed = retryParsed;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                log.LogWarning(ex, "Labeling: corrección falló para conv {Conv}.", conversationId);
+            }
+
+            if (matched.Id == Guid.Empty)
+            {
+                log.LogWarning("Labeling: tras corrección, '{Label}' sigue fuera del catálogo de conv {Conv}.",
+                    parsed.LabelName, conversationId);
+                return new(false, $"Etiqueta '{parsed.LabelName}' no está en el catálogo configurado");
+            }
         }
 
         conv.LabelId = matched.Id;
@@ -357,12 +437,44 @@ Formato exacto:
         return new(true, null);
     }
 
-    private static string BuildClassifierUserPrompt(
+    /// <summary>
+    /// Match estricto por nombre del catálogo: case-insensitive + trim.
+    /// NO hace fuzzy matching (substring/Levenshtein) para evitar asignar
+    /// etiquetas equivocadas. Si Claude alucina un nombre fuera del catálogo,
+    /// el caller hace un retry con feedback explícito.
+    /// </summary>
+    private static (Guid Id, string Name, List<string> Keywords) TryMatchLabel(
+        List<(Guid Id, string Name, List<string> Keywords)> labels, string? candidate)
+    {
+        if (string.IsNullOrWhiteSpace(candidate))
+            return default;
+
+        var normalizedCandidate = candidate.Trim();
+        return labels.FirstOrDefault(l =>
+            string.Equals(l.Name?.Trim(), normalizedCandidate, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Prompt de corrección: se envía cuando Claude devolvió un labelName que
+    /// no existe en el catálogo. Le mostramos su respuesta inválida y la lista
+    /// EXACTA de etiquetas, exigiendo que elija una de ellas literal.
+    /// </summary>
+    private static string BuildCorrectionUserPrompt(
         List<(Guid Id, string Name, List<string> Keywords)> labels, string history,
-        string? resultSchemaPrompt)
+        string? resultSchemaPrompt, string? invalidLabelName)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("## ETIQUETAS DISPONIBLES");
+        sb.AppendLine("## CORRECCIÓN OBLIGATORIA");
+        sb.AppendLine($"En tu respuesta anterior devolviste \"labelName\": \"{invalidLabelName}\".");
+        sb.AppendLine("Esa etiqueta NO existe en el catálogo del cliente. La lista de etiquetas es CERRADA.");
+        sb.AppendLine("Está PROHIBIDO inventar etiquetas o crear variantes. Debes elegir UNA de las que aparecen abajo,");
+        sb.AppendLine("copiando el Nombre EXACTAMENTE como aparece (mismas tildes, mayúsculas y espacios).");
+        sb.AppendLine();
+        sb.AppendLine("Si ninguna etiqueta describe perfectamente la conversación, igual DEBES elegir UNA — la más");
+        sb.AppendLine("cercana semánticamente. Es preferible una etiqueta imperfecta a una respuesta inválida.");
+        sb.AppendLine("Justifica brevemente en \"reasoning\" por qué la etiqueta elegida es la más cercana.");
+        sb.AppendLine();
+        sb.AppendLine("## ETIQUETAS DISPONIBLES (lista cerrada — copia el Nombre LITERAL)");
         foreach (var l in labels)
         {
             sb.AppendLine($"- Nombre: {l.Name}");
@@ -387,7 +499,43 @@ Formato exacto:
         }
         else
         {
-            sb.AppendLine("Devuelve únicamente el JSON. Recuerda: \"labelName\" debe coincidir EXACTAMENTE con el Nombre de una etiqueta de la lista.");
+            sb.AppendLine("Devuelve únicamente el JSON. \"labelName\" debe coincidir EXACTAMENTE con el Nombre de una etiqueta de la lista.");
+        }
+        return sb.ToString();
+    }
+
+    private static string BuildClassifierUserPrompt(
+        List<(Guid Id, string Name, List<string> Keywords)> labels, string history,
+        string? resultSchemaPrompt)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("## ETIQUETAS DISPONIBLES (lista cerrada — NO inventes nombres)");
+        sb.AppendLine("El campo \"labelName\" debe ser COPIADO LITERAL de uno de los siguientes \"Nombre\":");
+        foreach (var l in labels)
+        {
+            sb.AppendLine($"- Nombre: {l.Name}");
+            if (l.Keywords is { Count: > 0 })
+                sb.AppendLine($"  Palabras clave: {string.Join(", ", l.Keywords)}");
+        }
+        sb.AppendLine();
+        sb.AppendLine("## HISTORIAL DE LA CONVERSACIÓN");
+        sb.AppendLine(history);
+        sb.AppendLine();
+
+        if (!string.IsNullOrWhiteSpace(resultSchemaPrompt))
+        {
+            sb.AppendLine("## SCHEMA DE RESULTADO ADICIONAL");
+            sb.AppendLine("Además del label, extrae un objeto JSON con la siguiente estructura.");
+            sb.AppendLine("Si no hay datos para un campo: usa string vacío para textos, 0 para números y null para fechas no encontradas.");
+            sb.AppendLine();
+            sb.AppendLine(resultSchemaPrompt);
+            sb.AppendLine();
+            sb.AppendLine("Devuelve ÚNICAMENTE el siguiente JSON, sin markdown ni texto adicional:");
+            sb.AppendLine("{\"labelName\":\"...\",\"confidence\":0.0,\"reasoning\":\"...\",\"extractedDate\":null,\"result\":{...campos del schema...}}");
+        }
+        else
+        {
+            sb.AppendLine("Devuelve únicamente el JSON. \"labelName\" debe coincidir EXACTAMENTE (mismas tildes, mayúsculas y espacios) con el Nombre de UNA etiqueta de la lista anterior. Está PROHIBIDO inventar etiquetas nuevas.");
         }
         return sb.ToString();
     }
@@ -418,5 +566,65 @@ Formato exacto:
             return new LabelingResult(name, conf, reason, date, resultJson);
         }
         catch { return null; }
+    }
+
+    // ── Retry helper para rate_limit_error de Anthropic ────────────────────
+    // El plan org tiene 30k input tokens/min. Un run grande (38+ convs) golpea
+    // el techo a mitad de camino. Esta wrapper:
+    //   1. Detecta rate_limit_error en el mensaje de la excepción.
+    //   2. Espera 30s, 60s, 120s (backoff exponencial truncado).
+    //   3. Reintenta hasta MaxRetries (3) veces.
+    //   4. Si pasa, sigue normal. Si todos fallan, propaga la última excepción.
+    //
+    // Para errores que NO son rate limit, propaga inmediatamente (no tiene
+    // sentido reintentar errores de validación, auth, modelo no disponible, etc).
+    //
+    // El reintento es secuencial dentro del job, así que si una conv tarda
+    // 3 minutos por backoff, las siguientes esperan. Aceptable para un job
+    // nocturno; mejor demorar 3 min que perder 13 conversations por rate limit.
+    private const int RetryMaxAttempts = 3;
+    private static readonly TimeSpan[] RetryDelays =
+    [
+        TimeSpan.FromSeconds(30),
+        TimeSpan.FromSeconds(60),
+        TimeSpan.FromSeconds(120),
+    ];
+
+    private async Task<MessageResponse> CallClaudeWithRetryAsync(
+        AnthropicClient client,
+        MessageParameters parameters,
+        Guid conversationId,
+        CancellationToken ct)
+    {
+        Exception? lastException = null;
+        for (var attempt = 0; attempt <= RetryMaxAttempts; attempt++)
+        {
+            try
+            {
+                return await client.Messages.GetClaudeMessageAsync(parameters, ct);
+            }
+            catch (Exception ex) when (IsRateLimitError(ex) && attempt < RetryMaxAttempts)
+            {
+                lastException = ex;
+                var delay = RetryDelays[Math.Min(attempt, RetryDelays.Length - 1)];
+                log.LogWarning(
+                    "Labeling: rate limit Anthropic en conv {Conv}, intento {Attempt}/{Max}. Esperando {Delay}s antes de reintentar.",
+                    conversationId, attempt + 1, RetryMaxAttempts + 1, (int)delay.TotalSeconds);
+                await Task.Delay(delay, ct);
+            }
+        }
+        // Si llegamos aquí, agotamos retries por rate limit.
+        throw lastException ?? new InvalidOperationException("Labeling: retries agotados sin causa identificada.");
+    }
+
+    private static bool IsRateLimitError(Exception ex)
+    {
+        // Anthropic SDK lanza Exception genérica con el cuerpo de error en Message.
+        // Detectamos por substring para evitar atarnos a un tipo específico del SDK
+        // que puede cambiar entre versiones.
+        var msg = ex.Message ?? string.Empty;
+        return msg.Contains("rate_limit_error", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+            || msg.Contains("HTTP 429", StringComparison.Ordinal);
     }
 }

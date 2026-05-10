@@ -10,6 +10,7 @@ import {
   type AgentRegistryEntry,
   type AgentRegistryPayload,
 } from '../hooks/useAgentRegistry'
+import { confirmDialog } from '@/shared/components/dialog'
 
 const emptyForm: AgentRegistryPayload = {
   slug: '',
@@ -70,7 +71,8 @@ export function BrainAgentRegistryPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar este agente del registro?')) return
+    const ok = await confirmDialog({ title: 'Eliminar agente', description: '¿Eliminar este agente del registro?', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 

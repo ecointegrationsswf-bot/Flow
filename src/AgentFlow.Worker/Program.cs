@@ -89,8 +89,22 @@ Console.WriteLine(hasGlobalKey
     : "[Worker] Anthropic: usando API key por tenant.");
 
 // ── Email + Storage ──────────────────────────────────────
-builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
-    AgentFlow.Infrastructure.Email.SendGridEmailService>();
+// Email provider seleccionable: "Smtp" usa SmtpEmailService (Gmail, Office365,
+// etc. con creds de variables de entorno), cualquier otro valor (o ausente)
+// usa SendGrid como antes.
+var emailProvider = cfg["Email:Provider"] ?? "SendGrid";
+if (string.Equals(emailProvider, "Smtp", StringComparison.OrdinalIgnoreCase))
+{
+    builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+        AgentFlow.Infrastructure.Email.SmtpEmailService>();
+    Console.WriteLine($"[Worker] Email provider: SMTP ({cfg["Smtp:Host"]}:{cfg["Smtp:Port"] ?? "587"}).");
+}
+else
+{
+    builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+        AgentFlow.Infrastructure.Email.SendGridEmailService>();
+    Console.WriteLine("[Worker] Email provider: SendGrid.");
+}
 builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
 
 // ── HTTP + Cache ─────────────────────────────────────────

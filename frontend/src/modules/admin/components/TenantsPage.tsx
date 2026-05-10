@@ -3,6 +3,7 @@ import { Building2, Plus, Users, Pencil, Power } from 'lucide-react'
 import { useAdminTenants, useUpdateTenant, type AdminTenant } from '@/modules/admin/hooks/useAdminTenants'
 import { TenantFormModal } from './TenantFormModal'
 import { TenantUsersModal } from './TenantUsersModal'
+import { confirmDialog } from '@/shared/components/dialog'
 
 export function TenantsPage() {
   const { data: tenants, isLoading } = useAdminTenants()
@@ -12,12 +13,16 @@ export function TenantsPage() {
   const [editTenant, setEditTenant] = useState<AdminTenant | null>(null)
   const [usersTenant, setUsersTenant] = useState<AdminTenant | null>(null)
 
-  const handleToggleActive = (tenant: AdminTenant) => {
-    if (!confirm(tenant.isActive
-      ? `Deshabilitar "${tenant.name}"? Todos sus usuarios seran deshabilitados.`
-      : `Habilitar "${tenant.name}"?`))
-      return
-
+  const handleToggleActive = async (tenant: AdminTenant) => {
+    const ok = await confirmDialog({
+      title: tenant.isActive ? 'Deshabilitar cliente' : 'Habilitar cliente',
+      description: tenant.isActive
+        ? `¿Deshabilitar "${tenant.name}"? Todos sus usuarios serán deshabilitados.`
+        : `¿Habilitar "${tenant.name}"?`,
+      confirmLabel: tenant.isActive ? 'Deshabilitar' : 'Habilitar',
+      variant: tenant.isActive ? 'danger' : 'default',
+    })
+    if (!ok) return
     updateTenant.mutate({ id: tenant.id, isActive: !tenant.isActive })
   }
 

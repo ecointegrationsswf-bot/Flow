@@ -69,6 +69,31 @@ public class CampaignLauncher(
             apiToken   = activeLine.ApiToken;
         }
 
+        // ── Cerrar campañas previas Running del mismo tenant ─────────────────
+        // Garantiza el invariante: una sola campaña activa por tenant. Sin esto,
+        // campañas viejas (downloads de morosidad, lanzamientos previos que no
+        // se completaron, etc.) quedan en Status=Running indefinidamente y el
+        // ContextDispatcher las elige al rutear inbounds, mezclando datos de
+        // contactos antiguos con la conversación actual. Replica el principio
+        // de PersistOutboundConversationAsync (que cierra Conversations previas)
+        // pero a nivel de Campaign.
+        var staleCampaigns = await db.Campaigns
+            .Where(c => c.TenantId == campaign.TenantId
+                     && c.Id != campaign.Id
+                     && (c.Status == CampaignStatus.Running
+                         || c.Status == CampaignStatus.Launching))
+            .ToListAsync(ct);
+
+        foreach (var stale in staleCampaigns)
+        {
+            stale.Status      = CampaignStatus.Completed;
+            stale.IsActive    = false;
+            stale.CompletedAt = DateTime.UtcNow;
+            logger.LogInformation(
+                "[CampaignLauncher] Campaña previa {OldId} ({OldName}, {OldStatus}) cerrada automáticamente al lanzar {NewId} ({NewName}).",
+                stale.Id, stale.Name, stale.Status, campaign.Id, campaign.Name);
+        }
+
         campaign.Status              = CampaignStatus.Launching;
         campaign.LaunchedAt          = DateTime.UtcNow;
         campaign.LaunchedByUserId    = launchedByUserId;

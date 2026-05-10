@@ -8,6 +8,7 @@ import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { useCampaigns, useLaunchCampaign } from '@/shared/hooks/useCampaigns'
 import { usePermissions } from '@/shared/hooks/usePermissions'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
+import { confirmDialog } from '@/shared/components/dialog'
 
 // Estados desde los cuales se permite re-disparar una campaña.
 // Pendiente = nunca lanzada. Pausada = pausada manualmente.
@@ -41,7 +42,12 @@ export function CampaignsPage() {
   const [launchingId, setLaunchingId] = useState<string | null>(null)
 
   const handleLaunch = async (campaignId: string, name: string) => {
-    if (!confirm(`¿Lanzar la campaña "${name}"? Se enviarán los mensajes a los contactos.`)) return
+    const ok = await confirmDialog({
+      title: 'Lanzar campaña',
+      description: `¿Lanzar la campaña "${name}"? Se enviarán los mensajes a los contactos.`,
+      confirmLabel: 'Lanzar',
+    })
+    if (!ok) return
     setLaunchError(null)
     setLaunchingId(campaignId)
     try {

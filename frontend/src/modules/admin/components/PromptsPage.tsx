@@ -6,6 +6,7 @@ import {
   useTogglePrompt,
   useDeletePrompt,
 } from '../hooks/useAdminPrompts'
+import { confirmDialog } from '@/shared/components/dialog'
 
 export function PromptsPage() {
   const navigate = useNavigate()
@@ -15,7 +16,8 @@ export function PromptsPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar este prompt?')) return
+    const ok = await confirmDialog({ title: 'Eliminar prompt', description: '¿Seguro que quieres eliminar este prompt?', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 
