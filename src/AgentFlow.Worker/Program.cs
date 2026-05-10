@@ -130,6 +130,11 @@ builder.Services.AddScoped<ICampaignRepository,
     AgentFlow.Infrastructure.Persistence.Repositories.CampaignRepository>();
 builder.Services.AddScoped<IContextDispatcher,
     AgentFlow.Infrastructure.Dispatching.ContextDispatcher>();
+// LaunchCampaignV2Handler (disparado por DelinquencyProcessor al auto-lanzar
+// campañas tras descargar morosidad) inyecta IDuplicateChecker. Mismo registro
+// que en API/Program.cs para mantener paridad.
+builder.Services.AddScoped<IDuplicateChecker,
+    AgentFlow.Infrastructure.Campaigns.V2.DuplicateChecker>();
 
 // ── Scheduled Jobs (CORE del worker) ─────────────────────
 builder.Services.AddScoped<IScheduledJobRepository,
