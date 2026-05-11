@@ -109,3 +109,117 @@ export function useLaunchCampaign() {
     onSettled: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
   })
 }
+
+export function usePauseCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (campaignId: string) =>
+      api.post<{ message: string }>(`/campaigns/${campaignId}/pause`).then((r) => r.data),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  })
+}
+
+export function useResumeCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (campaignId: string) =>
+      api.post<{ message: string }>(`/campaigns/${campaignId}/resume`).then((r) => r.data),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  })
+}
+
+// ── Listado de contactos por campaña ──────────────────────────────────────
+
+export type ContactStatusFilter = 'All' | 'Sent' | 'Pending' | 'Failed' | 'Discarded'
+
+export interface CampaignContactRow {
+  id: string
+  phoneNumber: string
+  clientName: string | null
+  policyNumber: string | null
+  insuranceCompany: string | null
+  pendingAmount: number | null
+  generatedMessage: string | null
+  dispatchStatus:
+    | 'Pending' | 'Queued' | 'Claimed' | 'Sent' | 'Error'
+    | 'Retry' | 'Skipped' | 'Deferred' | 'Duplicate'
+  sentAt: string | null
+  externalMessageId: string | null
+  dispatchError: string | null
+  isPhoneValid: boolean
+}
+
+export interface ContactsCounts {
+  all: number
+  sent: number
+  pending: number
+  failed: number
+  discarded: number
+}
+
+export interface CampaignContactsResponse {
+  total: number
+  page: number
+  pageSize: number
+  items: CampaignContactRow[]
+  counts: ContactsCounts
+}
+
+export interface CampaignContactsQueryParams {
+  campaignId: string
+  status: ContactStatusFilter
+  q: string
+  page: number
+  pageSize: number
+}
+
+export function useCampaignContacts(params: CampaignContactsQueryParams, enabled: boolean = true) {
+  return useQuery({
+    queryKey: ['campaign-contacts', params.campaignId, params.status, params.q, params.page, params.pageSize],
+    enabled,
+    queryFn: () => api.get<CampaignContactsResponse>(
+      `/campaigns/${params.campaignId}/contacts`,
+      {
+        params: {
+          status: params.status,
+          q: params.q || undefined,
+          page: params.page,
+          pageSize: params.pageSize,
+        },
+      },
+    ).then((r) => r.data),
+    // Refresca cada 8s — útil mientras una campaña está corriendo
+    refetchInterval: 8000,
+  })
+}
+
+export function useExportCampaignContacts() {
+  return useMutation({
+    mutationFn: async ({ campaignId, status, q }: { campaignId: string; status: ContactStatusFilter; q: string }) => {
+      const resp = await api.get(`/campaigns/${campaignId}/contacts/export`, {
+        params: { status, q: q || undefined },
+        responseType: 'blob',
+      })
+      const blob = resp.data as Blob
+      const cd = resp.headers['content-disposition'] as string | undefined
+      const match = cd?.match(/filename="?([^";]+)"?/)
+      const filename = match?.[1] ?? `contactos_${campaignId.slice(0, 8)}.xlsx`
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    },
+  })
+}
+
+export function useCampaignById(campaignId: string | undefined) {
+  return useQuery({
+    queryKey: ['campaign', campaignId],
+    enabled: !!campaignId,
+    queryFn: () => api.get(`/campaigns/${campaignId}`).then((r) => r.data),
+  })
+}

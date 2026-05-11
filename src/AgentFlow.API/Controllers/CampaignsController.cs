@@ -195,6 +195,209 @@ public class CampaignsController(
         return Ok(new { message = "Campaña reactivada. El Worker la recogerá en el próximo tick." });
     }
 
+    /// <summary>
+    /// Lista paginada de contactos de una campaña con su estado de despacho.
+    /// Usado por la pantalla de detalle de contactos en el portal del tenant.
+    ///
+    /// Filtros:
+    /// - status: All | Sent | Pending | Failed | Discarded
+    ///   * Sent      → DispatchStatus = Sent
+    ///   * Pending   → IN (Pending, Queued, Claimed, Deferred, Retry)
+    ///   * Failed    → DispatchStatus = Error
+    ///   * Discarded → IN (Skipped, Duplicate)
+    /// - q: texto libre, busca en ClientName y PhoneNumber.
+    /// </summary>
+    [HttpGet("{id:guid}/contacts")]
+    public async Task<IActionResult> ListContacts(
+        Guid id,
+        [FromQuery] string? status = "All",
+        [FromQuery] string? q = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        CancellationToken ct = default)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var campaignExists = await db.Campaigns
+            .AnyAsync(c => c.Id == id && c.TenantId == tenantId, ct);
+        if (!campaignExists)
+            return NotFound(new { error = "Campaña no encontrada." });
+
+        var query = BuildContactsQuery(id, tenantId, status, q);
+        var total = await query.CountAsync(ct);
+
+        // Orden: enviados primero por SentAt desc, luego pendientes/errores por CreatedAt
+        // — útil para que el operativo vea los más recientes arriba.
+        var items = await query
+            .OrderByDescending(cc => cc.SentAt ?? cc.CreatedAt)
+            .Skip((Math.Max(1, page) - 1) * pageSize)
+            .Take(Math.Clamp(pageSize, 1, 500))
+            .Select(cc => new
+            {
+                cc.Id,
+                cc.PhoneNumber,
+                cc.ClientName,
+                cc.PolicyNumber,
+                cc.InsuranceCompany,
+                cc.PendingAmount,
+                cc.GeneratedMessage,
+                DispatchStatus = cc.DispatchStatus.ToString(),
+                cc.SentAt,
+                cc.ExternalMessageId,
+                cc.DispatchError,
+                cc.IsPhoneValid,
+            })
+            .ToListAsync(ct);
+
+        // Contadores por bucket para el contador de las tabs del frontend
+        var byBucket = await db.CampaignContacts
+            .Where(cc => cc.CampaignId == id)
+            .GroupBy(cc => cc.DispatchStatus)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var sent      = byBucket.Where(b => b.Status == DispatchStatus.Sent).Sum(b => b.Count);
+        var pending   = byBucket.Where(b => b.Status == DispatchStatus.Pending
+                                         || b.Status == DispatchStatus.Queued
+                                         || b.Status == DispatchStatus.Claimed
+                                         || b.Status == DispatchStatus.Deferred
+                                         || b.Status == DispatchStatus.Retry).Sum(b => b.Count);
+        var failed    = byBucket.Where(b => b.Status == DispatchStatus.Error).Sum(b => b.Count);
+        var discarded = byBucket.Where(b => b.Status == DispatchStatus.Skipped
+                                         || b.Status == DispatchStatus.Duplicate).Sum(b => b.Count);
+
+        return Ok(new
+        {
+            total,
+            page,
+            pageSize,
+            items,
+            counts = new { all = sent + pending + failed + discarded, sent, pending, failed, discarded }
+        });
+    }
+
+    /// <summary>
+    /// Exporta el listado filtrado de contactos a Excel (.xlsx). Mismo
+    /// criterio de filtro que ListContacts pero SIN paginar — exporta el
+    /// universo completo del filtro actual.
+    /// </summary>
+    [HttpGet("{id:guid}/contacts/export")]
+    public async Task<IActionResult> ExportContacts(
+        Guid id,
+        [FromQuery] string? status = "All",
+        [FromQuery] string? q = null,
+        CancellationToken ct = default)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var campaign = await db.Campaigns
+            .Where(c => c.Id == id && c.TenantId == tenantId)
+            .Select(c => new { c.Id, c.Name })
+            .FirstOrDefaultAsync(ct);
+        if (campaign is null)
+            return NotFound(new { error = "Campaña no encontrada." });
+
+        var rows = await BuildContactsQuery(id, tenantId, status, q)
+            .OrderByDescending(cc => cc.SentAt ?? cc.CreatedAt)
+            .Select(cc => new
+            {
+                cc.PhoneNumber,
+                cc.ClientName,
+                cc.GeneratedMessage,
+                Status = cc.DispatchStatus.ToString(),
+                cc.SentAt,
+                cc.ExternalMessageId,
+                cc.DispatchError,
+            })
+            .ToListAsync(ct);
+
+        using var wb = new ClosedXML.Excel.XLWorkbook();
+        var ws = wb.Worksheets.Add("Contactos");
+        ws.Cell(1, 1).Value = "Cliente";
+        ws.Cell(1, 2).Value = "Teléfono";
+        ws.Cell(1, 3).Value = "Mensaje enviado";
+        ws.Cell(1, 4).Value = "Estado";
+        ws.Cell(1, 5).Value = "Enviado";
+        ws.Cell(1, 6).Value = "ID mensaje externo";
+        ws.Cell(1, 7).Value = "Error";
+        ws.Row(1).Style.Font.Bold = true;
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var r = rows[i];
+            var row = i + 2;
+            ws.Cell(row, 1).Value = r.ClientName ?? "";
+            ws.Cell(row, 2).Value = r.PhoneNumber;
+            ws.Cell(row, 3).Value = r.GeneratedMessage ?? "";
+            ws.Cell(row, 3).Style.Alignment.WrapText = true;
+            ws.Cell(row, 3).Style.Alignment.Vertical = ClosedXML.Excel.XLAlignmentVerticalValues.Top;
+            ws.Cell(row, 4).Value = r.Status;
+            // SentAt viene como UTC; convertimos a hora Panamá para Excel.
+            if (r.SentAt.HasValue)
+            {
+                ws.Cell(row, 5).Value = r.SentAt.Value.AddHours(-5);
+                ws.Cell(row, 5).Style.DateFormat.Format = "dd/mm/yyyy hh:mm";
+            }
+            ws.Cell(row, 6).Value = r.ExternalMessageId ?? "";
+            ws.Cell(row, 7).Value = r.DispatchError ?? "";
+        }
+
+        // AdjustToContents respeta wrap text de la columna 3; las otras se ajustan al texto.
+        ws.Columns(1, 2).AdjustToContents();
+        ws.Column(3).Width = 80;   // Mensaje — ancho fijo cómodo para lectura
+        ws.Columns(4, 7).AdjustToContents();
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        var bytes = ms.ToArray();
+
+        var safeName = string.Join("_", campaign.Name.Split(Path.GetInvalidFileNameChars()));
+        var fileName = $"contactos_{safeName}_{DateTime.UtcNow.AddHours(-5):yyyyMMdd_HHmm}.xlsx";
+        return File(bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            fileName);
+    }
+
+    private IQueryable<Domain.Entities.CampaignContact> BuildContactsQuery(
+        Guid campaignId, Guid tenantId, string? status, string? q)
+    {
+        var query = db.CampaignContacts
+            .Where(cc => cc.CampaignId == campaignId
+                      && cc.Campaign.TenantId == tenantId);
+
+        switch ((status ?? "All").Trim().ToLowerInvariant())
+        {
+            case "sent":
+                query = query.Where(cc => cc.DispatchStatus == DispatchStatus.Sent);
+                break;
+            case "pending":
+                query = query.Where(cc =>
+                    cc.DispatchStatus == DispatchStatus.Pending
+                 || cc.DispatchStatus == DispatchStatus.Queued
+                 || cc.DispatchStatus == DispatchStatus.Claimed
+                 || cc.DispatchStatus == DispatchStatus.Deferred
+                 || cc.DispatchStatus == DispatchStatus.Retry);
+                break;
+            case "failed":
+                query = query.Where(cc => cc.DispatchStatus == DispatchStatus.Error);
+                break;
+            case "discarded":
+                query = query.Where(cc =>
+                    cc.DispatchStatus == DispatchStatus.Skipped
+                 || cc.DispatchStatus == DispatchStatus.Duplicate);
+                break;
+            // "all" o cualquier otro → sin filtro
+        }
+
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var qLower = q.Trim().ToLower();
+            query = query.Where(cc =>
+                (cc.ClientName != null && cc.ClientName.ToLower().Contains(qLower)) ||
+                cc.PhoneNumber.ToLower().Contains(qLower));
+        }
+
+        return query;
+    }
+
     [HttpPost("parse")]
     [RequestSizeLimit(10 * 1024 * 1024)]
     public async Task<IActionResult> ParseFile(IFormFile file, CancellationToken ct)

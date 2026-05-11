@@ -1,14 +1,17 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Loader2, Search, X, Rocket } from 'lucide-react'
+import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
-import { useCampaigns, useLaunchCampaign } from '@/shared/hooks/useCampaigns'
+import {
+  useCampaigns, useLaunchCampaign, usePauseCampaign, useResumeCampaign,
+} from '@/shared/hooks/useCampaigns'
 import { usePermissions } from '@/shared/hooks/usePermissions'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
 import { confirmDialog } from '@/shared/components/dialog'
+import { useToast, ToastContainer } from '@/shared/components/Toast'
 
 // Estados desde los cuales se permite re-disparar una campaña.
 // Pendiente = nunca lanzada. Pausada = pausada manualmente.
@@ -37,9 +40,51 @@ export function CampaignsPage() {
   const canLaunch = hasPermission('launch_campaigns') || canCreate
   const { data: campaigns, isLoading, isError } = useCampaigns()
   const launchMutation = useLaunchCampaign()
+  const pauseMutation = usePauseCampaign()
+  const resumeMutation = useResumeCampaign()
   const tt = useTenantTime()
+  const { toasts, remove, toast } = useToast()
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [launchingId, setLaunchingId] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
+
+  const handlePause = async (campaignId: string, name: string) => {
+    const ok = await confirmDialog({
+      title: 'Pausar campaña',
+      description: `¿Pausar el envío de "${name}"? Los mensajes pendientes se detienen y la puedes reanudar luego.`,
+      confirmLabel: 'Pausar',
+    })
+    if (!ok) return
+    setTogglingId(campaignId)
+    try {
+      await pauseMutation.mutateAsync(campaignId)
+      toast.success('Campaña pausada.')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e.response?.data?.error ?? e.message ?? 'No se pudo pausar.')
+    } finally {
+      setTogglingId(null)
+    }
+  }
+
+  const handleResume = async (campaignId: string, name: string) => {
+    const ok = await confirmDialog({
+      title: 'Reanudar campaña',
+      description: `¿Reanudar el envío de "${name}"? El Worker volverá a procesar los contactos pendientes.`,
+      confirmLabel: 'Reanudar',
+    })
+    if (!ok) return
+    setTogglingId(campaignId)
+    try {
+      await resumeMutation.mutateAsync(campaignId)
+      toast.success('Campaña reanudada.')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e.response?.data?.error ?? e.message ?? 'No se pudo reanudar.')
+    } finally {
+      setTogglingId(null)
+    }
+  }
 
   const handleLaunch = async (campaignId: string, name: string) => {
     const ok = await confirmDialog({
@@ -203,13 +248,13 @@ export function CampaignsPage() {
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Estado</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Fecha</th>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Creada por</th>
-                  {canLaunch && <th className="px-2 py-3 text-right text-xs font-medium uppercase text-gray-500 w-12">Acción</th>}
+                  <th className="px-2 py-3 text-right text-xs font-medium uppercase text-gray-500">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={canLaunch ? 8 : 7} className="px-4 py-10 text-center text-sm text-gray-400">
+                    <td colSpan={8} className="px-4 py-10 text-center text-sm text-gray-400">
                       No se encontraron campañas con los filtros aplicados.
                     </td>
                   </tr>
@@ -257,9 +302,47 @@ export function CampaignsPage() {
                         <td className="px-4 py-3 text-xs text-gray-600">
                           {c.createdByUserId || '—'}
                         </td>
-                        {canLaunch && (
-                          <td className="px-2 py-3 text-right">
-                            {isLaunchable ? (
+                        <td className="px-2 py-3 text-right">
+                          <div className="inline-flex items-center gap-1">
+                            {/* Ver contactos — siempre disponible */}
+                            <Link
+                              to={`/campaigns/${c.id}/contacts`}
+                              title="Ver contactos"
+                              className="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                            >
+                              <Eye className="h-4 w-4" />
+                            </Link>
+
+                            {/* Pausar — solo si está corriendo y activa */}
+                            {canLaunch && status === 'Running' && c.isActive && (
+                              <button
+                                onClick={() => handlePause(c.id, c.name)}
+                                disabled={togglingId === c.id}
+                                title={`Pausar "${c.name}"`}
+                                className="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 hover:bg-orange-50 hover:text-orange-600 disabled:opacity-40 transition-colors"
+                              >
+                                {togglingId === c.id
+                                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                                  : <Pause className="h-4 w-4" />}
+                              </button>
+                            )}
+
+                            {/* Reanudar — running pero pausada manualmente, o status=Paused */}
+                            {canLaunch && (status === 'Paused' || (status === 'Running' && !c.isActive)) && (
+                              <button
+                                onClick={() => handleResume(c.id, c.name)}
+                                disabled={togglingId === c.id}
+                                title={`Reanudar "${c.name}"`}
+                                className="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-40 transition-colors"
+                              >
+                                {togglingId === c.id
+                                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                                  : <Play className="h-4 w-4" />}
+                              </button>
+                            )}
+
+                            {/* Lanzar — para campañas pendientes/falladas */}
+                            {canLaunch && isLaunchable && (
                               <button
                                 onClick={() => handleLaunch(c.id, c.name)}
                                 disabled={isThisLaunching}
@@ -271,11 +354,9 @@ export function CampaignsPage() {
                                   : <Rocket className="h-3.5 w-3.5" />}
                                 Lanzar
                               </button>
-                            ) : (
-                              <span className="text-gray-300">—</span>
                             )}
-                          </td>
-                        )}
+                          </div>
+                        </td>
                       </tr>
                     )
                   })
@@ -285,6 +366,7 @@ export function CampaignsPage() {
           </div>
         </div>
       )}
+      <ToastContainer toasts={toasts} onRemove={remove} />
     </div>
   )
 }

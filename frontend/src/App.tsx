@@ -9,6 +9,7 @@ import { LoginPage } from '@/modules/auth/components/LoginPage'
 import { DashboardPage } from '@/modules/dashboard/components/DashboardPage'
 import { MonitorPage } from '@/modules/monitor/components/MonitorPage'
 import { CampaignsPage } from '@/modules/campaigns/components/CampaignsPage'
+import { CampaignContactsPage } from '@/modules/campaigns/components/CampaignContactsPage'
 import { CampaignUploadPage } from '@/modules/campaigns/components/CampaignUploadPage'
 import { CampaignTemplatesPage } from '@/modules/campaigns/components/CampaignTemplatesPage'
 import { CampaignTemplateFormPage } from '@/modules/campaigns/components/CampaignTemplateFormPage'
@@ -106,6 +107,7 @@ export default function App() {
           {/* Campañas */}
           <Route element={<PermissionRoute permission="view_campaigns" />}>
             <Route path="/campaigns" element={<CampaignsPage />} />
+            <Route path="/campaigns/:id/contacts" element={<CampaignContactsPage />} />
           </Route>
           <Route element={<PermissionRoute permission="create_campaigns" />}>
             <Route path="/campaigns/new" element={<CampaignUploadPage />} />
