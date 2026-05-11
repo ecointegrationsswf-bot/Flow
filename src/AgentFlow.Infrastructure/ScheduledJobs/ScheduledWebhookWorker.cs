@@ -31,7 +31,10 @@ public class ScheduledWebhookWorker(
     private static readonly TimeSpan TickInterval = TimeSpan.FromSeconds(60);
     private static readonly TimeSpan StuckThreshold = TimeSpan.FromMinutes(10);
     private static readonly int MaxParallelism = 10;
-    private const int CircuitBreakerThreshold = 5;
+    // Umbral conservador. Subido de 5 a 20 para tolerar errores transitorios
+    // (rate limits de Anthropic, servidor del cliente con downtime puntual, etc.)
+    // sin desactivar el job. Solo se activa cuando hay un problema persistente.
+    private const int CircuitBreakerThreshold = 20;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -130,7 +133,13 @@ public class ScheduledWebhookWorker(
             result.TotalRecords, result.SuccessCount, result.FailureCount,
             result.ErrorDetail, ct);
 
-        var consecutiveFailures = result.Status == "Success" || result.Status == "Skipped"
+        // El contador solo sube en fallos GLOBALES (Failed o excepción). Partial
+        // significa que algunos tenants/items procesaron OK — el job NO está roto.
+        // Aislamos así fallos por tenant: si "Tenant X" rate-limita pero "Tenant Y"
+        // procesa bien, el resultado es Partial → contador NO sube → job sigue
+        // ejecutándose en su próximo tick.
+        var consecutiveFailures = result.Status is "Success" or "Skipped"
+                                                 or "Partial" or "PartialFailure"
             ? 0
             : job.ConsecutiveFailures + 1;
 
