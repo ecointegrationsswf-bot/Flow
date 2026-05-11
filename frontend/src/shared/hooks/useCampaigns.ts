@@ -128,6 +128,23 @@ export function useResumeCampaign() {
   })
 }
 
+/**
+ * Cancela una campaña de forma IRREVERSIBLE. Los contactos pendientes
+ * (Pending/Queued/Deferred/Retry) pasan a Skipped. Los Claimed se respetan
+ * (su envío en curso se completa). Sent/Error no se tocan.
+ * NO cierra conversaciones abiertas con clientes que ya respondieron.
+ */
+export function useCancelCampaign() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (campaignId: string) =>
+      api.post<{ message: string; skippedCount: number }>(
+        `/campaigns/${campaignId}/cancel`,
+      ).then((r) => r.data),
+    onSettled: () => qc.invalidateQueries({ queryKey: ['campaigns'] }),
+  })
+}
+
 // ── Listado de contactos por campaña ──────────────────────────────────────
 
 export type ContactStatusFilter = 'All' | 'Sent' | 'Pending' | 'Failed' | 'Discarded'

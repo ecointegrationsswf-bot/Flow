@@ -27,7 +27,7 @@ const DEFAULT_FORM: DelinquencyConfigPayload = {
   autoCrearCampanas: false,
   campaignTemplateId: null,
   agentDefinitionId: null,
-  campaignNamePattern: '{accion} {fecha}',
+  campaignNamePattern: '{acción} {fecha}',
   notificationEmail: '',
   isActive: true,
 }
@@ -48,7 +48,7 @@ export function MorosidadConfigTab({ actionId }: Props) {
         autoCrearCampanas:   config.autoCrearCampanas,
         campaignTemplateId:  config.campaignTemplateId,
         agentDefinitionId:   config.agentDefinitionId,
-        campaignNamePattern: config.campaignNamePattern || '{accion} {fecha}',
+        campaignNamePattern: config.campaignNamePattern || '{acción} {fecha}',
         notificationEmail:   config.notificationEmail || '',
         isActive:            config.isActive,
       })
@@ -178,11 +178,11 @@ export function MorosidadConfigTab({ actionId }: Props) {
                 type="text"
                 value={form.campaignNamePattern ?? ''}
                 onChange={(e) => setForm({ ...form, campaignNamePattern: e.target.value })}
-                placeholder="{accion} {fecha}"
+                placeholder="{acción} {fecha}"
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none"
               />
               <p className="text-xs text-gray-500">
-                Placeholders: <code className="rounded bg-gray-100 px-1">{'{accion}'}</code>{' '}
+                Placeholders: <code className="rounded bg-gray-100 px-1">{'{acción}'}</code>{' '}
                 <code className="rounded bg-gray-100 px-1">{'{fecha}'}</code>{' '}
                 <code className="rounded bg-gray-100 px-1">{'{grupos}'}</code>
               </p>

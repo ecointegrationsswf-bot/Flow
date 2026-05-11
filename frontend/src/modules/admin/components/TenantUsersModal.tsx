@@ -105,7 +105,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
       setNewPassword('')
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { error?: string } } }
-      setPasswordError(axiosErr.response?.data?.error ?? 'Error al cambiar contrasena.')
+      setPasswordError(axiosErr.response?.data?.error ?? 'Error al cambiar contraseña.')
     }
   }
 
@@ -233,7 +233,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                             setPasswordError(null)
                           }}
                           className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                          title="Cambiar contrasena"
+                          title="Cambiar contraseña"
                         >
                           <KeyRound className="h-4 w-4" />
                         </button>
@@ -297,7 +297,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-gray-700">
-                        Contrasena (min. 8 caracteres)
+                        Contraseña (min. 8 caracteres)
                       </label>
                       <div className="relative mt-1">
                         <input

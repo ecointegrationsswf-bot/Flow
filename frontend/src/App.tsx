@@ -7,6 +7,7 @@ import { ProtectedRoute } from '@/shared/components/ProtectedRoute'
 import { PermissionRoute } from '@/shared/components/PermissionRoute'
 import { LoginPage } from '@/modules/auth/components/LoginPage'
 import { DashboardPage } from '@/modules/dashboard/components/DashboardPage'
+import { ManagementReportPage } from '@/modules/dashboard/components/ManagementReportPage'
 import { MonitorPage } from '@/modules/monitor/components/MonitorPage'
 import { CampaignsPage } from '@/modules/campaigns/components/CampaignsPage'
 import { CampaignContactsPage } from '@/modules/campaigns/components/CampaignContactsPage'
@@ -83,6 +84,7 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/dashboard/management-report" element={<ManagementReportPage />} />
           <Route path="/labels" element={<LabelsPage />} />
           <Route path="/actions" element={<TenantActionsPage />} />
           <Route path="/brain" element={<BrainAgentRegistryPage />} />

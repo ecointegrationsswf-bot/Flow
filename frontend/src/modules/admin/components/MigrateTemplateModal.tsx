@@ -58,7 +58,7 @@ export function MigrateTemplateModal({ template, onClose }: Props) {
 
           {/* Mode selector */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">Accion</label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Acción</label>
             <div className="flex gap-2">
               <button
                 type="button"

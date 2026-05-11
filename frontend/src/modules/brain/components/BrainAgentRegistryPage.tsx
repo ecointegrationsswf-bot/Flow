@@ -55,7 +55,7 @@ export function BrainAgentRegistryPage() {
 
   const handleSave = async () => {
     if (!form.slug.trim() || !form.name.trim() || !form.campaignTemplateId) {
-      setError('Slug, nombre y maestro de campana son obligatorios')
+      setError('Slug, nombre y maestro de campaña son obligatorios')
       return
     }
     try {
@@ -106,7 +106,7 @@ export function BrainAgentRegistryPage() {
         <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
           <Brain className="mx-auto h-12 w-12 text-gray-300" />
           <p className="mt-3 text-sm text-gray-500">No hay agentes en el registro del Cerebro</p>
-          <p className="mt-1 text-xs text-gray-400">Registra agentes para que el Cerebro pueda clasificar y rutear mensajes automaticamente.</p>
+          <p className="mt-1 text-xs text-gray-400">Registra agentes para que el Cerebro pueda clasificar y rutear mensajes automáticamente.</p>
           <button onClick={openCreate} className="mt-4 text-sm font-medium text-blue-600 hover:text-blue-700">
             Registrar primer agente
           </button>
@@ -224,13 +224,13 @@ export function BrainAgentRegistryPage() {
               </div>
 
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Maestro de campana asociado *</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Maestro de campaña asociado *</label>
                 <select
                   value={form.campaignTemplateId}
                   onChange={(e) => setForm({ ...form, campaignTemplateId: e.target.value })}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
-                  <option value="">Selecciona un maestro de campana</option>
+                  <option value="">Selecciona un maestro de campaña</option>
                   {templates.map((t) => (
                     <option key={t.id} value={t.id}>
                       {t.name} {t.agentName ? `· Agente: ${t.agentName}` : ''} {t.labelCount > 0 ? `· ${t.labelCount} etiquetas` : ''}

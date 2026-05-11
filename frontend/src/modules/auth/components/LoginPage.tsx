@@ -10,13 +10,13 @@ import { api } from '@/shared/api/client'
 
 const loginSchema = z.object({
   email: z.string().email('Email invalido'),
-  password: z.string().min(1, 'La contrasena es requerida'),
+  password: z.string().min(1, 'La contraseña es requerida'),
 })
 type LoginForm = z.infer<typeof loginSchema>
 
 const changePwSchema = z.object({
   newPassword: z.string().min(8, 'Minimo 8 caracteres'),
-  confirmPassword: z.string().min(8, 'Confirma la contrasena'),
+  confirmPassword: z.string().min(8, 'Confirma la contraseña'),
 }).refine(d => d.newPassword === d.confirmPassword, { message: 'Las contrasenas no coinciden', path: ['confirmPassword'] })
 type ChangePwForm = z.infer<typeof changePwSchema>
 
@@ -55,7 +55,7 @@ export function LoginPage() {
     if (tempToken) {
       clearTimeout(tempTokenTimer.current)
       tempTokenTimer.current = setTimeout(() => {
-        setTempToken(''); setStep('login'); setError('Sesion expirada. Inicia sesion de nuevo.')
+        setTempToken(''); setStep('login'); setError('Sesión expirada. Inicia sesión de nuevo.')
       }, 10 * 60 * 1000)
     }
     return () => clearTimeout(tempTokenTimer.current)
@@ -103,19 +103,19 @@ export function LoginPage() {
       }
     } catch (err: unknown) {
       const a = err as { response?: { data?: { error?: string } } }
-      setError(a.response?.data?.error ?? 'Error al cambiar contrasena.')
+      setError(a.response?.data?.error ?? 'Error al cambiar contraseña.')
     } finally { setLoading(false) }
   }
 
   const onVerify2FA = async () => {
-    if (otpCode.length !== 6) { setError('Ingresa el codigo de 6 digitos.'); return }
+    if (otpCode.length !== 6) { setError('Ingresa el código de 6 digitos.'); return }
     setError(null); setLoading(true)
     try {
       const { data: res } = await api.post('/auth/verify-2fa', { tempToken, code: otpCode })
       await finishLogin(res)
     } catch (err: unknown) {
       const a = err as { response?: { data?: { error?: string } } }
-      setError(a.response?.data?.error ?? 'Codigo invalido.')
+      setError(a.response?.data?.error ?? 'Código invalido.')
     } finally { setLoading(false) }
   }
 
@@ -162,7 +162,7 @@ export function LoginPage() {
               {loginForm.formState.errors.email && <p className="mt-1 text-xs text-red-600">{loginForm.formState.errors.email.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Contrasena</label>
+              <label className="block text-sm font-medium text-gray-700">Contraseña</label>
               <div className="relative mt-1">
                 <input type={showPassword ? 'text' : 'password'} {...loginForm.register('password')} className={`${inputClass} pr-10`} placeholder="••••••••" />
                 <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600">
@@ -172,11 +172,11 @@ export function LoginPage() {
             </div>
             <button type="submit" disabled={loading || isLocked} className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              Iniciar sesion
+              Iniciar sesión
             </button>
             <div className="text-center">
               <button type="button" onClick={() => navigate('/forgot-password')} className="text-xs text-blue-600 hover:underline">
-                Olvidaste tu contrasena?
+                Olvidaste tu contraseña?
               </button>
             </div>
           </form>
@@ -187,10 +187,10 @@ export function LoginPage() {
           <form onSubmit={changePwForm.handleSubmit(onChangePassword)} className="space-y-4">
             <div className="flex items-center gap-2 rounded-md bg-amber-50 p-3 text-sm text-amber-700">
               <KeyRound className="h-5 w-5 shrink-0" />
-              Debes cambiar tu contrasena antes de continuar.
+              Debes cambiar tu contraseña antes de continuar.
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Nueva contrasena</label>
+              <label className="block text-sm font-medium text-gray-700">Nueva contraseña</label>
               <div className="relative mt-1">
                 <input type={showPassword ? 'text' : 'password'} {...changePwForm.register('newPassword', { onChange: e => setPwValue(e.target.value) })} className={`${inputClass} pr-10`} />
                 <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600">
@@ -206,13 +206,13 @@ export function LoginPage() {
               {changePwForm.formState.errors.newPassword && <p className="mt-1 text-xs text-red-600">{changePwForm.formState.errors.newPassword.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Confirmar contrasena</label>
+              <label className="block text-sm font-medium text-gray-700">Confirmar contraseña</label>
               <input type="password" {...changePwForm.register('confirmPassword')} className={inputClass} />
               {changePwForm.formState.errors.confirmPassword && <p className="mt-1 text-xs text-red-600">{changePwForm.formState.errors.confirmPassword.message}</p>}
             </div>
             <button type="submit" disabled={loading} className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              Cambiar contrasena
+              Cambiar contraseña
             </button>
           </form>
         )}
@@ -222,10 +222,10 @@ export function LoginPage() {
           <div className="space-y-4">
             <div className="flex items-center gap-2 rounded-md bg-blue-50 p-3 text-sm text-blue-700">
               <ShieldCheck className="h-5 w-5 shrink-0" />
-              Enviamos un codigo de verificacion a {maskedEmail}
+              Enviamos un código de verificación a {maskedEmail}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Codigo de 6 digitos</label>
+              <label className="block text-sm font-medium text-gray-700">Código de 6 digitos</label>
               <input
                 type="text"
                 maxLength={6}
@@ -241,7 +241,7 @@ export function LoginPage() {
               Verificar
             </button>
             <button onClick={onResend} className="w-full text-center text-xs text-gray-500 hover:text-blue-600">
-              Reenviar codigo
+              Reenviar código
             </button>
           </div>
         )}

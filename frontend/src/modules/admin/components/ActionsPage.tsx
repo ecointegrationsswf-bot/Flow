@@ -114,7 +114,7 @@ export function ActionsPage() {
           className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-amber-400 transition-colors"
         >
           <Plus className="h-4 w-4" />
-          Nueva accion
+          Nueva acción
         </button>
       </div>
 
@@ -128,7 +128,7 @@ export function ActionsPage() {
           <MessageSquare className="mx-auto h-12 w-12 text-gray-300" />
           <p className="mt-3 text-sm text-gray-500">No hay acciones creadas</p>
           <button onClick={openCreate} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
-            Crear primera accion
+            Crear primera acción
           </button>
         </div>
       ) : (
@@ -248,7 +248,7 @@ export function ActionsPage() {
           <div className="w-full max-w-lg rounded-xl bg-white shadow-xl my-auto">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-lg font-semibold text-gray-900">
-                {editingId ? 'Editar accion' : 'Nueva accion global'}
+                {editingId ? 'Editar acción' : 'Nueva acción global'}
               </h2>
               <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="h-5 w-5" />
@@ -262,19 +262,19 @@ export function ActionsPage() {
 
               {/* Nombre */}
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Nombre de la accion *</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Nombre de la acción *</label>
                 <select
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
-                  <option value="">Selecciona una accion</option>
+                  <option value="">Selecciona una acción</option>
                   <option value="SEND_MESSAGE">Enviar mensaje</option>
                   <option value="SEND_RESUME">Enviar resumen</option>
                   <option value="TRANSFER_CHAT">Escalar a humano</option>
                   <option value="SEND_EMAIL_RESUME">Enviar email con resumen</option>
                   <option value="PREMIUM">Premium</option>
-                  <option value="CLOSE_CONVERSATION">Cerrar conversacion</option>
+                  <option value="CLOSE_CONVERSATION">Cerrar conversación</option>
                   <option value="ESCALATE_TO_HUMAN">Escalar a ejecutivo</option>
                   <option value="SEND_PAYMENT_LINK">Enviar enlace de pago</option>
                   <option value="SEND_DOCUMENT">Enviar documento</option>
@@ -293,13 +293,13 @@ export function ActionsPage() {
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={2}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  placeholder="Describe que hace esta accion..."
+                  placeholder="Describe que hace esta acción..."
                 />
               </div>
 
               {/* Toggles */}
               <div className="space-y-3">
-                <label className="mb-1 block text-sm font-medium text-gray-700">Configuracion</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Configuración</label>
 
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
                   <div className="flex items-center gap-3">
@@ -308,7 +308,7 @@ export function ActionsPage() {
                     </div>
                     <div>
                       <p className="text-sm font-medium text-gray-800">Solicita Webhook</p>
-                      <p className="text-xs text-gray-500">Envio de gestion y recepcion de datos</p>
+                      <p className="text-xs text-gray-500">Envío de gestión y recepcion de datos</p>
                     </div>
                   </div>
                   <button
@@ -331,7 +331,7 @@ export function ActionsPage() {
                     </div>
                     <div>
                       <p className="text-sm font-medium text-gray-800">Envia correo electronico</p>
-                      <p className="text-xs text-gray-500">Notificar via email al ejecutar la accion</p>
+                      <p className="text-xs text-gray-500">Notificar via email al ejecutar la acción</p>
                     </div>
                   </div>
                   <button
@@ -432,7 +432,7 @@ export function ActionsPage() {
                 className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-amber-400 disabled:opacity-50 transition-colors"
               >
                 {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {editingId ? 'Guardar cambios' : 'Crear accion'}
+                {editingId ? 'Guardar cambios' : 'Crear acción'}
               </button>
             </div>
           </div>

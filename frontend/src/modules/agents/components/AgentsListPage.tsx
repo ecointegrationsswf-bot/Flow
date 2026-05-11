@@ -134,7 +134,7 @@ export function AgentsListPage() {
         onClose={() => setDeleteId(null)}
         onConfirm={handleDelete}
         title="Eliminar agente"
-        description="Esta accion no se puede deshacer. El agente sera eliminado permanentemente."
+        description="Esta acción no se puede deshacer. El agente sera eliminado permanentemente."
         confirmLabel="Eliminar"
         variant="danger"
       />

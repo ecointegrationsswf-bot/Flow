@@ -75,7 +75,7 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
   if (!conversation) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-gray-400">
-        No se pudo cargar la conversacion
+        No se pudo cargar la conversación
       </div>
     )
   }

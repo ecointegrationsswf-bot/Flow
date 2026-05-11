@@ -1,12 +1,13 @@
 import { useState, useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play } from 'lucide-react'
+import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import {
   useCampaigns, useLaunchCampaign, usePauseCampaign, useResumeCampaign,
+  useCancelCampaign,
 } from '@/shared/hooks/useCampaigns'
 import { usePermissions } from '@/shared/hooks/usePermissions'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
@@ -32,7 +33,11 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   Paused:     { label: 'Pausada',    className: 'bg-orange-100 text-orange-700' },
   Completed:  { label: 'Completada', className: 'bg-blue-100 text-blue-700' },
   Failed:     { label: 'Error',      className: 'bg-red-100 text-red-700' },
+  Cancelled:  { label: 'Cancelada',  className: 'bg-gray-200 text-gray-600 line-through' },
 }
+
+// Estados desde los que se puede CANCELAR (terminal — irreversible).
+const CANCELLABLE_STATUSES = new Set(['Pending', 'Running', 'Paused', 'Launching'])
 
 export function CampaignsPage() {
   const { hasPermission } = usePermissions()
@@ -42,11 +47,13 @@ export function CampaignsPage() {
   const launchMutation = useLaunchCampaign()
   const pauseMutation = usePauseCampaign()
   const resumeMutation = useResumeCampaign()
+  const cancelMutation = useCancelCampaign()
   const tt = useTenantTime()
   const { toasts, remove, toast } = useToast()
   const [launchError, setLaunchError] = useState<string | null>(null)
   const [launchingId, setLaunchingId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
 
   const handlePause = async (campaignId: string, name: string) => {
     const ok = await confirmDialog({
@@ -83,6 +90,31 @@ export function CampaignsPage() {
       toast.error(e.response?.data?.error ?? e.message ?? 'No se pudo reanudar.')
     } finally {
       setTogglingId(null)
+    }
+  }
+
+  const handleCancel = async (campaignId: string, name: string) => {
+    const ok = await confirmDialog({
+      title: '¿Cancelar campaña?',
+      description:
+        `Vas a CANCELAR la campaña "${name}". Esta acción es IRREVERSIBLE:\n\n` +
+        `• Los contactos pendientes pasarán a "Descartado".\n` +
+        `• Los mensajes ya enviados NO se eliminan.\n` +
+        `• Las conversaciones abiertas con clientes siguen activas — el agente los seguirá atendiendo.\n` +
+        `• La campaña no se podrá reanudar después.`,
+      confirmLabel: 'Sí, cancelar definitivamente',
+      variant: 'danger',
+    })
+    if (!ok) return
+    setCancellingId(campaignId)
+    try {
+      const r = await cancelMutation.mutateAsync(campaignId)
+      toast.success(r.message ?? 'Campaña cancelada.')
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } }; message?: string }
+      toast.error(e.response?.data?.error ?? e.message ?? 'No se pudo cancelar.')
+    } finally {
+      setCancellingId(null)
     }
   }
 
@@ -148,14 +180,14 @@ export function CampaignsPage() {
   return (
     <div>
       <PageHeader
-        title="Campanas"
-        subtitle="Gestiona campanas de cobros, reclamos y renovaciones"
+        title="Campañas"
+        subtitle="Gestiona campañas de cobros, reclamos y renovaciones"
         action={canCreate ? (
           <Link
             to="/campaigns/new"
             className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
           >
-            <Plus className="h-4 w-4" /> Nueva campana
+            <Plus className="h-4 w-4" /> Nueva campaña
           </Link>
         ) : undefined}
       />
@@ -170,14 +202,14 @@ export function CampaignsPage() {
       {isError || !campaigns || campaigns.length === 0 ? (
         <EmptyState
           icon={Megaphone}
-          title="Sin campanas"
-          description="Crea tu primera campana subiendo un archivo de contactos"
+          title="Sin campañas"
+          description="Crea tu primera campaña subiendo un archivo de contactos"
           action={canCreate ? (
             <Link
               to="/campaigns/new"
               className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
             >
-              Crear campana
+              Crear campaña
             </Link>
           ) : undefined}
         />
@@ -261,7 +293,11 @@ export function CampaignsPage() {
                 ) : (
                   filtered.map((c) => {
                     const pct = c.totalContacts > 0 ? Math.round((c.processedContacts / c.totalContacts) * 100) : 0
-                    const status = c.status ?? (c.completedAt ? 'Completed' : c.isActive ? 'Running' : 'Pending')
+                    let status = c.status ?? (c.completedAt ? 'Completed' : c.isActive ? 'Running' : 'Pending')
+                    // Una campaña "Running" + IsActive=false equivale visualmente a "Pausada":
+                    // el endpoint /pause solo cambia IsActive y deja Status. Reflejarlo en el
+                    // badge para que sea coherente con el botón ▶ Reanudar que aparece.
+                    if (status === 'Running' && !c.isActive) status = 'Paused'
                     const stCfg = statusConfig[status] ?? statusConfig.Pending
                     const isRunning = status === 'Running' || status === 'Launching'
                     const isLaunchable = LAUNCHABLE_STATUSES.has(status)
@@ -338,6 +374,20 @@ export function CampaignsPage() {
                                 {togglingId === c.id
                                   ? <Loader2 className="h-4 w-4 animate-spin" />
                                   : <Play className="h-4 w-4" />}
+                              </button>
+                            )}
+
+                            {/* Cancelar — IRREVERSIBLE. Solo aplica a estados no-terminales. */}
+                            {canLaunch && CANCELLABLE_STATUSES.has(status) && (
+                              <button
+                                onClick={() => handleCancel(c.id, c.name)}
+                                disabled={cancellingId === c.id}
+                                title={`Cancelar "${c.name}" (irreversible)`}
+                                className="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 transition-colors"
+                              >
+                                {cancellingId === c.id
+                                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                                  : <Ban className="h-4 w-4" />}
                               </button>
                             )}
 

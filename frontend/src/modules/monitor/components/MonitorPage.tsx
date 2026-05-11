@@ -71,7 +71,7 @@ export function MonitorPage() {
               <MessageSquare className="h-16 w-16 text-[#5b7fdb]" />
             </div>
             <h2 className="text-2xl font-light text-gray-500">TalkIA Monitor</h2>
-            <p className="text-sm text-gray-400">Selecciona una conversacion para ver el historial</p>
+            <p className="text-sm text-gray-400">Selecciona una conversación para ver el historial</p>
           </div>
         )}
       </main>

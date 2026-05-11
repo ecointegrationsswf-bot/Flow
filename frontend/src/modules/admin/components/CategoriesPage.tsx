@@ -70,7 +70,7 @@ export function CategoriesPage() {
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-          placeholder="Nueva categoria..."
+          placeholder="Nueva categoría..."
           className="w-64 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
         />
         <button

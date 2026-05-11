@@ -109,7 +109,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
     <div>
       <h2 className="mb-4 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
       <p className="mb-3 text-xs text-gray-500">
-        Sube archivos PDF que el agente usara como contexto para responder en esta campana. Maximo 10 MB por archivo · 5 documentos · 20 MB totales.
+        Sube archivos PDF que el agente usara como contexto para responder en esta campaña. Maximo 10 MB por archivo · 5 documentos · 20 MB totales.
       </p>
 
       {/* Banner de estado del feature flag */}
@@ -155,7 +155,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
         >
           <Upload className="h-8 w-8 text-gray-400" />
           <p className="text-sm text-gray-600">
-            Arrastra archivos PDF aqui o <span className="font-medium text-blue-600">selecciona</span>
+            Arrastra archivos PDF aquí o <span className="font-medium text-blue-600">selecciona</span>
           </p>
           <p className="text-xs text-gray-400">Solo archivos PDF, maximo 10 MB</p>
           <input
@@ -388,7 +388,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
         </ul>
       ) : (
         <p className="mt-4 text-center text-xs text-gray-400">
-          No hay documentos asociados a este maestro de campana.
+          No hay documentos asociados a este maestro de campaña.
         </p>
       )}
 
@@ -425,7 +425,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
           })
         }}
         title="Eliminar documento"
-        description={`Se eliminara permanentemente "${deleteTarget?.name}". Esta accion no se puede deshacer.`}
+        description={`Se eliminara permanentemente "${deleteTarget?.name}". Esta acción no se puede deshacer.`}
         confirmLabel="Eliminar"
         variant="danger"
       />

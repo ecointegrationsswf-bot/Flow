@@ -108,7 +108,7 @@ function AdminUserFormModal({ user, onClose }: { user?: AdminUser; onClose: () =
 
           <div>
             <label className="block text-sm font-medium text-gray-700">
-              Contrasena {isEdit ? '(dejar vacio para no cambiar)' : '*'}
+              Contraseña {isEdit ? '(dejar vacio para no cambiar)' : '*'}
             </label>
             <div className="relative mt-1">
               <input

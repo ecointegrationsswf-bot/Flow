@@ -7,5 +7,6 @@ public enum CampaignStatus
     Running,    // n8n procesando contactos
     Paused,     // Pausada manualmente
     Completed,  // Todos los contactos procesados
-    Failed      // Error al disparar n8n u otro fallo crítico
+    Failed,     // Error al disparar n8n u otro fallo crítico
+    Cancelled   // Cancelada manualmente — IRREVERSIBLE. Los contactos pendientes pasan a Skipped.
 }

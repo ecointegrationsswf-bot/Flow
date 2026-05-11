@@ -54,7 +54,7 @@ export function FileDropZone({ accept, onFileSelect, selectedFile, onClear }: Fi
     >
       <Upload className="mx-auto h-8 w-8 text-gray-400" />
       <p className="mt-2 text-sm font-medium text-gray-700">
-        Arrastra tu archivo aqui o haz clic para seleccionar
+        Arrastra tu archivo aquí o haz clic para seleccionar
       </p>
       <p className="mt-1 text-xs text-gray-500">CSV, Excel (.xlsx, .xls)</p>
       <input

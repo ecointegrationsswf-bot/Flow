@@ -529,7 +529,7 @@ export function UsersTab() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
         title="Eliminar usuario"
-        description={`Se eliminara permanentemente a "${deleteTarget?.fullName}". Esta accion no se puede deshacer.`}
+        description={`Se eliminara permanentemente a "${deleteTarget?.fullName}". Esta acción no se puede deshacer.`}
         confirmLabel="Eliminar"
         variant="danger"
       />

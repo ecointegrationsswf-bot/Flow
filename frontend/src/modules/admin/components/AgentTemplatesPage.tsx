@@ -20,7 +20,7 @@ export function AgentTemplatesPage() {
   const grouped = useMemo(() => {
     if (!templates) return {}
     return templates.reduce<Record<string, AgentTemplate[]>>((acc, t) => {
-      const cat = t.category || 'Sin categoria'
+      const cat = t.category || 'Sin categoría'
       if (!acc[cat]) acc[cat] = []
       acc[cat].push(t)
       return acc

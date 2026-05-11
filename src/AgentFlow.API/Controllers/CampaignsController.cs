@@ -196,6 +196,65 @@ public class CampaignsController(
     }
 
     /// <summary>
+    /// Cancela una campaña de forma IRREVERSIBLE. A diferencia de Pause/Resume,
+    /// Cancel marca la campaña como terminada definitivamente y descarta todos
+    /// los contactos pendientes — el operativo no la podrá reanudar después.
+    ///
+    /// Comportamiento por estado del contacto:
+    /// - Pending/Queued/Deferred/Retry → Skipped (con DispatchError = "Campaña cancelada")
+    /// - Claimed → se respeta el envío en curso (no se interrumpe HTTP a UltraMsg)
+    /// - Sent/Skipped/Duplicate/Error → no se tocan
+    ///
+    /// NO cierra conversaciones abiertas: los clientes que ya recibieron el
+    /// mensaje siguen siendo gestionados por el agente conversacional.
+    /// </summary>
+    [HttpPost("{id:guid}/cancel")]
+    public async Task<IActionResult> CancelCampaign(Guid id, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var campaign = await campaignRepo.GetByIdAsync(id, tenantId, ct);
+        if (campaign is null)
+            return NotFound(new { error = "Campaña no encontrada." });
+
+        if (campaign.Status is CampaignStatus.Completed
+                            or CampaignStatus.Failed
+                            or CampaignStatus.Cancelled)
+        {
+            return BadRequest(new
+            {
+                error = $"No se puede cancelar una campaña en estado {campaign.Status}.",
+            });
+        }
+
+        // Marcar como Skipped los contactos pendientes (Pending, Queued, Deferred, Retry).
+        // Claimed NO se toca: hay un envío HTTP en curso y abortarlo a mitad
+        // genera inconsistencia. Cuando termine quedará Sent o Error y ya no
+        // procesará nada más porque IsActive=false.
+        var skippedCount = await db.CampaignContacts
+            .Where(cc => cc.CampaignId == id
+                      && (cc.DispatchStatus == DispatchStatus.Pending
+                       || cc.DispatchStatus == DispatchStatus.Queued
+                       || cc.DispatchStatus == DispatchStatus.Deferred
+                       || cc.DispatchStatus == DispatchStatus.Retry))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(cc => cc.DispatchStatus, DispatchStatus.Skipped)
+                .SetProperty(cc => cc.DispatchError, "Campaña cancelada"),
+                ct);
+
+        campaign.Status = CampaignStatus.Cancelled;
+        campaign.IsActive = false;
+        if (campaign.CompletedAt is null)
+            campaign.CompletedAt = DateTime.UtcNow;
+        await campaignRepo.UpdateAsync(campaign, ct);
+
+        return Ok(new
+        {
+            message = $"Campaña cancelada. {skippedCount} contactos pendientes marcados como descartados.",
+            skippedCount,
+        });
+    }
+
+    /// <summary>
     /// Lista paginada de contactos de una campaña con su estado de despacho.
     /// Usado por la pantalla de detalle de contactos en el portal del tenant.
     ///

@@ -63,8 +63,8 @@ export function CampaignTemplatesPage() {
     <div>
       <div className="mb-6 flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Maestro de Campanas</h1>
-          <p className="text-sm text-gray-500">Define las reglas y configuracion de tus campanas</p>
+          <h1 className="text-2xl font-bold text-gray-900">Maestro de Campañas</h1>
+          <p className="text-sm text-gray-500">Define las reglas y configuración de tus campañas</p>
         </div>
         {canEdit && (
           <button
@@ -87,8 +87,8 @@ export function CampaignTemplatesPage() {
       ) : !templates?.length ? (
         <div className="py-16 text-center">
           <ClipboardList className="mx-auto h-12 w-12 text-gray-300" />
-          <h3 className="mt-2 text-sm font-semibold text-gray-900">Sin maestros de campana</h3>
-          <p className="mt-1 text-sm text-gray-500">Crea tu primer maestro para definir las reglas de tus campanas.</p>
+          <h3 className="mt-2 text-sm font-semibold text-gray-900">Sin maestros de campaña</h3>
+          <p className="mt-1 text-sm text-gray-500">Crea tu primer maestro para definir las reglas de tus campañas.</p>
         </div>
       ) : (
         <div className="space-y-4">

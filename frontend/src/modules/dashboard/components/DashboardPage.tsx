@@ -1,7 +1,9 @@
-import { MessageSquare, Bot, Megaphone, AlertTriangle } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { MessageSquare, Bot, Megaphone, AlertTriangle, FileText } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { StatCard } from './StatCard'
+import { LabelingDistributionCard } from './LabelingDistributionCard'
 import { useDashboardStats } from '@/shared/hooks/useDashboard'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
@@ -21,7 +23,19 @@ export function DashboardPage() {
 
   return (
     <div>
-      <PageHeader title="Dashboard" subtitle="Resumen de actividad" />
+      <PageHeader
+        title="Dashboard"
+        subtitle="Resumen de actividad"
+        action={
+          <Link
+            to="/dashboard/management-report"
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+          >
+            <FileText className="h-4 w-4" />
+            Informe gerencial
+          </Link>
+        }
+      />
 
       {/* KPI Cards */}
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
@@ -38,7 +52,7 @@ export function DashboardPage() {
           accentColor="bg-green-100 text-green-600"
         />
         <StatCard
-          title="Campanas activas"
+          title="Campañas activas"
           value={stats?.activeCampaigns ?? 0}
           icon={Megaphone}
           accentColor="bg-amber-100 text-amber-600"
@@ -51,10 +65,15 @@ export function DashboardPage() {
         />
       </div>
 
+      {/* Distribución de etiquetas IA (filtrable por mes/año) */}
+      <div className="mt-6">
+        <LabelingDistributionCard />
+      </div>
+
       <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* Gestion por resultado */}
+        {/* Gestión por resultado */}
         <div className="rounded-lg bg-white p-5 shadow-sm">
-          <h3 className="mb-4 text-sm font-semibold text-gray-900">Gestion por resultado</h3>
+          <h3 className="mb-4 text-sm font-semibold text-gray-900">Gestión por resultado</h3>
           {stats && Object.keys(stats.gestionByResult).length > 0 ? (
             <div className="space-y-3">
               {Object.entries(stats.gestionByResult).map(([key, count]) => (
@@ -65,7 +84,7 @@ export function DashboardPage() {
               ))}
             </div>
           ) : (
-            <p className="text-sm text-gray-400">Sin datos de gestion disponibles</p>
+            <p className="text-sm text-gray-400">Sin datos de gestión disponibles</p>
           )}
         </div>
 

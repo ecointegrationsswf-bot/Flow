@@ -10,7 +10,7 @@ const FRIENDLY_NAMES: Record<string, string> = {
   'SEND_MESSAGE': 'Enviar mensaje',
   'SEND_RESUME': 'Enviar resumen',
   'PREMIUM': 'Premium',
-  'CLOSE_CONVERSATION': 'Cerrar conversacion',
+  'CLOSE_CONVERSATION': 'Cerrar conversación',
   'ESCALATE_TO_HUMAN': 'Escalar a ejecutivo',
   'SEND_PAYMENT_LINK': 'Enviar enlace de pago',
   'SEND_DOCUMENT': 'Enviar documento',
@@ -55,7 +55,7 @@ export function TenantActionsPage() {
       <div className="mb-6">
         <h1 className="text-xl font-bold text-gray-900">Acciones</h1>
         <p className="text-sm text-gray-500">
-          Configura el webhook default de cada accion. Todos los maestros de campana que usen la accion heredan esta configuracion automaticamente.
+          Configura el webhook default de cada acción. Todos los maestros de campaña que usen la acción heredan esta configuración automáticamente.
         </p>
       </div>
 
@@ -157,7 +157,7 @@ function ActionCard({ action, onConfigure, isSaving, justSaved }: {
 
       {justSaved && (
         <div className="mt-3 rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-xs text-green-700">
-          Contrato guardado. Todos los maestros que usen esta accion lo heredan automaticamente.
+          Contrato guardado. Todos los maestros que usen esta acción lo heredan automáticamente.
         </div>
       )}
     </div>

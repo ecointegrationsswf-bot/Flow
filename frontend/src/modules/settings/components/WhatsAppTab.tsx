@@ -137,7 +137,7 @@ function LineCard({
               onClick={() => setShowLogout(true)}
               disabled={logoutMutation.isPending}
               className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 disabled:opacity-50 transition-colors"
-              title="Cerrar sesion"
+              title="Cerrar sesión"
             >
               <LogOut className="h-4 w-4" />
             </button>
@@ -172,9 +172,9 @@ function LineCard({
           open={showLogout}
           onClose={() => setShowLogout(false)}
           onConfirm={() => { logoutMutation.mutate(line.id); setShowLogout(false) }}
-          title="Cerrar sesion de WhatsApp"
-          description={`Se cerrara la sesion de "${line.displayName}" y necesitaras escanear un nuevo QR.`}
-          confirmLabel="Cerrar sesion"
+          title="Cerrar sesión de WhatsApp"
+          description={`Se cerrara la sesión de "${line.displayName}" y necesitaras escanear un nuevo QR.`}
+          confirmLabel="Cerrar sesión"
           variant="danger"
         />
       </div>
@@ -236,7 +236,7 @@ function QrModal({ lineId, onClose }: { lineId: string; onClose: () => void }) {
                 Menu → Dispositivos vinculados → Vincular dispositivo
               </p>
               <p className="mt-2 text-xs text-gray-400">
-                El QR se actualiza automaticamente
+                El QR se actualiza automáticamente
               </p>
             </div>
           )}
@@ -270,7 +270,7 @@ function TestMessageModal({ lineId, onClose }: { lineId: string; onClose: () => 
         </div>
         <div className="space-y-3">
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Numero destino (con codigo de pais)</label>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Número destino (con código de pais)</label>
             <input
               type="text"
               value={to}
@@ -300,7 +300,7 @@ function TestMessageModal({ lineId, onClose }: { lineId: string; onClose: () => 
             <p className="text-sm text-green-600 text-center">Mensaje enviado exitosamente.</p>
           )}
           {sendTest.isError && (
-            <p className="text-sm text-red-600 text-center">Error al enviar el mensaje. Verifica el numero y la conexion.</p>
+            <p className="text-sm text-red-600 text-center">Error al enviar el mensaje. Verifica el número y la conexion.</p>
           )}
         </div>
       </div>
@@ -428,14 +428,14 @@ export function WhatsAppTab() {
             </div>
             <div>
               <input
-                placeholder="Telefono (ej: +50760001234)"
+                placeholder="Teléfono (ej: +50760001234)"
                 {...createForm.register('phoneNumber')}
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
               />
             </div>
             <div>
               <input
-                placeholder="ID de Instancia (solo el numero, ej: 140984)"
+                placeholder="ID de Instancia (solo el número, ej: 140984)"
                 {...createForm.register('instanceId')}
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
               />
@@ -494,7 +494,7 @@ export function WhatsAppTab() {
               )}
             </div>
             <input
-              placeholder="Telefono"
+              placeholder="Teléfono"
               {...editForm.register('phoneNumber')}
               className="rounded-md border border-gray-300 px-3 py-2 text-sm"
             />
@@ -562,7 +562,7 @@ export function WhatsAppTab() {
         <EmptyState
           icon={Phone}
           title="Sin lineas de WhatsApp"
-          description="Agrega una linea para vincular un numero de WhatsApp con UltraMsg"
+          description="Agrega una linea para vincular un número de WhatsApp con UltraMsg"
         />
       )}
 
@@ -578,7 +578,7 @@ export function WhatsAppTab() {
         onClose={() => setDeleteTarget(null)}
         onConfirm={handleDelete}
         title="Eliminar linea"
-        description={`Se eliminara la linea "${deleteTarget?.displayName}". Los agentes que usen este numero dejaran de funcionar.`}
+        description={`Se eliminara la linea "${deleteTarget?.displayName}". Los agentes que usen este número dejaran de funcionar.`}
         confirmLabel="Eliminar"
         variant="danger"
       />

@@ -124,7 +124,7 @@ export function TenantSettingsTab() {
   if (error || !tenant) {
     return (
       <div className="rounded-lg bg-red-50 p-4 text-sm text-red-600">
-        Error al cargar la informacion del tenant.
+        Error al cargar la información del tenant.
       </div>
     )
   }
@@ -135,7 +135,7 @@ export function TenantSettingsTab() {
     <div className="space-y-6">
       {/* Info del tenant */}
       <div className="rounded-lg bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold text-gray-900">Informacion del tenant</h3>
+        <h3 className="mb-4 text-sm font-semibold text-gray-900">Información del tenant</h3>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -155,7 +155,7 @@ export function TenantSettingsTab() {
               <p className="mt-1 text-sm text-gray-900">{tenant.whatsAppProvider}</p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500">Telefono WhatsApp</label>
+              <label className="block text-xs font-medium text-gray-500">Teléfono WhatsApp</label>
               <p className="mt-1 text-sm text-gray-900">{tenant.whatsAppPhoneNumber || '—'}</p>
             </div>
             <div>
@@ -209,7 +209,7 @@ export function TenantSettingsTab() {
       <div className="rounded-lg bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center gap-2">
           <Brain className="h-4 w-4 text-purple-600" />
-          <h3 className="text-sm font-semibold text-gray-900">Configuracion del modelo de IA (LLM)</h3>
+          <h3 className="text-sm font-semibold text-gray-900">Configuración del modelo de IA (LLM)</h3>
         </div>
         <p className="mb-4 text-xs text-gray-500">
           Selecciona el proveedor de inteligencia artificial y el modelo que usaran los agentes de este tenant para responder mensajes.
@@ -258,13 +258,13 @@ export function TenantSettingsTab() {
             className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 transition-colors"
           >
             {updateLlm.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {updateLlm.isPending ? 'Guardando...' : 'Guardar configuracion LLM'}
+            {updateLlm.isPending ? 'Guardando...' : 'Guardar configuración LLM'}
           </button>
           {updateLlm.isSuccess && (
-            <p className="mt-2 text-sm text-green-600">Configuracion de LLM actualizada correctamente.</p>
+            <p className="mt-2 text-sm text-green-600">Configuración de LLM actualizada correctamente.</p>
           )}
           {updateLlm.isError && (
-            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuracion de LLM.</p>
+            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuración de LLM.</p>
           )}
         </div>
       </div>
@@ -326,10 +326,10 @@ export function TenantSettingsTab() {
       <div className="rounded-lg bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center gap-2">
           <Mail className="h-4 w-4 text-blue-600" />
-          <h3 className="text-sm font-semibold text-gray-900">Configuracion de Email (SendGrid)</h3>
+          <h3 className="text-sm font-semibold text-gray-900">Configuración de Email (SendGrid)</h3>
         </div>
         <p className="mb-4 text-xs text-gray-500">
-          Configura el token de SendGrid y la cuenta de correo para el envio de emails desde las campanas de este tenant.
+          Configura el token de SendGrid y la cuenta de correo para el envío de emails desde las campañas de este tenant.
         </p>
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -361,13 +361,13 @@ export function TenantSettingsTab() {
             className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             {updateSendGrid.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {updateSendGrid.isPending ? 'Guardando...' : 'Guardar configuracion'}
+            {updateSendGrid.isPending ? 'Guardando...' : 'Guardar configuración'}
           </button>
           {updateSendGrid.isSuccess && (
-            <p className="mt-2 text-sm text-green-600">Configuracion actualizada correctamente.</p>
+            <p className="mt-2 text-sm text-green-600">Configuración actualizada correctamente.</p>
           )}
           {updateSendGrid.isError && (
-            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuracion.</p>
+            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuración.</p>
           )}
         </div>
       </div>
@@ -404,7 +404,7 @@ export function TenantSettingsTab() {
           <p className="mt-2 text-sm text-red-600">{(updateBrain.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
         )}
         {updateBrain.isSuccess && (
-          <p className="mt-2 text-sm text-green-600">Configuracion del Cerebro actualizada.</p>
+          <p className="mt-2 text-sm text-green-600">Configuración del Cerebro actualizada.</p>
         )}
       </div>
 
@@ -419,8 +419,8 @@ export function TenantSettingsTab() {
           <div>
             <p className="text-sm font-medium text-gray-800">Activar Webhook Contract y Action Trigger Protocol</p>
             <p className="text-xs text-gray-500 mt-1 max-w-md">
-              Cuando esta activo, las acciones configuradas en los maestros de campana pueden ejecutar
-              webhooks externos y el agente IA puede disparar acciones automaticamente durante las conversaciones.
+              Cuando esta activo, las acciones configuradas en los maestros de campaña pueden ejecutar
+              webhooks externos y el agente IA puede disparar acciones automáticamente durante las conversaciones.
             </p>
           </div>
           <button
@@ -440,7 +440,7 @@ export function TenantSettingsTab() {
           <p className="mt-2 text-sm text-red-600">{(updateWebhookContract.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
         )}
         {updateWebhookContract.isSuccess && (
-          <p className="mt-2 text-sm text-green-600">Configuracion de Webhook Contract actualizada.</p>
+          <p className="mt-2 text-sm text-green-600">Configuración de Webhook Contract actualizada.</p>
         )}
       </div>
 
@@ -478,7 +478,7 @@ export function TenantSettingsTab() {
           <p className="mt-2 text-sm text-red-600">{(updateReferenceDocs.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
         )}
         {updateReferenceDocs.isSuccess && (
-          <p className="mt-2 text-sm text-green-600">Configuracion de Documentos de Referencia actualizada.</p>
+          <p className="mt-2 text-sm text-green-600">Configuración de Documentos de Referencia actualizada.</p>
         )}
       </div>
     </div>

@@ -356,7 +356,7 @@ export function CampaignTemplateFormPage() {
         else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.emailAddress.trim())) { actionErrors.emailAddress = 'Correo invalido'; valid = false }
       }
       if (action.sendsSms) {
-        if (!config.smsPhoneNumber?.trim()) { actionErrors.smsPhoneNumber = 'El numero es obligatorio'; valid = false }
+        if (!config.smsPhoneNumber?.trim()) { actionErrors.smsPhoneNumber = 'El número es obligatorio'; valid = false }
       }
 
       if (Object.keys(actionErrors).length > 0) {
@@ -438,7 +438,7 @@ export function CampaignTemplateFormPage() {
   return (
     <div className="mx-auto max-w-3xl">
       <div className="mb-4 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">{isEdit ? 'Editar Maestro' : 'Nuevo Maestro de Campana'}</h1>
+        <h1 className="text-2xl font-bold text-gray-900">{isEdit ? 'Editar Maestro' : 'Nuevo Maestro de Campaña'}</h1>
         <button onClick={() => navigate('/campaign-templates')} className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900">
           <ArrowLeft className="h-4 w-4" /> Volver
         </button>
@@ -501,9 +501,9 @@ export function CampaignTemplateFormPage() {
           </div>
         </section>
 
-        {/* Seccion 2: Horario de envio */}
+        {/* Seccion 2: Horario de envío */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Horario de envio</h2>
+          <h2 className="mb-4 text-sm font-semibold text-gray-900">Horario de envío</h2>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">Enviar desde</label>
@@ -582,7 +582,7 @@ export function CampaignTemplateFormPage() {
         <section className="rounded-lg bg-white p-5 shadow-sm">
           <h2 className="mb-1 text-sm font-semibold text-gray-900">Seguimientos automaticos</h2>
           <p className="mb-3 text-xs text-gray-500">
-            Define los intervalos en horas despues del primer contacto. Cada intervalo puede tener su propio mensaje.
+            Define los intervalos en horas después del primer contacto. Cada intervalo puede tener su propio mensaje.
             Variables disponibles: <code className="rounded bg-gray-100 px-1 text-[11px]">{'{nombre}'}</code>{' '}
             <code className="rounded bg-gray-100 px-1 text-[11px]">{'{poliza}'}</code>{' '}
             <code className="rounded bg-gray-100 px-1 text-[11px]">{'{aseguradora}'}</code>{' '}
@@ -635,22 +635,22 @@ export function CampaignTemplateFormPage() {
           )}
         </section>
 
-        {/* Seccion 3: Cierre automatico */}
+        {/* Seccion 3: Cierre automático */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Cierre automatico</h2>
+          <h2 className="mb-4 text-sm font-semibold text-gray-900">Cierre automático</h2>
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-gray-700">Cerrar campana despues de (horas)</label>
+              <label className="block text-sm font-medium text-gray-700">Cerrar campaña después de (horas)</label>
               <input type="number" {...register('autoCloseHours')} min={1} max={720} className={inputClass} />
               {errors.autoCloseHours && <p className="mt-1 text-xs text-red-600">{errors.autoCloseHours.message}</p>}
-              <p className="mt-1 text-xs text-gray-500">Horas despues de enviada la campana para cerrar automaticamente.</p>
+              <p className="mt-1 text-xs text-gray-500">Horas después de enviada la campaña para cerrar automáticamente.</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700">Mensaje al cerrar (opcional)</label>
               <textarea
                 {...register('autoCloseMessage')}
                 rows={3}
-                placeholder='Ej: "Cerramos esta gestion por inactividad. Si necesitas algo escribenos."'
+                placeholder='Ej: "Cerramos esta gestión por inactividad. Si necesitas algo escribenos."'
                 className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               <p className="mt-1 text-xs text-gray-500">Vacio = cierra sin enviar mensaje al cliente.</p>
@@ -662,14 +662,14 @@ export function CampaignTemplateFormPage() {
         {tenant?.brainEnabled && (
           <section className="rounded-lg bg-white p-5 shadow-sm">
             <h2 className="mb-4 text-sm font-semibold text-gray-900">Comportamiento del Cerebro ante desvios</h2>
-            <p className="mb-3 text-xs text-gray-500">Define que hace el Cerebro cuando el cliente habla de algo fuera del contexto de esta campana.</p>
+            <p className="mb-3 text-xs text-gray-500">Define que hace el Cerebro cuando el cliente habla de algo fuera del contexto de esta campaña.</p>
             <div className="max-w-xs">
               <select
                 value={outOfContextPolicy}
                 onChange={(e) => setOutOfContextPolicy(e.target.value)}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
               >
-                <option value="Contain">Contener — el agente de esta campana gestiona todo</option>
+                <option value="Contain">Contener — el agente de esta campaña gestiona todo</option>
                 <option value="Transfer">Transferir — el Cerebro ruta al agente mas adecuado</option>
               </select>
             </div>
@@ -687,7 +687,7 @@ export function CampaignTemplateFormPage() {
             {activeTab === 'labels' && (
         <div>
           <h2 className="mb-4 text-sm font-semibold text-gray-900">Etiquetas de seguimiento</h2>
-          <p className="mb-3 text-xs text-gray-500">Selecciona las etiquetas que se usaran para clasificar los resultados de la campana.</p>
+          <p className="mb-3 text-xs text-gray-500">Selecciona las etiquetas que se usaran para clasificar los resultados de la campaña.</p>
           {loadingLabels ? (
             <p className="text-xs text-gray-400">Cargando etiquetas...</p>
           ) : !labels?.length ? (
@@ -793,7 +793,7 @@ export function CampaignTemplateFormPage() {
                         {action.requiresWebhook && (
                           <div className="space-y-3">
                             <div className="flex items-center gap-1.5 text-xs font-semibold text-purple-700 uppercase tracking-wider">
-                              <Webhook className="h-3.5 w-3.5" /> Configuracion de Webhook
+                              <Webhook className="h-3.5 w-3.5" /> Configuración de Webhook
                             </div>
                             <div className="grid grid-cols-3 gap-3">
                               <div className="col-span-2">
@@ -853,7 +853,7 @@ export function CampaignTemplateFormPage() {
                                 <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-purple-50 border border-purple-200 px-3 py-2 text-[11px] text-purple-800">
                                   <Webhook className="h-3.5 w-3.5 flex-shrink-0" />
                                   <span>
-                                    <strong>Hereda contrato default</strong> de la accion. Si necesitas configuracion diferente para este maestro, usa el boton de abajo.
+                                    <strong>Hereda contrato default</strong> de la acción. Si necesitas configuración diferente para este maestro, usa el boton de abajo.
                                   </span>
                                 </div>
                               )}
@@ -874,8 +874,8 @@ export function CampaignTemplateFormPage() {
                               </button>
                               <p className="mt-1 text-[10px] text-gray-500">
                                 {(config.inputSchema || config.outputSchema)
-                                  ? 'Este maestro tiene su propia configuracion de webhook (override del default de la accion).'
-                                  : 'Define un contrato especifico para este maestro. Si no lo configuras, se usa el default de la accion.'}
+                                  ? 'Este maestro tiene su propia configuración de webhook (override del default de la acción).'
+                                  : 'Define un contrato especifico para este maestro. Si no lo configuras, se usa el default de la acción.'}
                               </p>
                             </div>
                           </div>
@@ -885,7 +885,7 @@ export function CampaignTemplateFormPage() {
                         {action.sendsEmail && (
                           <div className="space-y-2">
                             <div className="flex items-center gap-1.5 text-xs font-semibold text-green-700 uppercase tracking-wider">
-                              <Mail className="h-3.5 w-3.5" /> Configuracion de Email
+                              <Mail className="h-3.5 w-3.5" /> Configuración de Email
                             </div>
                             <div>
                               <label className="mb-1 block text-xs font-medium text-gray-600">Correo electronico *</label>
@@ -905,10 +905,10 @@ export function CampaignTemplateFormPage() {
                         {action.sendsSms && (
                           <div className="space-y-2">
                             <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 uppercase tracking-wider">
-                              <MessageSquare className="h-3.5 w-3.5" /> Configuracion de SMS
+                              <MessageSquare className="h-3.5 w-3.5" /> Configuración de SMS
                             </div>
                             <div>
-                              <label className="mb-1 block text-xs font-medium text-gray-600">Numero de telefono *</label>
+                              <label className="mb-1 block text-xs font-medium text-gray-600">Número de teléfono *</label>
                               <div className="flex gap-2 mt-1">
                                 <select
                                   value={(() => {
@@ -963,7 +963,7 @@ export function CampaignTemplateFormPage() {
                 )
               })}
               {selectedActionIds.length > 0 && (
-                <p className="mt-2 text-xs text-amber-600">{selectedActionIds.length} accion{selectedActionIds.length > 1 ? 'es' : ''} vinculada{selectedActionIds.length > 1 ? 's' : ''}</p>
+                <p className="mt-2 text-xs text-amber-600">{selectedActionIds.length} acción{selectedActionIds.length > 1 ? 'es' : ''} vinculada{selectedActionIds.length > 1 ? 's' : ''}</p>
               )}
             </div>
           )}

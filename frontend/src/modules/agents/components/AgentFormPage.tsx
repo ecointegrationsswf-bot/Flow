@@ -163,7 +163,7 @@ export function AgentFormPage() {
                   </option>
                 ))}
               </select>
-              <p className="mt-1 text-xs text-gray-500">El numero de WhatsApp que usara este agente para enviar mensajes</p>
+              <p className="mt-1 text-xs text-gray-500">El número de WhatsApp que usara este agente para enviar mensajes</p>
             </div>
           </div>
         </section>

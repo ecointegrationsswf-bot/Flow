@@ -18,7 +18,7 @@ export function SettingsPage() {
 
   return (
     <div>
-      <PageHeader title="Configuracion" subtitle="Usuarios y canal de WhatsApp" />
+      <PageHeader title="Configuración" subtitle="Usuarios y canal de WhatsApp" />
 
       {/* Tabs */}
       <div className="mb-6 border-b border-gray-200">

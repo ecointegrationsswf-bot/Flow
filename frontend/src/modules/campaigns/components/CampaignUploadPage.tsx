@@ -13,7 +13,7 @@ import { FileDropZone } from './FileDropZone'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 const STEPS = [
-  { number: 1, label: 'Configuracion' },
+  { number: 1, label: 'Configuración' },
   { number: 2, label: 'Confirmacion' },
 ]
 
@@ -222,7 +222,7 @@ export function CampaignUploadPage() {
 
   const handleStep1Submit = () => {
     if (!file || !selectedTemplateId || !selectedTemplate) {
-      setError('Selecciona un maestro de campana y un archivo.')
+      setError('Selecciona un maestro de campaña y un archivo.')
       return
     }
     setError(null)
@@ -268,7 +268,7 @@ export function CampaignUploadPage() {
 
       <div className="mx-auto max-w-3xl">
         <PageHeader
-          title="Nueva campana"
+          title="Nueva campaña"
           action={
             <button
               onClick={() => navigate('/campaigns')}
@@ -298,14 +298,14 @@ export function CampaignUploadPage() {
 
         {error && <div className="mb-4 rounded-md bg-red-50 p-3 text-center text-sm text-red-600">{error}</div>}
 
-        {/* Step 1: Configuracion */}
+        {/* Step 1: Configuración */}
         {step === 1 && (
           <div className="space-y-6">
             <section className="rounded-lg bg-white p-5 shadow-sm">
-              <h2 className="mb-4 text-sm font-semibold text-gray-900">Configuracion</h2>
+              <h2 className="mb-4 text-sm font-semibold text-gray-900">Configuración</h2>
               <div className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700">Maestro de campana *</label>
+                  <label className="block text-sm font-medium text-gray-700">Maestro de campaña *</label>
                   <select value={selectedTemplateId} onChange={(e) => setSelectedTemplateId(e.target.value)} className={inputClass}>
                     <option value="">-- Seleccionar maestro --</option>
                     {activeTemplates.map((t) => (
@@ -318,7 +318,7 @@ export function CampaignUploadPage() {
                   <div className="rounded-md bg-blue-50 p-3 text-xs text-blue-700 space-y-1">
                     <p>Agente: <strong>{selectedTemplate.agentName}</strong></p>
                     <p>Seguimientos: {selectedTemplate.followUpHours.length > 0 ? selectedTemplate.followUpHours.map((h) => `${h}h`).join(', ') : 'Ninguno'}</p>
-                    <p>Cierre automatico: {selectedTemplate.autoCloseHours}h</p>
+                    <p>Cierre automático: {selectedTemplate.autoCloseHours}h</p>
                     {selectedTemplate.sendEmail && <p>Email: {selectedTemplate.emailAddress}</p>}
                   </div>
                 )}
@@ -431,7 +431,7 @@ export function CampaignUploadPage() {
                 className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
               >
                 {createMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
-                {createMutation.isPending ? 'Creando...' : 'Crear campana'}
+                {createMutation.isPending ? 'Creando...' : 'Crear campaña'}
               </button>
             </div>
           </div>
