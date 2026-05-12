@@ -402,8 +402,11 @@ public class ProcessIncomingMessageHandler(
                     attentionEnd = campaignTemplate.AttentionEndTime;
                 }
 
-                // ── CEREBRO: sobreescribir SystemPrompt del agente con el del PromptTemplate ──
-                if (isBrainControlled && campaignTemplate is not null)
+                // ── Source of truth del prompt: SIEMPRE el CampaignTemplate asociado ──
+                // El AgentDefinition.SystemPrompt nunca se llena por UI (campo legacy).
+                // El único prompt válido es el del Maestro de Campaña al que el Cerebro
+                // (o la campaña activa) vinculó al agente.
+                if (campaignTemplate is not null)
                 {
                     if (!string.IsNullOrEmpty(campaignTemplate.SystemPrompt))
                     {
@@ -498,7 +501,30 @@ public class ProcessIncomingMessageHandler(
                 }
                 catch { /* si Redis falla, seguimos sin inyectar — retrocompat */ }
 
-                try
+                // ── GUARD: si el agente quedó sin prompt resoluble (sin Cerebro ni
+                // CampaignTemplate vinculado), NO procesamos con IA. Respondemos con
+                // mensaje canned + escalamos a humano para que el equipo atienda.
+                // AgentDefinition.SystemPrompt es legacy y nunca debe usarse como fallback.
+                if (string.IsNullOrWhiteSpace(agent.SystemPrompt))
+                {
+                    replyText = "Hola, recibimos tu mensaje 😊 En breve un asesor del equipo te atenderá.";
+                    agentResponse = new AgentResponse(
+                        ReplyText: replyText,
+                        DetectedIntent: "humano",
+                        ConfidenceScore: 1.0,
+                        ShouldEscalate: true,
+                        ShouldClose: false,
+                        TokensUsed: 0);
+                    conversation.Status = ConversationStatus.EscalatedToHuman;
+                    try { await transferChat.ExecuteIfApplicableAsync(conversation, ct); }
+                    catch (Exception exTc) { Console.WriteLine($"[Canned/TransferChat] {exTc.Message}"); }
+                    try { await notifier.NotifyEscalationAsync(cmd.TenantId.ToString(), conversation.Id); }
+                    catch { }
+                    logger.LogWarning(
+                        "Conv {ConvId} sin CampaignTemplate resoluble (sin Cerebro y sin CampaignId) — respuesta canned + escalada a humano. Tenant={TenantId}, Agent={AgentName}",
+                        conversation.Id, cmd.TenantId, agent.Name);
+                }
+                else try
                 {
                     // Action Trigger Protocol — Capa 2: carga el catálogo (bloque + diccionario
                     // slug→TriggerConfig) una sola vez. El bloque se inyecta al system prompt; el
