@@ -1,10 +1,12 @@
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
-import { useAgent, useCreateAgent, useUpdateAgent } from '@/shared/hooks/useAgents'
+import { useAgent, useAgents, useCreateAgent, useUpdateAgent } from '@/shared/hooks/useAgents'
+import { useTenant } from '@/shared/hooks/useTenant'
 import { useWhatsAppLines } from '@/shared/hooks/useWhatsAppLines'
 import { agentSchema, agentDefaults, type AgentFormData } from '../schemas/agentSchema'
 import type { ChannelType } from '@/shared/types'
@@ -18,8 +20,26 @@ export function AgentFormPage() {
 
   const { data: existing, isLoading } = useAgent(id)
   const { data: whatsAppLines } = useWhatsAppLines()
+  const { data: allAgents } = useAgents()
+  const { data: tenant } = useTenant()
   const createMutation = useCreateAgent()
   const updateMutation = useUpdateAgent()
+
+  // Estado del error backend (409 line_already_assigned).
+  const [lineConflictMessage, setLineConflictMessage] = useState<string | null>(null)
+
+  // Mapa { lineId → agente que ya la usa }. Sirve para anotar el select cuando
+  // BrainEnabled=false. Excluye el agente que estamos editando para no marcarse
+  // a sí mismo como "ocupado".
+  const lineOwners = new Map<string, string>()
+  if (allAgents) {
+    for (const a of allAgents) {
+      if (!a.isActive || !a.whatsAppLineId) continue
+      if (isEdit && id && a.id === id) continue
+      lineOwners.set(a.whatsAppLineId, a.name)
+    }
+  }
+  const enforceLineUniqueness = tenant?.brainEnabled === false
 
   const { register, handleSubmit, control, watch, formState: { errors } } = useForm<AgentFormData>({
     resolver: zodResolver(agentSchema),
@@ -51,12 +71,31 @@ export function AgentFormPage() {
   const promptLength = watch('systemPrompt')?.length ?? 0
 
   const onSubmit = (data: AgentFormData) => {
+    setLineConflictMessage(null)
+
     // Convertir string vacio a null para whatsAppLineId
     const payload = { ...data, whatsAppLineId: data.whatsAppLineId || null }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handleError = (err: any) => {
+      const data = err?.response?.data
+      if (data?.error === 'line_already_assigned') {
+        setLineConflictMessage(data.message ?? 'La línea seleccionada ya está asignada a otro agente activo.')
+      } else {
+        console.error('[Agent save error]', err)
+      }
+    }
+
     if (isEdit && id) {
-      updateMutation.mutate({ id, ...payload }, { onSuccess: () => navigate('/agents') })
+      updateMutation.mutate({ id, ...payload }, {
+        onSuccess: () => navigate('/agents'),
+        onError: handleError,
+      })
     } else {
-      createMutation.mutate(payload, { onSuccess: () => navigate('/agents') })
+      createMutation.mutate(payload, {
+        onSuccess: () => navigate('/agents'),
+        onError: handleError,
+      })
     }
   }
 
@@ -157,14 +196,34 @@ export function AgentFormPage() {
               <label className="block text-sm font-medium text-gray-700">Linea de WhatsApp</label>
               <select {...register('whatsAppLineId')} className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
                 <option value="">Sin asignar</option>
-                {whatsAppLines?.map((line) => (
-                  <option key={line.id} value={line.id}>
-                    {line.displayName} {line.phoneNumber ? `(${line.phoneNumber})` : ''} — Instancia: {line.instanceId}
-                  </option>
-                ))}
+                {whatsAppLines?.map((line) => {
+                  const owner = lineOwners.get(line.id)
+                  // Solo deshabilitamos visualmente cuando estamos en plan básico
+                  // (BrainEnabled=false). Con Brain activado se permite compartir.
+                  const disabled = enforceLineUniqueness && !!owner
+                  const label = owner
+                    ? `${line.displayName} ${line.phoneNumber ? `(${line.phoneNumber})` : ''} — ocupada por: ${owner}`
+                    : `${line.displayName} ${line.phoneNumber ? `(${line.phoneNumber})` : ''} — Instancia: ${line.instanceId}`
+                  return (
+                    <option key={line.id} value={line.id} disabled={disabled}>
+                      {label}
+                    </option>
+                  )
+                })}
               </select>
-              <p className="mt-1 text-xs text-gray-500">El número de WhatsApp que usara este agente para enviar mensajes</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {enforceLineUniqueness
+                  ? 'En el plan básico cada línea puede atender a un solo agente. Activa el Cerebro para compartir línea entre agentes.'
+                  : 'El número de WhatsApp que usara este agente para enviar mensajes.'}
+              </p>
             </div>
+
+            {lineConflictMessage && (
+              <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                <span>{lineConflictMessage}</span>
+              </div>
+            )}
           </div>
         </section>
 

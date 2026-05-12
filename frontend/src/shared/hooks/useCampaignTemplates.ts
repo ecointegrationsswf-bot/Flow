@@ -131,11 +131,23 @@ export function useCampaignTemplate(id: string | undefined) {
   })
 }
 
+/**
+ * Detalles del 409 que devuelve el API cuando el agente ya tiene un maestro
+ * primario y el admin no confirmó el swap. La UI lo usa para mostrar la modal.
+ */
+export interface PrimaryTemplateSwapConflict {
+  error: 'primary_template_swap_required'
+  message: string
+  currentPrimaryId: string
+  currentPrimaryName: string
+}
+
 export function useCreateCampaignTemplate() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: CampaignTemplatePayload) => {
-      const { data } = await api.post('/campaign-templates', payload)
+    mutationFn: async ({ confirmSwap, ...payload }: CampaignTemplatePayload & { confirmSwap?: boolean }) => {
+      const qs = confirmSwap ? '?confirmSwap=true' : ''
+      const { data } = await api.post(`/campaign-templates${qs}`, payload)
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
@@ -145,8 +157,9 @@ export function useCreateCampaignTemplate() {
 export function useUpdateCampaignTemplate() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, ...payload }: CampaignTemplatePayload & { id: string }) => {
-      const { data } = await api.put(`/campaign-templates/${id}`, payload)
+    mutationFn: async ({ id, confirmSwap, ...payload }: CampaignTemplatePayload & { id: string; confirmSwap?: boolean }) => {
+      const qs = confirmSwap ? '?confirmSwap=true' : ''
+      const { data } = await api.put(`/campaign-templates/${id}${qs}`, payload)
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),

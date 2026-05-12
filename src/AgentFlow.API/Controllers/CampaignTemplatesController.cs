@@ -93,12 +93,21 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     }
 
     [HttpPost]
-    public async Task<IActionResult> Create([FromBody] CampaignTemplateRequest req, CancellationToken ct)
+    public async Task<IActionResult> Create(
+        [FromBody] CampaignTemplateRequest req,
+        [FromQuery] bool confirmSwap,
+        CancellationToken ct)
     {
         if (req.ActionConfigs != null && req.ActionConfigs.Length > 50000)
             return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
 
         var tenantId = tenantCtx.TenantId;
+
+        // Validación + swap del maestro primario (no-Brain). Si el agente ya
+        // tiene un maestro primario y el admin no confirmó el swap, retorna 409.
+        var swap = await ResolvePrimarySwapAsync(
+            tenantId, req.AgentDefinitionId, excludeTemplateId: null, confirmSwap, ct);
+        if (swap.ConflictResult is not null) return swap.ConflictResult;
 
         var template = new CampaignTemplate
         {
@@ -106,6 +115,7 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             TenantId = tenantId,
             Name = req.Name,
             AgentDefinitionId = req.AgentDefinitionId,
+            IsPrimaryForAgent = swap.NewTemplateShouldBePrimary,
             FollowUpHours = req.FollowUpHours,
             FollowUpMessagesJson = req.FollowUpMessagesJson,
             AutoCloseHours = req.AutoCloseHours,
@@ -137,7 +147,11 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     }
 
     [HttpPut("{id:guid}")]
-    public async Task<IActionResult> Update(Guid id, [FromBody] CampaignTemplateRequest req, CancellationToken ct)
+    public async Task<IActionResult> Update(
+        Guid id,
+        [FromBody] CampaignTemplateRequest req,
+        [FromQuery] bool confirmSwap,
+        CancellationToken ct)
     {
         if (req.ActionConfigs != null && req.ActionConfigs.Length > 50000)
             return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
@@ -147,6 +161,15 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             .FirstOrDefaultAsync(t => t.Id == id && t.TenantId == tenantId, ct);
 
         if (template is null) return NotFound();
+
+        // Si cambió de agente, revalidar el swap del primario para el nuevo agente.
+        if (template.AgentDefinitionId != req.AgentDefinitionId)
+        {
+            var swap = await ResolvePrimarySwapAsync(
+                tenantId, req.AgentDefinitionId, excludeTemplateId: id, confirmSwap, ct);
+            if (swap.ConflictResult is not null) return swap.ConflictResult;
+            template.IsPrimaryForAgent = swap.NewTemplateShouldBePrimary;
+        }
 
         template.Name = req.Name;
         template.AgentDefinitionId = req.AgentDefinitionId;
@@ -276,12 +299,16 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
 
         if (original is null) return NotFound();
 
+        // El duplicado nace SIEMPRE como secundario — preserva al original como
+        // primario. Si el admin quiere que el duplicado sea el primario, debe
+        // editar el duplicado y confirmar el swap explícitamente.
         var copy = new CampaignTemplate
         {
             Id = Guid.NewGuid(),
             TenantId = tenantId,
             Name = req.Name.Trim(),
             AgentDefinitionId = original.AgentDefinitionId,
+            IsPrimaryForAgent = false,
             FollowUpHours = [.. original.FollowUpHours],
             FollowUpMessagesJson = original.FollowUpMessagesJson,
             AutoCloseHours = original.AutoCloseHours,
@@ -325,5 +352,73 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         db.CampaignTemplates.Remove(template);
         await db.SaveChangesAsync(ct);
         return Ok(new { message = "Maestro eliminado." });
+    }
+
+    /// <summary>
+    /// Helper de Create/Update — decide si el nuevo/editado maestro puede ser
+    /// primario para el agente. Reglas:
+    ///   • Si el tenant tiene BrainEnabled=true → no hay primario obligatorio;
+    ///     dejamos IsPrimaryForAgent=false (el Cerebro elige por slug).
+    ///   • Si el agente NO tiene primario activo → este pasa a ser primario.
+    ///   • Si el agente YA tiene un primario activo:
+    ///       - Sin confirmSwap → 409 con detalles del maestro actual para que el
+    ///         frontend muestre la modal de confirmación.
+    ///       - Con confirmSwap=true → bajamos al primario actual a no-primario
+    ///         (sólo el flag, sin desactivar) y este pasa a primario.
+    /// </summary>
+    private async Task<(IActionResult? ConflictResult, bool NewTemplateShouldBePrimary)>
+        ResolvePrimarySwapAsync(
+            Guid tenantId, Guid agentDefinitionId, Guid? excludeTemplateId,
+            bool confirmSwap, CancellationToken ct)
+    {
+        var brainEnabled = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => t.BrainEnabled)
+            .FirstOrDefaultAsync(ct);
+
+        if (brainEnabled)
+        {
+            // Brain decide por slug — el flag IsPrimaryForAgent no se usa.
+            return (null, NewTemplateShouldBePrimary: false);
+        }
+
+        var currentPrimaryQuery = db.CampaignTemplates
+            .Where(t => t.TenantId == tenantId
+                     && t.AgentDefinitionId == agentDefinitionId
+                     && t.IsActive
+                     && t.IsPrimaryForAgent);
+
+        if (excludeTemplateId.HasValue)
+            currentPrimaryQuery = currentPrimaryQuery.Where(t => t.Id != excludeTemplateId.Value);
+
+        var currentPrimary = await currentPrimaryQuery.FirstOrDefaultAsync(ct);
+
+        if (currentPrimary is null)
+        {
+            // El agente no tiene primario activo → el nuevo asume el rol.
+            return (null, NewTemplateShouldBePrimary: true);
+        }
+
+        // Hay otro primario. Pedimos confirmación o aplicamos swap.
+        if (!confirmSwap)
+        {
+            var conflict = Conflict(new
+            {
+                error = "primary_template_swap_required",
+                message = $"El agente ya tiene un maestro primario asignado: \"{currentPrimary.Name}\". "
+                        + "Si continúas, ese maestro perderá el rol primario y este pasará a ser el que "
+                        + "responde a los mensajes orgánicos (sin campaña activa). Las campañas vivas "
+                        + "del maestro anterior seguirán funcionando sin cambios.",
+                currentPrimaryId = currentPrimary.Id,
+                currentPrimaryName = currentPrimary.Name,
+                hint = "Reintenta con ?confirmSwap=true para aplicar el cambio."
+            });
+            return (conflict, false);
+        }
+
+        // confirmSwap=true → swap atómico (todo en el mismo SaveChanges del caller).
+        currentPrimary.IsPrimaryForAgent = false;
+        currentPrimary.UpdatedAt = DateTime.UtcNow;
+        return (null, NewTemplateShouldBePrimary: true);
     }
 }

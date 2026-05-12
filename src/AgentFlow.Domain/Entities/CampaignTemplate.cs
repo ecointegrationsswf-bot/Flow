@@ -107,6 +107,16 @@ public class CampaignTemplate
     public OutOfContextPolicy OutOfContextPolicy { get; set; } = OutOfContextPolicy.Contain;
 
     public bool IsActive { get; set; } = true;
+
+    /// <summary>
+    /// Marca este maestro como el "primario" del agente: el que responde a
+    /// mensajes orgánicos (sin campaña activa) cuando Tenant.BrainEnabled = false.
+    /// En no-Brain solo UNO por (TenantId, AgentDefinitionId) puede tener este flag.
+    /// El swap se hace explícitamente desde la UI (modal de confirmación).
+    /// En Brain enabled este flag se ignora (el Cerebro elige por slug).
+    /// </summary>
+    public bool IsPrimaryForAgent { get; set; } = true;
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

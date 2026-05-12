@@ -55,5 +55,14 @@ public class CampaignTemplateConfiguration : IEntityTypeConfiguration<CampaignTe
         b.HasOne(t => t.AgentDefinition).WithMany().HasForeignKey(t => t.AgentDefinitionId).OnDelete(DeleteBehavior.NoAction);
 
         b.HasIndex(t => t.TenantId);
+
+        // Solo UN maestro primario por agente. Filtered unique index — los
+        // registros con IsPrimaryForAgent = 0 no participan del unique.
+        // En SQL Server se traduce a:
+        //   CREATE UNIQUE INDEX ... WHERE [IsPrimaryForAgent] = 1
+        b.HasIndex(t => new { t.TenantId, t.AgentDefinitionId })
+            .IsUnique()
+            .HasFilter("[IsPrimaryForAgent] = 1 AND [IsActive] = 1")
+            .HasDatabaseName("UX_CampaignTemplate_PrimaryPerAgent");
     }
 }

@@ -34,7 +34,8 @@ public class WebhookController(
     private async Task<(bool Buffered, Guid? ConversationId, string? ReplyText, string? AgentType)> DispatchAsync(
         Guid tenantId, string fromPhone, string message, ChannelType channel,
         string? clientName, string? externalId, string? mediaUrl, string? mediaType,
-        CancellationToken ct)
+        CancellationToken ct,
+        Guid? whatsAppLineId = null)
     {
         int bufferSec = 0;
         try
@@ -59,7 +60,8 @@ public class WebhookController(
                 debouncer.Enqueue(
                     tenantId, fromPhone, channel,
                     message ?? string.Empty, clientName, externalId,
-                    mediaUrl, mediaType, bufferSec);
+                    mediaUrl, mediaType, bufferSec,
+                    whatsAppLineId);
                 return (true, null, null, null);
             }
             catch (Exception ex)
@@ -70,7 +72,8 @@ public class WebhookController(
         }
 
         var result = await mediator.Send(new ProcessIncomingMessageCommand(
-            tenantId, fromPhone, message ?? string.Empty, channel, clientName, externalId, mediaUrl, mediaType), ct);
+            tenantId, fromPhone, message ?? string.Empty, channel, clientName, externalId,
+            mediaUrl, mediaType, whatsAppLineId), ct);
         return (false, result.ConversationId, result.ReplyText, result.AgentType);
     }
 
@@ -413,7 +416,8 @@ public class WebhookController(
         {
             var dispatch = await DispatchAsync(
                 line.TenantId.Value, fromPhone, messageText, ChannelType.WhatsApp,
-                clientName, payload.Id, mediaUrl, mediaType, ct);
+                clientName, payload.Id, mediaUrl, mediaType, ct,
+                whatsAppLineId: line.Id);
 
             // Actualizar bitácora — si fue bufferizado marcamos como 'buffered'
             log.Status = dispatch.Buffered ? "buffered" : "processed";

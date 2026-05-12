@@ -46,20 +46,24 @@ public sealed class InProcessMessageDebouncer : IDisposable
     public void Enqueue(
         Guid tenantId, string fromPhone, ChannelType channel,
         string message, string? clientName, string? externalId,
-        string? mediaUrl, string? mediaType, int bufferSec)
+        string? mediaUrl, string? mediaType, int bufferSec,
+        Guid? whatsAppLineId = null)
     {
         var key = Key(tenantId, fromPhone);
         _entries.AddOrUpdate(key,
             // No existía: crear entry con un solo mensaje
-            _ => CreateEntry(tenantId, fromPhone, channel, message, clientName, externalId, mediaUrl, mediaType, bufferSec),
+            _ => CreateEntry(tenantId, fromPhone, channel, message, clientName, externalId, mediaUrl, mediaType, bufferSec, whatsAppLineId),
             // Ya existía: appendear y reiniciar timer
             (_, existing) =>
             {
                 lock (existing.Lock)
                 {
-                    if (existing.Drained) return CreateEntry(tenantId, fromPhone, channel, message, clientName, externalId, mediaUrl, mediaType, bufferSec);
+                    if (existing.Drained) return CreateEntry(tenantId, fromPhone, channel, message, clientName, externalId, mediaUrl, mediaType, bufferSec, whatsAppLineId);
                     existing.Messages.Add(new BufferedMessage(message, channel.ToString(), clientName, externalId, mediaUrl, mediaType, DateTime.UtcNow.Ticks));
                     existing.Last = (clientName, externalId, mediaUrl, mediaType);
+                    // Si el mensaje nuevo trae LineId (no debería cambiar pero por
+                    // las dudas, preferimos el más reciente que no sea null).
+                    if (whatsAppLineId.HasValue) existing.WhatsAppLineId = whatsAppLineId;
                     // Reset del timer — la ventana de silencio empieza de nuevo
                     existing.Timer.Change(TimeSpan.FromSeconds(bufferSec), Timeout.InfiniteTimeSpan);
                     _log.LogDebug("Debouncer ext: {Tenant}/{Phone} msgs={N}", tenantId, fromPhone, existing.Messages.Count);
@@ -71,7 +75,8 @@ public sealed class InProcessMessageDebouncer : IDisposable
     private Entry CreateEntry(
         Guid tenantId, string fromPhone, ChannelType channel,
         string message, string? clientName, string? externalId,
-        string? mediaUrl, string? mediaType, int bufferSec)
+        string? mediaUrl, string? mediaType, int bufferSec,
+        Guid? whatsAppLineId)
     {
         Entry? entry = null;
         var timer = new Timer(_ => Flush(tenantId, fromPhone), null, Timeout.Infinite, Timeout.Infinite);
@@ -86,9 +91,11 @@ public sealed class InProcessMessageDebouncer : IDisposable
                 new(message, channel.ToString(), clientName, externalId, mediaUrl, mediaType, DateTime.UtcNow.Ticks)
             },
             Last = (clientName, externalId, mediaUrl, mediaType),
+            WhatsAppLineId = whatsAppLineId,
         };
         timer.Change(TimeSpan.FromSeconds(bufferSec), Timeout.InfiniteTimeSpan);
-        _log.LogInformation("Debouncer new: {Tenant}/{Phone} bufferSec={Sec}", tenantId, fromPhone, bufferSec);
+        _log.LogInformation("Debouncer new: {Tenant}/{Phone} bufferSec={Sec} lineId={Line}",
+            tenantId, fromPhone, bufferSec, whatsAppLineId?.ToString() ?? "null");
         return entry;
     }
 
@@ -100,6 +107,7 @@ public sealed class InProcessMessageDebouncer : IDisposable
         List<BufferedMessage> snapshot;
         ChannelType channel;
         (string? Name, string? Ext, string? Url, string? Type) last;
+        Guid? lineId;
         lock (entry.Lock)
         {
             entry.Drained = true;
@@ -107,6 +115,7 @@ public sealed class InProcessMessageDebouncer : IDisposable
             snapshot = entry.Messages.ToList();
             channel = entry.Channel;
             last = entry.Last;
+            lineId = entry.WhatsAppLineId;
         }
 
         if (snapshot.Count == 0) return;
@@ -135,7 +144,8 @@ public sealed class InProcessMessageDebouncer : IDisposable
                     ClientName: last.Name,
                     ExternalMessageId: last.Ext,
                     MediaUrl: last.Url,
-                    MediaType: last.Type));
+                    MediaType: last.Type,
+                    WhatsAppLineId: lineId));
             }
             catch (Exception ex)
             {
@@ -163,6 +173,7 @@ public sealed class InProcessMessageDebouncer : IDisposable
         public Timer Timer { get; set; } = null!;
         public List<BufferedMessage> Messages { get; set; } = new();
         public (string? Name, string? Ext, string? Url, string? Type) Last { get; set; }
+        public Guid? WhatsAppLineId { get; set; }
         public bool Drained { get; set; }
         public readonly object Lock = new();
     }

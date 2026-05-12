@@ -33,6 +33,7 @@ import {
   useAvailablePrompts,
   fetchAvailablePromptDetail,
   type ActionConfig,
+  type PrimaryTemplateSwapConflict,
 } from '@/shared/hooks/useCampaignTemplates'
 
 const schema = z.object({
@@ -369,6 +370,50 @@ export function CampaignTemplateFormPage() {
     return valid
   }
 
+  // Modal de confirmación cuando el agente ya tiene un maestro primario. El API
+  // devuelve 409 con detalles; reintentamos con confirmSwap=true si el admin acepta.
+  const [swapConflict, setSwapConflict] = useState<PrimaryTemplateSwapConflict | null>(null)
+  const [pendingPayload, setPendingPayload] = useState<Record<string, unknown> | null>(null)
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const extractSwapConflict = (err: any): PrimaryTemplateSwapConflict | null => {
+    const data = err?.response?.data
+    if (data?.error === 'primary_template_swap_required' && data?.currentPrimaryId) {
+      return data as PrimaryTemplateSwapConflict
+    }
+    return null
+  }
+
+  const submitTemplate = (
+    payload: Record<string, unknown>,
+    confirmSwap: boolean
+  ) => {
+    const onConflict = (err: unknown) => {
+      const conflict = extractSwapConflict(err)
+      if (conflict) {
+        setSwapConflict(conflict)
+        setPendingPayload(payload)
+      } else {
+        // Otro error: lo dejamos burbujear (react-query lo expone vía isError).
+        // Si en algún momento queremos toast aquí, este es el lugar.
+        console.error('[CampaignTemplate save error]', err)
+      }
+    }
+    if (isEdit && id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateMut.mutate(
+        { id, confirmSwap, ...(payload as any) },
+        { onSuccess: () => navigate('/campaign-templates'), onError: onConflict }
+      )
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      createMut.mutate(
+        { confirmSwap, ...(payload as any) },
+        { onSuccess: () => navigate('/campaign-templates'), onError: onConflict }
+      )
+    }
+  }
+
   const onSubmit = (data: FormData) => {
     if (!validateActionConfigs()) return
 
@@ -400,11 +445,19 @@ export function CampaignTemplateFormPage() {
       maxTokens: 1024,
       outOfContextPolicy,
     }
-    if (isEdit && id) {
-      updateMut.mutate({ id, ...payload }, { onSuccess: () => navigate('/campaign-templates') })
-    } else {
-      createMut.mutate(payload, { onSuccess: () => navigate('/campaign-templates') })
-    }
+    submitTemplate(payload, /*confirmSwap*/ false)
+  }
+
+  const handleConfirmSwap = () => {
+    if (!pendingPayload) return
+    setSwapConflict(null)
+    submitTemplate(pendingPayload, /*confirmSwap*/ true)
+    setPendingPayload(null)
+  }
+
+  const handleCancelSwap = () => {
+    setSwapConflict(null)
+    setPendingPayload(null)
   }
 
   if (isEdit && loadingTemplate) return <div className="py-12 text-center text-gray-400">Cargando...</div>
@@ -1243,6 +1296,28 @@ export function CampaignTemplateFormPage() {
         description={confirmAction?.description ?? ''}
         confirmLabel={confirmAction?.confirmLabel ?? 'Confirmar'}
         variant="danger"
+      />
+
+      {/* Confirmación de swap de maestro primario.
+          Surge cuando el agente seleccionado ya tiene un maestro primario y
+          el admin intentó crear/editar otro para el mismo agente. Al aceptar,
+          el maestro anterior pierde el flag IsPrimaryForAgent (NO se desactiva
+          — las campañas vivas siguen funcionando con su prompt actual). */}
+      <ConfirmDialog
+        open={!!swapConflict}
+        onClose={handleCancelSwap}
+        onConfirm={handleConfirmSwap}
+        title="Cambiar maestro primario del agente"
+        description={
+          swapConflict
+            ? `Este agente ya tiene un maestro primario asignado: "${swapConflict.currentPrimaryName}". `
+              + 'Si continúas, ese maestro perderá el rol primario y este pasará a ser el que '
+              + 'responde a los mensajes orgánicos (sin campaña activa). Las campañas vivas del '
+              + 'maestro anterior seguirán funcionando sin cambios.'
+            : ''
+        }
+        confirmLabel="Sí, cambiar primario"
+        variant="default"
       />
     </div>
   )

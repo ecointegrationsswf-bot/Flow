@@ -18,7 +18,10 @@ public record ProcessIncomingMessageCommand(
     string? ClientName,
     string? ExternalMessageId,
     string? MediaUrl = null,    // URL pública del archivo (Azure Blob o UltraMsg)
-    string? MediaType = null    // "image" | "document" | "audio"
+    string? MediaType = null,   // "image" | "document" | "audio"
+    Guid? WhatsAppLineId = null // Línea WhatsApp que recibió el mensaje (resuelta por
+                                // WebhookController desde instanceId). En no-Brain
+                                // esta línea es la que determina qué agente responde.
 ) : IRequest<ProcessIncomingMessageResult>;
 
 public record ProcessIncomingMessageResult(
@@ -76,6 +79,38 @@ public class ProcessIncomingMessageHandler(
         // ── 1. DISPATCHER: ¿qué agente responde? (flujo original) ────────
         var dispatch = await dispatcher.DispatchAsync(new(
             cmd.TenantId, cmd.FromPhone, cmd.Message, cmd.Channel.ToString()), ct);
+
+        // ── 1.b ROUTING POR LÍNEA WHATSAPP (no-Brain) ───────────────────
+        // Si el mensaje entró por una línea conocida (cmd.WhatsAppLineId) y
+        // el tenant NO tiene Cerebro, la línea es la fuente de verdad: el
+        // agente que responde es el que tiene WhatsAppLineId = ese GUID.
+        //
+        // Esto OVERRIDE la decisión del dispatcher (sesión Redis / campaña /
+        // LLM clasificador). Razón: en el plan básico cada agente tiene su
+        // propia línea y cualquier mensaje que entre por X debe ser atendido
+        // por el agente dueño de X — sin ambigüedad.
+        //
+        // Si no encontramos agente para esa línea, dejamos que el flujo
+        // estándar haga su mejor esfuerzo y eventualmente caiga al canned +
+        // escalación humana ya implementado.
+        if (cmd.WhatsAppLineId.HasValue)
+        {
+            var agentByLine = await agents.GetActiveByWhatsAppLineAsync(
+                cmd.TenantId, cmd.WhatsAppLineId.Value, ct);
+            if (agentByLine is not null && agentByLine.Id != dispatch.SelectedAgentId)
+            {
+                logger.LogInformation(
+                    "Routing por línea (no-Brain): tenant={Tenant} line={Line} agent={Agent} (override sobre dispatcher={Prev})",
+                    cmd.TenantId, cmd.WhatsAppLineId, agentByLine.Id, dispatch.SelectedAgentId);
+                dispatch = dispatch with { SelectedAgentId = agentByLine.Id };
+            }
+            else if (agentByLine is null)
+            {
+                logger.LogWarning(
+                    "Línea {Line} no tiene agente activo asignado en tenant {Tenant} — se usa fallback del dispatcher.",
+                    cmd.WhatsAppLineId, cmd.TenantId);
+            }
+        }
 
         // Flujo original completo — isBrainControlled=false para mantener escalado normal
         return await ExecuteStandardFlow(cmd, dispatch, tenant!, isBrainControlled: false, ct);
@@ -384,6 +419,28 @@ public class ProcessIncomingMessageHandler(
             CampaignTemplate? campaignTemplate = templateIdToLoad.HasValue
                 ? await agents.GetCampaignTemplateByIdAsync(templateIdToLoad.Value, ct)
                 : null;
+
+            // ── Caso 3 — Mensaje orgánico en no-Brain ────────────────────
+            // Si no hubo reenrutado del Cerebro NI campaña asociada, el
+            // mensaje es orgánico (cliente escribe sin contexto de campaña).
+            // En el plan básico el agente ya quedó resuelto por la línea
+            // (paso 1.b). Cargamos su CampaignTemplate primario para usar
+            // su SystemPrompt + documentos. Sin esto el agente se quedaría
+            // sin prompt y caería al canned + escalación.
+            if (campaignTemplate is null
+                && !isBrainControlled
+                && agent is not null)
+            {
+                campaignTemplate = await agents.GetPrimaryTemplateForAgentAsync(
+                    cmd.TenantId, agent.Id, ct);
+                if (campaignTemplate is not null)
+                {
+                    templateIdToLoad = campaignTemplate.Id;
+                    logger.LogInformation(
+                        "Maestro primario resuelto para agente {Agent}: {Template} ('{Name}')",
+                        agent.Id, campaignTemplate.Id, campaignTemplate.Name);
+                }
+            }
 
             if (agent is not null)
             {
