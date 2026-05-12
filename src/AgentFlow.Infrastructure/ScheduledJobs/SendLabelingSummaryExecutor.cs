@@ -253,6 +253,12 @@ public class SendLabelingSummaryExecutor(
         // Cargar todos los datos necesarios en memoria. Para volúmenes grandes
         // habría que paginar, pero el job nocturno raramente excede unos miles
         // de filas por usuario.
+        //
+        // FILTRO DE IDEMPOTENCIA — solo etiquetadas DESDE el último envío de la
+        // campaña. El correo debe contener solo el delta del día (no acumulado
+        // histórico). Si la campaña nunca se reportó (LabelingSummarySentAt
+        // NULL), entran todas las etiquetadas; si ya se reportó, solo las
+        // posteriores a esa fecha.
         var rows = await (
             from conv in db.Conversations
             join camp in db.Campaigns on conv.CampaignId equals camp.Id
@@ -264,6 +270,8 @@ public class SendLabelingSummaryExecutor(
             join agent in db.AgentDefinitions on conv.ActiveAgentId equals agent.Id into agentLeft
             from agent in agentLeft.DefaultIfEmpty()
             where conv.CampaignId != null && campaignIds.Contains(conv.CampaignId.Value)
+               && conv.LabeledAt != null
+               && (camp.LabelingSummarySentAt == null || conv.LabeledAt > camp.LabelingSummarySentAt)
             select new
             {
                 CampaignName = camp.Name,
