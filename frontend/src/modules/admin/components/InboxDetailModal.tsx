@@ -205,10 +205,14 @@ function Section({ title, icon, children }: { title: string; icon: React.ReactNo
 }
 
 function Info({ label, value, mono = false }: { label: string; value: React.ReactNode; mono?: boolean }) {
+  // min-w-0 en el grid item permite que el dd se achique al ancho de la columna
+  // (sin esto el font-mono largo desborda horizontalmente y se monta con el
+  // contenido de la siguiente columna). break-all rompe en cualquier carácter
+  // para IDs sin espacios.
   return (
-    <div>
+    <div className="min-w-0">
       <dt className="text-xs text-gray-500">{label}</dt>
-      <dd className={`text-gray-900 ${mono ? 'font-mono text-xs' : ''}`}>{value}</dd>
+      <dd className={`text-gray-900 ${mono ? 'font-mono text-xs break-all' : 'break-words'}`}>{value}</dd>
     </div>
   )
 }
