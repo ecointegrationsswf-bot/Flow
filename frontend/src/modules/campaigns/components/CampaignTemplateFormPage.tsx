@@ -72,7 +72,7 @@ export function CampaignTemplateFormPage() {
   const { toasts, remove, toast } = useToast()
 
   const { data: existing, isLoading: loadingTemplate, isError: templateError } = useCampaignTemplate(id)
-  const { data: agents } = useAgents()
+  const { data: agents, isLoading: loadingAgents } = useAgents()
   const { data: labels, isLoading: loadingLabels } = useLabels()
   const { data: availableActions, isLoading: loadingActions } = useAvailableActions()
   const { data: availablePrompts, isLoading: loadingPrompts } = useAvailablePrompts()
@@ -470,7 +470,12 @@ export function CampaignTemplateFormPage() {
     setPendingPayload(null)
   }
 
-  if (isEdit && loadingTemplate) return <div className="py-12 text-center text-gray-400">Cargando...</div>
+  // No renderizar el form hasta tener: (a) el template existente si es edit,
+  // y (b) la lista de agentes — sin esa lista el <select> de Agente IA
+  // muestra "-- Seleccionar --" en vez del agente vinculado porque la option
+  // correspondiente al value todavía no existe en el DOM.
+  if ((isEdit && loadingTemplate) || loadingAgents)
+    return <div className="py-12 text-center text-gray-400">Cargando...</div>
   if (isEdit && templateError) return (
     <div className="py-12 text-center">
       <p className="text-red-500 mb-4">Error al cargar la campaña maestro.</p>
