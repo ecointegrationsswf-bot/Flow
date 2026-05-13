@@ -268,21 +268,20 @@ export function CampaignsPage() {
             </span>
           </div>
 
-          {/* Tabla — overflow-x-auto en el wrapper para scroll horizontal en
-              pantallas pequeñas; min-w-[960px] en la tabla para que los botones
-              de Acciones nunca queden cortados. */}
+          {/* Tabla compacta: padding reducido, anchos justos. Scroll horizontal
+              solo si el viewport es muy chico — en monitor estándar entra todo. */}
           <div className="overflow-x-auto rounded-lg bg-white shadow-sm">
-            <table className="min-w-[960px] w-full divide-y divide-gray-200">
+            <table className="w-full divide-y divide-gray-200 text-xs">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Nombre</th>
-                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Tipo</th>
-                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Canal</th>
-                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Progreso</th>
-                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Estado</th>
-                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Fecha</th>
-                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Creada por</th>
-                  <th className="whitespace-nowrap px-2 py-3 text-right text-xs font-medium uppercase text-gray-500">Acciones</th>
+                  <th className="px-2 py-2 text-left text-[10px] font-medium uppercase text-gray-500">Nombre</th>
+                  <th className="whitespace-nowrap px-2 py-2 text-left text-[10px] font-medium uppercase text-gray-500">Tipo</th>
+                  <th className="whitespace-nowrap px-2 py-2 text-left text-[10px] font-medium uppercase text-gray-500">Canal</th>
+                  <th className="whitespace-nowrap px-2 py-2 text-left text-[10px] font-medium uppercase text-gray-500">Progreso</th>
+                  <th className="whitespace-nowrap px-2 py-2 text-left text-[10px] font-medium uppercase text-gray-500">Estado</th>
+                  <th className="whitespace-nowrap px-2 py-2 text-left text-[10px] font-medium uppercase text-gray-500">Fecha</th>
+                  <th className="whitespace-nowrap px-2 py-2 text-left text-[10px] font-medium uppercase text-gray-500">Creada por</th>
+                  <th className="whitespace-nowrap px-2 py-2 text-right text-[10px] font-medium uppercase text-gray-500">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -309,54 +308,54 @@ export function CampaignsPage() {
                       <tr key={c.id} className="hover:bg-gray-50">
                         {/* Nombre: ancho máximo + truncate. El title nativo del browser
                             muestra el tooltip con el texto completo al pasar el mouse. */}
-                        <td className="max-w-[260px] px-4 py-3">
+                        <td className="max-w-[180px] px-2 py-1.5">
                           <p className="truncate text-xs font-normal text-gray-900" title={c.name}>
                             {c.name}
                           </p>
                           {c.sourceFileName && (
-                            <p className="truncate text-xs text-gray-500" title={c.sourceFileName}>
+                            <p className="truncate text-[10px] text-gray-500" title={c.sourceFileName}>
                               {c.sourceFileName}
                             </p>
                           )}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3">
+                        <td className="whitespace-nowrap px-2 py-1.5">
                           <span className="text-xs text-gray-600">{triggerLabels[c.trigger] ?? c.trigger}</span>
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3">
+                        <td className="whitespace-nowrap px-2 py-1.5">
                           <Badge variant="General">{c.channel}</Badge>
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="h-2 w-24 overflow-hidden rounded-full bg-gray-200">
+                        <td className="whitespace-nowrap px-2 py-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-gray-200">
                               <div
                                 className={`h-full rounded-full transition-all duration-500 ${isRunning ? 'bg-green-500' : 'bg-blue-600'}`}
                                 style={{ width: `${pct}%` }}
                               />
                             </div>
-                            <span className="text-xs text-gray-500">{c.processedContacts}/{c.totalContacts}</span>
+                            <span className="text-[10px] text-gray-500">{c.processedContacts}/{c.totalContacts}</span>
                           </div>
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3">
-                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${stCfg.className}`}>
-                            {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
+                        <td className="whitespace-nowrap px-2 py-1.5">
+                          <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${stCfg.className}`}>
+                            {isRunning && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
                             {stCfg.label}
                           </span>
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-500">
+                        <td className="whitespace-nowrap px-2 py-1.5 text-[10px] text-gray-500">
                           {tt.date(c.createdAt)}
                         </td>
-                        <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-600">
+                        <td className="max-w-[100px] truncate whitespace-nowrap px-2 py-1.5 text-[10px] text-gray-600" title={c.createdByUserId ?? undefined}>
                           {c.createdByUserId || '—'}
                         </td>
-                        <td className="whitespace-nowrap px-2 py-3 text-right">
-                          <div className="inline-flex items-center gap-1">
+                        <td className="whitespace-nowrap px-2 py-1.5 text-right">
+                          <div className="inline-flex items-center gap-0.5">
                             {/* Ver contactos — siempre disponible */}
                             <Link
                               to={`/campaigns/${c.id}/contacts`}
                               title="Ver contactos"
-                              className="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                              className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors"
                             >
-                              <Eye className="h-4 w-4" />
+                              <Eye className="h-3.5 w-3.5" />
                             </Link>
 
                             {/* Pausar — solo si está corriendo y activa */}
@@ -365,11 +364,11 @@ export function CampaignsPage() {
                                 onClick={() => handlePause(c.id, c.name)}
                                 disabled={togglingId === c.id}
                                 title={`Pausar "${c.name}"`}
-                                className="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 hover:bg-orange-50 hover:text-orange-600 disabled:opacity-40 transition-colors"
+                                className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-orange-50 hover:text-orange-600 disabled:opacity-40 transition-colors"
                               >
                                 {togglingId === c.id
-                                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                                  : <Pause className="h-4 w-4" />}
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <Pause className="h-3.5 w-3.5" />}
                               </button>
                             )}
 
@@ -379,11 +378,11 @@ export function CampaignsPage() {
                                 onClick={() => handleResume(c.id, c.name)}
                                 disabled={togglingId === c.id}
                                 title={`Reanudar "${c.name}"`}
-                                className="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-40 transition-colors"
+                                className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-40 transition-colors"
                               >
                                 {togglingId === c.id
-                                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                                  : <Play className="h-4 w-4" />}
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <Play className="h-3.5 w-3.5" />}
                               </button>
                             )}
 
@@ -393,11 +392,11 @@ export function CampaignsPage() {
                                 onClick={() => handleCancel(c.id, c.name)}
                                 disabled={cancellingId === c.id}
                                 title={`Cancelar "${c.name}" (irreversible)`}
-                                className="inline-flex items-center justify-center rounded-md p-1.5 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 transition-colors"
+                                className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 transition-colors"
                               >
                                 {cancellingId === c.id
-                                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                                  : <Ban className="h-4 w-4" />}
+                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  : <Ban className="h-3.5 w-3.5" />}
                               </button>
                             )}
 
@@ -407,11 +406,11 @@ export function CampaignsPage() {
                                 onClick={() => handleLaunch(c.id, c.name)}
                                 disabled={isThisLaunching}
                                 title={`Lanzar "${c.name}"`}
-                                className="inline-flex items-center gap-1 rounded-md bg-blue-600 px-2 py-1 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
+                                className="inline-flex items-center gap-0.5 rounded-md bg-blue-600 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
                               >
                                 {isThisLaunching
-                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  : <Rocket className="h-3.5 w-3.5" />}
+                                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                                  : <Rocket className="h-3 w-3" />}
                                 Lanzar
                               </button>
                             )}
