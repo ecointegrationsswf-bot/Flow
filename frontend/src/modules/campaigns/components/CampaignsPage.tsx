@@ -1,6 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban } from 'lucide-react'
+import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban, MoreVertical } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -54,6 +54,24 @@ export function CampaignsPage() {
   const [launchingId, setLaunchingId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
+  // Id de la campaña cuyo menú "..." está abierto. null = todos cerrados.
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+
+  // Cierra el menú al hacer click fuera o ESC
+  useEffect(() => {
+    if (!openMenuId) return
+    const onDown = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpenMenuId(null)
+    }
+    const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenuId(null) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onEsc)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onEsc)
+    }
+  }, [openMenuId])
 
   const handlePause = async (campaignId: string, name: string) => {
     const ok = await confirmDialog({
@@ -348,71 +366,86 @@ export function CampaignsPage() {
                           {c.createdByUserId || '—'}
                         </td>
                         <td className="whitespace-nowrap px-2 py-1.5 text-right">
-                          <div className="inline-flex items-center gap-0.5">
-                            {/* Ver contactos — siempre disponible */}
-                            <Link
-                              to={`/campaigns/${c.id}/contacts`}
-                              title="Ver contactos"
-                              className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                          <div className="relative inline-block" ref={openMenuId === c.id ? menuRef : undefined}>
+                            <button
+                              onClick={() => setOpenMenuId(openMenuId === c.id ? null : c.id)}
+                              title="Acciones"
+                              className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
                             >
-                              <Eye className="h-3.5 w-3.5" />
-                            </Link>
+                              <MoreVertical className="h-4 w-4" />
+                            </button>
 
-                            {/* Pausar — solo si está corriendo y activa */}
-                            {canLaunch && status === 'Running' && c.isActive && (
-                              <button
-                                onClick={() => handlePause(c.id, c.name)}
-                                disabled={togglingId === c.id}
-                                title={`Pausar "${c.name}"`}
-                                className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-orange-50 hover:text-orange-600 disabled:opacity-40 transition-colors"
-                              >
-                                {togglingId === c.id
-                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  : <Pause className="h-3.5 w-3.5" />}
-                              </button>
-                            )}
+                            {openMenuId === c.id && (
+                              <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg ring-1 ring-black/5">
+                                {/* Ver contactos — siempre disponible */}
+                                <Link
+                                  to={`/campaigns/${c.id}/contacts`}
+                                  onClick={() => setOpenMenuId(null)}
+                                  className="flex items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-gray-50"
+                                >
+                                  <Eye className="h-3.5 w-3.5 text-gray-500" />
+                                  Ver contactos
+                                </Link>
 
-                            {/* Reanudar — running pero pausada manualmente, o status=Paused */}
-                            {canLaunch && (status === 'Paused' || (status === 'Running' && !c.isActive)) && (
-                              <button
-                                onClick={() => handleResume(c.id, c.name)}
-                                disabled={togglingId === c.id}
-                                title={`Reanudar "${c.name}"`}
-                                className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-emerald-50 hover:text-emerald-600 disabled:opacity-40 transition-colors"
-                              >
-                                {togglingId === c.id
-                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  : <Play className="h-3.5 w-3.5" />}
-                              </button>
-                            )}
+                                {/* Pausar */}
+                                {canLaunch && status === 'Running' && c.isActive && (
+                                  <button
+                                    onClick={() => { setOpenMenuId(null); handlePause(c.id, c.name) }}
+                                    disabled={togglingId === c.id}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-orange-50 hover:text-orange-700 disabled:opacity-40"
+                                  >
+                                    {togglingId === c.id
+                                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      : <Pause className="h-3.5 w-3.5 text-orange-500" />}
+                                    Pausar
+                                  </button>
+                                )}
 
-                            {/* Cancelar — IRREVERSIBLE. Solo aplica a estados no-terminales. */}
-                            {canLaunch && CANCELLABLE_STATUSES.has(status) && (
-                              <button
-                                onClick={() => handleCancel(c.id, c.name)}
-                                disabled={cancellingId === c.id}
-                                title={`Cancelar "${c.name}" (irreversible)`}
-                                className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-red-50 hover:text-red-600 disabled:opacity-40 transition-colors"
-                              >
-                                {cancellingId === c.id
-                                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  : <Ban className="h-3.5 w-3.5" />}
-                              </button>
-                            )}
+                                {/* Reanudar */}
+                                {canLaunch && (status === 'Paused' || (status === 'Running' && !c.isActive)) && (
+                                  <button
+                                    onClick={() => { setOpenMenuId(null); handleResume(c.id, c.name) }}
+                                    disabled={togglingId === c.id}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-emerald-50 hover:text-emerald-700 disabled:opacity-40"
+                                  >
+                                    {togglingId === c.id
+                                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      : <Play className="h-3.5 w-3.5 text-emerald-500" />}
+                                    Reanudar
+                                  </button>
+                                )}
 
-                            {/* Lanzar — para campañas pendientes/falladas */}
-                            {canLaunch && isLaunchable && (
-                              <button
-                                onClick={() => handleLaunch(c.id, c.name)}
-                                disabled={isThisLaunching}
-                                title={`Lanzar "${c.name}"`}
-                                className="inline-flex items-center gap-0.5 rounded-md bg-blue-600 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
-                              >
-                                {isThisLaunching
-                                  ? <Loader2 className="h-3 w-3 animate-spin" />
-                                  : <Rocket className="h-3 w-3" />}
-                                Lanzar
-                              </button>
+                                {/* Lanzar */}
+                                {canLaunch && isLaunchable && (
+                                  <button
+                                    onClick={() => { setOpenMenuId(null); handleLaunch(c.id, c.name) }}
+                                    disabled={isThisLaunching}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700 disabled:opacity-40"
+                                  >
+                                    {isThisLaunching
+                                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                      : <Rocket className="h-3.5 w-3.5 text-blue-600" />}
+                                    Lanzar
+                                  </button>
+                                )}
+
+                                {/* Cancelar — siempre al final por destructivo */}
+                                {canLaunch && CANCELLABLE_STATUSES.has(status) && (
+                                  <>
+                                    <div className="border-t border-gray-100" />
+                                    <button
+                                      onClick={() => { setOpenMenuId(null); handleCancel(c.id, c.name) }}
+                                      disabled={cancellingId === c.id}
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-red-600 hover:bg-red-50 disabled:opacity-40"
+                                    >
+                                      {cancellingId === c.id
+                                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        : <Ban className="h-3.5 w-3.5" />}
+                                      Cancelar
+                                    </button>
+                                  </>
+                                )}
+                              </div>
                             )}
                           </div>
                         </td>
