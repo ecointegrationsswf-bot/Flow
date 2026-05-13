@@ -9,6 +9,7 @@ import {
   useChangeTenantUserPassword,
   type AdminTenant,
 } from '@/modules/admin/hooks/useAdminTenants'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 const newUserSchema = z.object({
   fullName: z.string().min(1, 'El nombre es requerido'),
@@ -55,6 +56,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
   const { data: users, isLoading } = useAdminTenantUsers(tenant.id)
   const createUser = useCreateTenantUser()
   const changePassword = useChangeTenantUserPassword()
+  const tt = useTenantTime()
 
   const [showNewUser, setShowNewUser] = useState(false)
   const [createPwValue, setCreatePwValue] = useState('')
@@ -103,19 +105,13 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
       setNewPassword('')
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { error?: string } } }
-      setPasswordError(axiosErr.response?.data?.error ?? 'Error al cambiar contrasena.')
+      setPasswordError(axiosErr.response?.data?.error ?? 'Error al cambiar contraseña.')
     }
   }
 
   const formatDate = (dateStr: string | null) => {
     if (!dateStr) return 'Nunca'
-    return new Date(dateStr).toLocaleDateString('es-PA', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
+    return tt.dateTime(dateStr)
   }
 
   return (
@@ -237,7 +233,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                             setPasswordError(null)
                           }}
                           className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                          title="Cambiar contrasena"
+                          title="Cambiar contraseña"
                         >
                           <KeyRound className="h-4 w-4" />
                         </button>
@@ -301,7 +297,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="block text-xs font-medium text-gray-700">
-                        Contrasena (min. 8 caracteres)
+                        Contraseña (min. 8 caracteres)
                       </label>
                       <div className="relative mt-1">
                         <input

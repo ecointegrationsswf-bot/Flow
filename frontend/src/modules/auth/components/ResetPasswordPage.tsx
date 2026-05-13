@@ -30,7 +30,7 @@ export function ResetPasswordPage() {
     e.preventDefault()
     setError(null)
     if (!token) { setError('Enlace invalido. Solicita un nuevo enlace.'); return }
-    if (newPassword.length < 8) { setError('La contrasena debe tener al menos 8 caracteres.'); return }
+    if (newPassword.length < 8) { setError('La contraseña debe tener al menos 8 caracteres.'); return }
     if (newPassword !== confirmPassword) { setError('Las contrasenas no coinciden.'); return }
 
     setLoading(true)
@@ -39,7 +39,7 @@ export function ResetPasswordPage() {
       setSuccess(true)
     } catch (err: unknown) {
       const a = err as { response?: { data?: { error?: string } } }
-      setError(a.response?.data?.error ?? 'Error al restablecer la contrasena.')
+      setError(a.response?.data?.error ?? 'Error al restablecer la contraseña.')
     } finally {
       setLoading(false)
     }
@@ -53,20 +53,20 @@ export function ResetPasswordPage() {
         <div className="mb-6 flex flex-col items-center">
           <img src="/logo.png" alt="TalkIA" className="h-14 w-14 rounded" />
           <h1 className="mt-3 text-xl font-bold text-gray-900">TalkIA</h1>
-          <p className="text-sm text-gray-500">Restablecer contrasena</p>
+          <p className="text-sm text-gray-500">Restablecer contraseña</p>
         </div>
 
         {success ? (
           <div className="space-y-4">
             <div className="flex flex-col items-center gap-3 rounded-md bg-green-50 p-4 text-center">
               <CheckCircle className="h-8 w-8 text-green-600" />
-              <p className="text-sm text-green-700">Tu contrasena ha sido actualizada correctamente.</p>
+              <p className="text-sm text-green-700">Tu contraseña ha sido actualizada correctamente.</p>
             </div>
             <button
               onClick={() => navigate('/login')}
               className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
             >
-              Iniciar sesion
+              Iniciar sesión
             </button>
           </div>
         ) : (
@@ -74,7 +74,7 @@ export function ResetPasswordPage() {
             {error && <div className="rounded-md bg-red-50 p-3 text-center text-sm text-red-600">{error}</div>}
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">Nueva contrasena</label>
+              <label className="block text-sm font-medium text-gray-700">Nueva contraseña</label>
               <div className="relative mt-1">
                 <input
                   type={showPassword ? 'text' : 'password'}
@@ -95,7 +95,7 @@ export function ResetPasswordPage() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700">Confirmar contrasena</label>
+              <label className="block text-sm font-medium text-gray-700">Confirmar contraseña</label>
               <input
                 type="password"
                 value={confirmPassword}
@@ -106,7 +106,7 @@ export function ResetPasswordPage() {
 
             <button type="submit" disabled={loading} className="flex w-full items-center justify-center gap-2 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50">
               {loading && <Loader2 className="h-4 w-4 animate-spin" />}
-              Restablecer contrasena
+              Restablecer contraseña
             </button>
           </form>
         )}

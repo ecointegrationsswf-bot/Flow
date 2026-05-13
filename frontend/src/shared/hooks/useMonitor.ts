@@ -1,12 +1,34 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { api } from '@/shared/api/client'
+import { toast } from '@/shared/components/dialog'
 import type { ConversationSummary, Conversation } from '@/shared/types'
 
-export function useConversations() {
+export interface ConversationsFilter {
+  fromIso?: string | null
+  toIso?: string | null
+  launchedByUserId?: string | null
+}
+
+export function useConversations(filter: ConversationsFilter = {}) {
   return useQuery({
-    queryKey: ['conversations'],
-    queryFn: () => api.get<ConversationSummary[]>('/monitor/conversations').then((r) => r.data),
+    queryKey: ['conversations', filter.fromIso ?? null, filter.toIso ?? null, filter.launchedByUserId ?? null],
+    queryFn: () => api.get<ConversationSummary[]>('/monitor/conversations', {
+      params: {
+        from: filter.fromIso || undefined,
+        to:   filter.toIso || undefined,
+        launchedByUserId: filter.launchedByUserId || undefined,
+      },
+    }).then((r) => r.data),
     refetchInterval: 1000,
+  })
+}
+
+export interface CampaignLauncher { key: string; label: string }
+export function useCampaignLaunchers() {
+  return useQuery<CampaignLauncher[]>({
+    queryKey: ['campaign-launchers'],
+    queryFn: () => api.get<CampaignLauncher[]>('/monitor/campaign-launchers').then((r) => r.data),
+    staleTime: 60_000,
   })
 }
 
@@ -52,7 +74,7 @@ export function useSendReply() {
 
     onError: (err: any) => {
       const detail = err?.response?.data?.error ?? err?.message ?? 'Error desconocido'
-      alert(`Error al enviar: ${detail}`)
+      toast.error(`Error al enviar: ${detail}`)
     },
 
     onSettled: (_, __, { id }) => {
@@ -91,7 +113,7 @@ export function useSendFile() {
     },
     onError: (err: any) => {
       const detail = err?.response?.data?.error ?? err?.message ?? 'Error desconocido'
-      alert(`Error al enviar archivo: ${detail}`)
+      toast.error(`Error al enviar archivo: ${detail}`)
     },
   })
 }

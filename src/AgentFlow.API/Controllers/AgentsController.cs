@@ -87,6 +87,14 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] AgentDto dto, CancellationToken ct)
     {
+        // Validación: si Brain está deshabilitado, una línea WhatsApp solo
+        // puede atender a UN agente activo. Esto es lo que permite que el
+        // routing por línea (ProcessIncomingMessageHandler) sea determinista.
+        // En Brain enabled la línea puede compartirse — el Cerebro decide.
+        var collision = await ValidateLineNotSharedAsync(
+            dto.WhatsAppLineId, dto.IsActive, excludeAgentId: null, ct);
+        if (collision is not null) return collision;
+
         var agent = new AgentDefinition
         {
             Id = Guid.NewGuid(),
@@ -126,6 +134,10 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
             .FirstOrDefaultAsync(a => a.Id == id && a.TenantId == tenantCtx.TenantId, ct);
 
         if (agent is null) return NotFound();
+
+        var collision = await ValidateLineNotSharedAsync(
+            dto.WhatsAppLineId, dto.IsActive, excludeAgentId: id, ct);
+        if (collision is not null) return collision;
 
         agent.Name = dto.Name;
         agent.Type = Enum.Parse<AgentType>(dto.Type);
@@ -180,5 +192,51 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
         await db.SaveChangesAsync(ct);
 
         return NoContent();
+    }
+
+    /// <summary>
+    /// Si el tenant tiene BrainEnabled=false y el agente que estamos guardando
+    /// está activo + apunta a una línea, valida que NINGÚN otro agente activo
+    /// del mismo tenant tenga esa línea. Retorna ConflictObjectResult si choca,
+    /// null si todo OK.
+    /// </summary>
+    private async Task<IActionResult?> ValidateLineNotSharedAsync(
+        Guid? whatsAppLineId, bool isActive, Guid? excludeAgentId, CancellationToken ct)
+    {
+        // Solo aplica cuando el agente queda activo Y tiene línea asignada.
+        if (!isActive || !whatsAppLineId.HasValue) return null;
+
+        var tenantId = tenantCtx.TenantId;
+
+        // En Brain enabled se permite compartir línea entre agentes.
+        var brainEnabled = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => t.BrainEnabled)
+            .FirstOrDefaultAsync(ct);
+        if (brainEnabled) return null;
+
+        // Buscar otro agente activo del mismo tenant que ya use esa línea.
+        var conflictQuery = db.AgentDefinitions
+            .Include(a => a.WhatsAppLine)
+            .Where(a => a.TenantId == tenantId
+                     && a.IsActive
+                     && a.WhatsAppLineId == whatsAppLineId);
+
+        if (excludeAgentId.HasValue)
+            conflictQuery = conflictQuery.Where(a => a.Id != excludeAgentId.Value);
+
+        var existing = await conflictQuery.FirstOrDefaultAsync(ct);
+        if (existing is null) return null;
+
+        return Conflict(new
+        {
+            error = "line_already_assigned",
+            message = $"La línea WhatsApp \"{existing.WhatsAppLine?.DisplayName ?? "(sin nombre)"}\" "
+                    + $"ya está asignada al agente \"{existing.Name}\". "
+                    + "En el plan básico una línea solo puede atender a un agente activo. "
+                    + "Para usar la misma línea con varios agentes activa el Cerebro.",
+            conflictingAgentId = existing.Id,
+            conflictingAgentName = existing.Name,
+        });
     }
 }

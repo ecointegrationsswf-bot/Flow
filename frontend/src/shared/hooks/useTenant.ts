@@ -18,6 +18,10 @@ export interface TenantInfo {
   llmModel: string
   sendGridApiKey: string | null
   senderEmail: string | null
+  campaignMessageDelaySeconds: number
+  brainEnabled: boolean
+  webhookContractEnabled: boolean
+  referenceDocumentsEnabled: boolean
 }
 
 export function useTenant() {
@@ -53,6 +57,42 @@ export function useUpdateTenantTimezone() {
   return useMutation({
     mutationFn: (timeZone: string) =>
       api.put('/auth/tenant/timezone', { timeZone }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateCampaignDelay() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (delaySeconds: number) =>
+      api.put('/auth/tenant/campaign-delay', { delaySeconds }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateBrainEnabled() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (brainEnabled: boolean) =>
+      api.put('/auth/tenant/brain', { brainEnabled }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateWebhookContract() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.put('/auth/tenant/webhook-contract', { enabled }).then(r => r.data),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
+  })
+}
+
+export function useUpdateReferenceDocumentsEnabled() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (enabled: boolean) =>
+      api.put('/auth/tenant/reference-documents', { enabled }).then(r => r.data),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['tenant-info'] }),
   })
 }

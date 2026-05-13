@@ -4,10 +4,13 @@ import { useAuthStore } from '@/shared/stores/authStore'
 import { useSuperAdminStore } from '@/shared/stores/superAdminStore'
 import { AppLayout } from '@/shared/components/AppLayout'
 import { ProtectedRoute } from '@/shared/components/ProtectedRoute'
+import { PermissionRoute } from '@/shared/components/PermissionRoute'
 import { LoginPage } from '@/modules/auth/components/LoginPage'
 import { DashboardPage } from '@/modules/dashboard/components/DashboardPage'
+import { ManagementReportPage } from '@/modules/dashboard/components/ManagementReportPage'
 import { MonitorPage } from '@/modules/monitor/components/MonitorPage'
 import { CampaignsPage } from '@/modules/campaigns/components/CampaignsPage'
+import { CampaignContactsPage } from '@/modules/campaigns/components/CampaignContactsPage'
 import { CampaignUploadPage } from '@/modules/campaigns/components/CampaignUploadPage'
 import { CampaignTemplatesPage } from '@/modules/campaigns/components/CampaignTemplatesPage'
 import { CampaignTemplateFormPage } from '@/modules/campaigns/components/CampaignTemplateFormPage'
@@ -21,23 +24,37 @@ import { AdminProtectedRoute } from '@/modules/admin/components/AdminProtectedRo
 import { AdminLayout } from '@/modules/admin/components/AdminLayout'
 import { TenantsPage } from '@/modules/admin/components/TenantsPage'
 import { AgentTemplatesPage } from '@/modules/admin/components/AgentTemplatesPage'
+import { InboxMonitorPage } from '@/modules/admin/components/InboxMonitorPage'
 import { AgentTemplateFormPage } from '@/modules/admin/components/AgentTemplateFormPage'
 import { CategoriesPage } from '@/modules/admin/components/CategoriesPage'
 import { AdminWhatsAppPage } from '@/modules/admin/components/AdminWhatsAppPage'
 import { AdminUsersPage } from '@/modules/admin/components/AdminUsersPage'
 import { ActionsPage } from '@/modules/admin/components/ActionsPage'
+import { ScheduledJobsPage } from '@/modules/admin/components/ScheduledJobsPage'
+import { AdminMorosidadPage } from '@/modules/admin/components/AdminMorosidadPage'
 import { PromptsPage } from '@/modules/admin/components/PromptsPage'
 import { PromptFormPage } from '@/modules/admin/components/PromptFormPage'
 import { ProfilePage } from '@/modules/profile/components/ProfilePage'
+import { BrainAgentRegistryPage } from '@/modules/brain/components/BrainAgentRegistryPage'
+import { TenantActionsPage } from '@/modules/actions/components/TenantActionsPage'
+import { MorosidadPage } from '@/modules/morosidad/components/MorosidadPage'
 import { ForgotPasswordPage } from '@/modules/auth/components/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/modules/auth/components/ResetPasswordPage'
+import { DialogHost } from '@/shared/components/dialog'
 
 export default function App() {
   const hydrate = useAuthStore((s) => s.hydrate)
+  const refreshMe = useAuthStore((s) => s.refreshMe)
   const hydrateSa = useSuperAdminStore((s) => s.hydrate)
-  useEffect(() => { hydrate(); hydrateSa() }, [hydrate, hydrateSa])
+  useEffect(() => {
+    hydrate()
+    hydrateSa()
+    refreshMe() // Refresca permisos desde el servidor en cada carga
+  }, [hydrate, hydrateSa, refreshMe])
 
   return (
+    <>
+    <DialogHost />
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
@@ -49,12 +66,15 @@ export default function App() {
         <Route element={<AdminLayout />}>
           <Route index element={<Navigate to="/admin/tenants" replace />} />
           <Route path="tenants" element={<TenantsPage />} />
+          <Route path="inbox" element={<InboxMonitorPage />} />
           <Route path="agent-templates" element={<AgentTemplatesPage />} />
           <Route path="agent-templates/new" element={<AgentTemplateFormPage />} />
           <Route path="agent-templates/:id/edit" element={<AgentTemplateFormPage />} />
           <Route path="categories" element={<CategoriesPage />} />
           <Route path="whatsapp" element={<AdminWhatsAppPage />} />
           <Route path="actions" element={<ActionsPage />} />
+          <Route path="morosidad" element={<AdminMorosidadPage />} />
+          <Route path="scheduled-jobs" element={<ScheduledJobsPage />} />
           <Route path="prompts" element={<PromptsPage />} />
           <Route path="prompts/new" element={<PromptFormPage />} />
           <Route path="prompts/:id/edit" element={<PromptFormPage />} />
@@ -66,23 +86,51 @@ export default function App() {
         <Route element={<AppLayout />}>
           <Route path="/" element={<Navigate to="/dashboard" replace />} />
           <Route path="/dashboard" element={<DashboardPage />} />
-          <Route path="/monitor" element={<MonitorPage />} />
-          <Route path="/campaign-templates" element={<CampaignTemplatesPage />} />
-          <Route path="/campaign-templates/new" element={<CampaignTemplateFormPage />} />
-          <Route path="/campaign-templates/:id/edit" element={<CampaignTemplateFormPage />} />
-          <Route path="/campaigns" element={<CampaignsPage />} />
-          <Route path="/campaigns/new" element={<CampaignUploadPage />} />
-          <Route path="/campaigns/new-fixed" element={<CampaignFixedUploadPage />} />
-          <Route path="/agents" element={<AgentsListPage />} />
-          <Route path="/agents/new" element={<AgentFormPage />} />
-          <Route path="/agents/:id/edit" element={<AgentFormPage />} />
+          <Route path="/dashboard/management-report" element={<ManagementReportPage />} />
           <Route path="/labels" element={<LabelsPage />} />
+          <Route path="/actions" element={<TenantActionsPage />} />
+          <Route path="/brain" element={<BrainAgentRegistryPage />} />
+          <Route path="/downloads" element={<MorosidadPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/profile" element={<ProfilePage />} />
+
+          {/* Monitor */}
+          <Route element={<PermissionRoute permission="view_monitor" />}>
+            <Route path="/monitor" element={<MonitorPage />} />
+          </Route>
+
+          {/* Maestros de campaña */}
+          <Route element={<PermissionRoute permission="view_campaign_templates" />}>
+            <Route path="/campaign-templates" element={<CampaignTemplatesPage />} />
+          </Route>
+          <Route element={<PermissionRoute permission="edit_campaign_templates" />}>
+            <Route path="/campaign-templates/new" element={<CampaignTemplateFormPage />} />
+            <Route path="/campaign-templates/:id/edit" element={<CampaignTemplateFormPage />} />
+          </Route>
+
+          {/* Campañas */}
+          <Route element={<PermissionRoute permission="view_campaigns" />}>
+            <Route path="/campaigns" element={<CampaignsPage />} />
+            <Route path="/campaigns/:id/contacts" element={<CampaignContactsPage />} />
+          </Route>
+          <Route element={<PermissionRoute permission="create_campaigns" />}>
+            <Route path="/campaigns/new" element={<CampaignUploadPage />} />
+            <Route path="/campaigns/new-fixed" element={<CampaignFixedUploadPage />} />
+          </Route>
+
+          {/* Agentes */}
+          <Route element={<PermissionRoute permission="view_agents" />}>
+            <Route path="/agents" element={<AgentsListPage />} />
+          </Route>
+          <Route element={<PermissionRoute permission="edit_agents" />}>
+            <Route path="/agents/new" element={<AgentFormPage />} />
+            <Route path="/agents/:id/edit" element={<AgentFormPage />} />
+          </Route>
         </Route>
       </Route>
 
       <Route path="*" element={<Navigate to="/dashboard" replace />} />
     </Routes>
+    </>
   )
 }

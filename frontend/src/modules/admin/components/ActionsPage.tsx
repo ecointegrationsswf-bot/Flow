@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, Pencil, Trash2, Webhook, Mail, MessageSquare, ToggleLeft, ToggleRight, X, Loader2 } from 'lucide-react'
+import { Plus, Pencil, Trash2, Webhook, Mail, MessageSquare, ToggleLeft, ToggleRight, X, Loader2, Globe, Cog, Download } from 'lucide-react'
 import {
   useAdminActions,
   useCreateAction,
@@ -9,18 +9,32 @@ import {
   type ActionDefinition,
   type ActionPayload,
 } from '../hooks/useAdminActions'
+import { useAdminTenants } from '../hooks/useAdminTenants'
+import { confirmDialog } from '@/shared/components/dialog'
 
-const emptyForm: ActionPayload = {
+// Reusamos el catálogo único de friendly names — incluye también las acciones
+// internas del Campaign Automation Worker (FOLLOW_UP_MESSAGE, AUTO_CLOSE_CAMPAIGN,
+// LABEL_CONVERSATIONS) para que se muestren consistentes en toda la app.
+import { getActionFriendlyName } from '@/shared/actionLabels'
+
+const emptyForm: Omit<ActionPayload, 'tenantId'> = {
   name: '',
   description: '',
   requiresWebhook: false,
   sendsEmail: false,
   sendsSms: false,
+  isProcess: false,
+  isDelinquencyDownload: false,
   webhookUrl: '',
   webhookMethod: 'POST',
+  defaultTriggerConfig: null,
+  defaultWebhookContract: null,
 }
 
 export function ActionsPage() {
+  const { data: tenants = [] } = useAdminTenants()
+  const activeTenants = tenants.filter((t) => t.isActive)
+
   const { data: actions = [], isLoading } = useAdminActions()
   const createMut = useCreateAction()
   const updateMut = useUpdateAction()
@@ -29,7 +43,7 @@ export function ActionsPage() {
 
   const [showModal, setShowModal] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [form, setForm] = useState<ActionPayload>(emptyForm)
+  const [form, setForm] = useState<Omit<ActionPayload, 'tenantId'>>(emptyForm)
   const [error, setError] = useState('')
 
   const openCreate = () => {
@@ -47,8 +61,12 @@ export function ActionsPage() {
       requiresWebhook: a.requiresWebhook,
       sendsEmail: a.sendsEmail,
       sendsSms: a.sendsSms,
+      isProcess: a.isProcess,
+      isDelinquencyDownload: a.isDelinquencyDownload,
       webhookUrl: a.webhookUrl ?? '',
       webhookMethod: a.webhookMethod ?? 'POST',
+      defaultTriggerConfig: a.defaultTriggerConfig,
+      defaultWebhookContract: a.defaultWebhookContract,
     })
     setError('')
     setShowModal(true)
@@ -60,10 +78,12 @@ export function ActionsPage() {
       return
     }
     try {
+      // Siempre global al crear. Al editar, el backend preserva el TenantId original.
+      const payload: ActionPayload = { ...form, tenantId: null }
       if (editingId) {
-        await updateMut.mutateAsync({ id: editingId, data: form })
+        await updateMut.mutateAsync({ id: editingId, data: payload })
       } else {
-        await createMut.mutateAsync(form)
+        await createMut.mutateAsync(payload)
       }
       setShowModal(false)
     } catch (err: any) {
@@ -72,19 +92,12 @@ export function ActionsPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar esta accion?')) return
+    const ok = await confirmDialog({ title: 'Eliminar acción', description: '¿Seguro que quieres eliminar esta acción? Esta operación no se puede deshacer.', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 
   const isSaving = createMut.isPending || updateMut.isPending
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center py-20">
-        <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
-      </div>
-    )
-  }
 
   return (
     <div>
@@ -92,24 +105,30 @@ export function ActionsPage() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-xl font-bold text-gray-900">Acciones</h1>
-          <p className="text-sm text-gray-500">Administra las acciones disponibles para los agentes</p>
+          <p className="text-sm text-gray-500">
+            Catálogo global de acciones. Asigna subconjuntos a cada cliente desde Tenants → Editar.
+          </p>
         </div>
         <button
           onClick={openCreate}
-          className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-amber-400 disabled:opacity-50 transition-colors"
+          className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-amber-400 transition-colors"
         >
           <Plus className="h-4 w-4" />
-          Nueva accion
+          Nueva acción
         </button>
       </div>
 
       {/* Table */}
-      {actions.length === 0 ? (
+      {isLoading ? (
+        <div className="flex items-center justify-center py-20">
+          <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+        </div>
+      ) : actions.length === 0 ? (
         <div className="rounded-lg border border-dashed border-gray-300 bg-white p-12 text-center">
           <MessageSquare className="mx-auto h-12 w-12 text-gray-300" />
           <p className="mt-3 text-sm text-gray-500">No hay acciones creadas</p>
           <button onClick={openCreate} className="mt-3 text-sm font-medium text-blue-600 hover:text-blue-700">
-            Crear primera accion
+            Crear primera acción
           </button>
         </div>
       ) : (
@@ -119,9 +138,11 @@ export function ActionsPage() {
               <tr className="border-b border-gray-200 bg-gray-50">
                 <th className="px-4 py-3 font-medium text-gray-600">Nombre</th>
                 <th className="px-4 py-3 font-medium text-gray-600">Descripcion</th>
+                <th className="px-4 py-3 font-medium text-gray-600">Alcance</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">Webhook</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">Email</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">SMS</th>
+                <th className="px-4 py-3 text-center font-medium text-gray-600">Proceso</th>
                 <th className="px-4 py-3 text-center font-medium text-gray-600">Estado</th>
                 <th className="px-4 py-3 text-right font-medium text-gray-600">Acciones</th>
               </tr>
@@ -130,11 +151,25 @@ export function ActionsPage() {
               {actions.map((a) => (
                 <tr key={a.id} className="hover:bg-gray-50 transition-colors">
                   <td className="px-4 py-3">
-                    <span className="inline-flex items-center gap-1.5 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
-                      {a.name}
-                    </span>
+                    <div>
+                      <span className="inline-flex items-center gap-1.5 rounded bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">
+                        {getActionFriendlyName(a.name)}
+                      </span>
+                      <p className="mt-0.5 text-[10px] text-gray-400">{a.name}</p>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-gray-600 max-w-xs truncate">{a.description || '\u2014'}</td>
+                  <td className="px-4 py-3">
+                    {a.tenantId === null ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                        <Globe className="h-3 w-3" /> Global
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-700">
+                        {activeTenants.find((t) => t.id === a.tenantId)?.name ?? a.tenantId.slice(0, 8)}
+                      </span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 text-center">
                     {a.requiresWebhook ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-purple-100 px-2 py-0.5 text-xs font-medium text-purple-700">
@@ -157,6 +192,15 @@ export function ActionsPage() {
                     {a.sendsSms ? (
                       <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700">
                         <MessageSquare className="h-3 w-3" /> Si
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-400">No</span>
+                    )}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    {a.isProcess ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                        <Cog className="h-3 w-3" /> Si
                       </span>
                     ) : (
                       <span className="text-xs text-gray-400">No</span>
@@ -204,35 +248,40 @@ export function ActionsPage() {
           <div className="w-full max-w-lg rounded-xl bg-white shadow-xl my-auto">
             <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
               <h2 className="text-lg font-semibold text-gray-900">
-                {editingId ? 'Editar accion' : 'Nueva accion'}
+                {editingId ? 'Editar acción' : 'Nueva acción global'}
               </h2>
               <button onClick={() => setShowModal(false)} className="text-gray-400 hover:text-gray-600">
                 <X className="h-5 w-5" />
               </button>
             </div>
 
-            <div className="space-y-5 px-6 py-5">
+            <div className="space-y-5 px-6 py-5 overflow-y-auto max-h-[70vh]">
               {error && (
                 <div className="rounded-lg bg-red-50 px-4 py-2 text-sm text-red-600">{error}</div>
               )}
 
               {/* Nombre */}
               <div>
-                <label className="mb-1 block text-sm font-medium text-gray-700">Nombre de la accion *</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Nombre de la acción *</label>
                 <select
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 >
-                  <option value="">Selecciona una accion</option>
-                  <option value="SEND_MESSAGE">SEND_MESSAGE</option>
-                  <option value="SEND_RESUME">SEND_RESUME</option>
-                  <option value="TRANSFER_CHAT">TRANSFER_CHAT</option>
-                  <option value="PREMIUM">PREMIUM</option>
-                  <option value="CLOSE_CONVERSATION">CLOSE_CONVERSATION</option>
-                  <option value="ESCALATE_TO_HUMAN">ESCALATE_TO_HUMAN</option>
-                  <option value="SEND_PAYMENT_LINK">SEND_PAYMENT_LINK</option>
-                  <option value="SEND_DOCUMENT">SEND_DOCUMENT</option>
+                  <option value="">Selecciona una acción</option>
+                  <option value="SEND_MESSAGE">Enviar mensaje</option>
+                  <option value="SEND_RESUME">Enviar resumen</option>
+                  <option value="TRANSFER_CHAT">Escalar a humano</option>
+                  <option value="SEND_EMAIL_RESUME">Enviar email con resumen</option>
+                  <option value="PREMIUM">Premium</option>
+                  <option value="CLOSE_CONVERSATION">Cerrar conversación</option>
+                  <option value="ESCALATE_TO_HUMAN">Escalar a ejecutivo</option>
+                  <option value="SEND_PAYMENT_LINK">Enviar enlace de pago</option>
+                  <option value="SEND_DOCUMENT">Enviar documento</option>
+                  <option value="NOTIFY_GESTION">Notificar gestión al cliente</option>
+                  <option value="LABEL_CONVERSATIONS">Etiquetar conversaciones</option>
+                  <option value="SEND_LABELING_SUMMARY">Enviar resumen etiquetado</option>
+                  <option value="DOWNLOAD_DELINQUENCY_DATA">Descargar datos de morosidad</option>
                 </select>
               </div>
 
@@ -244,15 +293,14 @@ export function ActionsPage() {
                   onChange={(e) => setForm({ ...form, description: e.target.value })}
                   rows={2}
                   className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  placeholder="Describe que hace esta accion..."
+                  placeholder="Describe que hace esta acción..."
                 />
               </div>
 
               {/* Toggles */}
               <div className="space-y-3">
-                <label className="mb-1 block text-sm font-medium text-gray-700">Configuracion</label>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Configuración</label>
 
-                {/* Webhook toggle */}
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-purple-100">
@@ -260,7 +308,7 @@ export function ActionsPage() {
                     </div>
                     <div>
                       <p className="text-sm font-medium text-gray-800">Solicita Webhook</p>
-                      <p className="text-xs text-gray-500">Envio de gestion y recepcion de datos</p>
+                      <p className="text-xs text-gray-500">Envío de gestión y recepcion de datos</p>
                     </div>
                   </div>
                   <button
@@ -276,7 +324,6 @@ export function ActionsPage() {
                   </button>
                 </div>
 
-                {/* Email toggle */}
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-100">
@@ -284,7 +331,7 @@ export function ActionsPage() {
                     </div>
                     <div>
                       <p className="text-sm font-medium text-gray-800">Envia correo electronico</p>
-                      <p className="text-xs text-gray-500">Notificar via email al ejecutar la accion</p>
+                      <p className="text-xs text-gray-500">Notificar via email al ejecutar la acción</p>
                     </div>
                   </div>
                   <button
@@ -300,7 +347,6 @@ export function ActionsPage() {
                   </button>
                 </div>
 
-                {/* SMS toggle */}
                 <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
                   <div className="flex items-center gap-3">
                     <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100">
@@ -323,6 +369,52 @@ export function ActionsPage() {
                     )}
                   </button>
                 </div>
+
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-indigo-100">
+                      <Cog className="h-4 w-4 text-indigo-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">Proceso</p>
+                      <p className="text-xs text-gray-500">Acción interna ejecutada por el Worker (no envía webhook, email ni SMS)</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, isProcess: !form.isProcess })}
+                    className="transition-colors"
+                  >
+                    {form.isProcess ? (
+                      <ToggleRight className="h-7 w-7 text-indigo-500" />
+                    ) : (
+                      <ToggleLeft className="h-7 w-7 text-gray-300" />
+                    )}
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-100">
+                      <Download className="h-4 w-4 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">Descarga de morosidad</p>
+                      <p className="text-xs text-gray-500">Activa esta acción para que aparezca en /admin/morosidad y se procese con el DelinquencyDownloadExecutor</p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setForm({ ...form, isDelinquencyDownload: !form.isDelinquencyDownload })}
+                    className="transition-colors"
+                  >
+                    {form.isDelinquencyDownload ? (
+                      <ToggleRight className="h-7 w-7 text-blue-500" />
+                    ) : (
+                      <ToggleLeft className="h-7 w-7 text-gray-300" />
+                    )}
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -340,7 +432,7 @@ export function ActionsPage() {
                 className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-amber-400 disabled:opacity-50 transition-colors"
               >
                 {isSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {editingId ? 'Guardar cambios' : 'Crear accion'}
+                {editingId ? 'Guardar cambios' : 'Crear acción'}
               </button>
             </div>
           </div>

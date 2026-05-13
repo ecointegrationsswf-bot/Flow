@@ -24,7 +24,19 @@ public class AppUser
     /// </summary>
     public List<Guid> AllowedAgentIds { get; set; } = [];
 
+    /// <summary>
+    /// Permisos granulares del usuario. Ej: ["view_monitor", "create_campaigns"].
+    /// Lista vacia = sin permisos adicionales (solo los del rol base).
+    /// </summary>
+    public List<string> Permissions { get; set; } = [];
+
     public string? AvatarUrl { get; set; }
+
+    /// <summary>
+    /// Número de WhatsApp del ejecutivo en formato E.164 (ej: +50768001234).
+    /// Se usa para enviarle notificaciones cuando un cliente solicita atención humana.
+    /// </summary>
+    public string? NotifyPhone { get; set; }
 
     // Seguridad
     public bool MustChangePassword { get; set; } = true;

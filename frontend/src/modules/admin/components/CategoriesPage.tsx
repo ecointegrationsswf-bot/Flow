@@ -6,6 +6,7 @@ import {
   useUpdateCategory,
   useDeleteCategory,
 } from '@/modules/admin/hooks/useAdminCategories'
+import { confirmDialog } from '@/shared/components/dialog'
 
 export function CategoriesPage() {
   const { data: categories, isLoading } = useAdminCategories()
@@ -43,7 +44,8 @@ export function CategoriesPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar esta categoria?')) return
+    const ok = await confirmDialog({ title: 'Eliminar categoría', description: '¿Seguro que quieres eliminar esta categoría?', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 
@@ -68,7 +70,7 @@ export function CategoriesPage() {
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
-          placeholder="Nueva categoria..."
+          placeholder="Nueva categoría..."
           className="w-64 rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-amber-500 focus:outline-none focus:ring-1 focus:ring-amber-500"
         />
         <button

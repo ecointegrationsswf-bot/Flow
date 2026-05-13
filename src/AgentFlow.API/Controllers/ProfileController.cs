@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
-public record UpdateProfileRequest(string FullName);
+public record UpdateProfileRequest(string FullName, string? NotifyPhone = null);
 public record ChangeMyPasswordRequest(string CurrentPassword, string NewPassword);
 
 [ApiController]
@@ -27,7 +27,8 @@ public class ProfileController(AgentFlowDbContext db, IBlobStorageService blobSt
         {
             user.Id, user.FullName, user.Email,
             Role = user.Role.ToString(),
-            user.AvatarUrl, user.CanEditPhone, user.CreatedAt
+            user.AvatarUrl, user.CanEditPhone, user.CreatedAt,
+            user.NotifyPhone
         });
     }
 
@@ -41,9 +42,11 @@ public class ProfileController(AgentFlowDbContext db, IBlobStorageService blobSt
         if (user is null) return NotFound();
 
         user.FullName = req.FullName;
+        if (req.NotifyPhone is not null)
+            user.NotifyPhone = string.IsNullOrWhiteSpace(req.NotifyPhone) ? null : req.NotifyPhone.Trim();
         await db.SaveChangesAsync(ct);
 
-        return Ok(new { user.Id, user.FullName, user.Email, Role = user.Role.ToString(), user.AvatarUrl });
+        return Ok(new { user.Id, user.FullName, user.Email, Role = user.Role.ToString(), user.AvatarUrl, user.NotifyPhone });
     }
 
     [HttpPost("avatar")]

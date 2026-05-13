@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-import { Camera, Trash2, Upload, Loader2, KeyRound, Eye, EyeOff, Mail, Shield, Calendar, User, Pencil } from 'lucide-react'
+import { Camera, Trash2, Upload, Loader2, KeyRound, Eye, EyeOff, Mail, Shield, Calendar, User, Pencil, Phone } from 'lucide-react'
 import { useProfile, useUpdateProfile, useUploadAvatar, useDeleteAvatar, useChangePassword } from '@/shared/hooks/useProfile'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 function getInitials(name: string): string {
   return name
@@ -42,8 +43,10 @@ export function ProfilePage() {
   const uploadAvatar = useUploadAvatar()
   const deleteAvatar = useDeleteAvatar()
   const changePassword = useChangePassword()
+  const tt = useTenantTime()
 
   const [fullName, setFullName] = useState('')
+  const [notifyPhone, setNotifyPhone] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
@@ -58,6 +61,7 @@ export function ProfilePage() {
   useEffect(() => {
     if (profile) {
       setFullName(profile.fullName)
+      setNotifyPhone(profile.notifyPhone ?? '')
     }
   }, [profile])
 
@@ -77,11 +81,17 @@ export function ProfilePage() {
     }
   }
 
+  const handleSavePhone = () => {
+    updateProfile.mutate(
+      { fullName: profile?.fullName ?? fullName, notifyPhone: notifyPhone.trim() || null }
+    )
+  }
+
   const handleChangePassword = () => {
     setPwError(null)
     setPwSuccess(false)
-    if (!currentPassword) { setPwError('Ingresa tu contrasena actual.'); return }
-    if (newPassword.length < 8) { setPwError('La nueva contrasena debe tener al menos 8 caracteres.'); return }
+    if (!currentPassword) { setPwError('Ingresa tu contraseña actual.'); return }
+    if (newPassword.length < 8) { setPwError('La nueva contraseña debe tener al menos 8 caracteres.'); return }
     if (newPassword !== confirmPassword) { setPwError('Las contrasenas no coinciden.'); return }
     changePassword.mutate(
       { currentPassword, newPassword },
@@ -92,7 +102,7 @@ export function ProfilePage() {
         },
         onError: (err: unknown) => {
           const a = err as { response?: { data?: { error?: string } } }
-          setPwError(a.response?.data?.error ?? 'Error al cambiar la contrasena.')
+          setPwError(a.response?.data?.error ?? 'Error al cambiar la contraseña.')
         },
       }
     )
@@ -110,7 +120,7 @@ export function ProfilePage() {
     return (
       <div className="flex h-full items-center justify-center">
         <div className="rounded-xl bg-red-50 p-6 text-center text-sm text-red-600">
-          Error al cargar el perfil. Intenta recargar la pagina.
+          Error al cargar el perfil. Intenta recargar la página.
         </div>
       </div>
     )
@@ -236,7 +246,7 @@ export function ProfilePage() {
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-100">
                   <User className="h-5 w-5 text-blue-600" />
                 </div>
-                <h2 className="text-lg font-semibold text-gray-900">Informacion personal</h2>
+                <h2 className="text-lg font-semibold text-gray-900">Información personal</h2>
               </div>
 
               <div className="space-y-5">
@@ -267,9 +277,42 @@ export function ProfilePage() {
                   <div>
                     <p className="text-sm font-medium text-gray-500">Miembro desde</p>
                     <p className="mt-1 text-base font-semibold text-gray-900">
-                      {profile.createdAt ? new Date(profile.createdAt).toLocaleDateString('es-PA', { year: 'numeric', month: 'long', day: 'numeric' }) : '—'}
+                      {profile.createdAt ? tt.dateLong(profile.createdAt) : '—'}
                     </p>
                   </div>
+                </div>
+
+                {/* Teléfono de notificación WhatsApp */}
+                <div className="rounded-xl bg-gray-50 p-5">
+                  <div className="flex items-center gap-3 mb-3">
+                    <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-green-100">
+                      <Phone className="h-5 w-5 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-gray-700">WhatsApp de notificaciones</p>
+                      <p className="text-xs text-gray-400">Número que recibe alertas cuando un cliente solicita atención humana (Transfer Chat).</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="tel"
+                      value={notifyPhone}
+                      onChange={(e) => setNotifyPhone(e.target.value)}
+                      placeholder="+50768001234"
+                      onKeyDown={(e) => { if (e.key === 'Enter') handleSavePhone() }}
+                      className="flex-1 rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-colors focus:border-green-500 focus:outline-none focus:ring-2 focus:ring-green-500/20"
+                    />
+                    <button
+                      onClick={handleSavePhone}
+                      disabled={updateProfile.isPending || notifyPhone === (profile.notifyPhone ?? '')}
+                      className="flex items-center gap-1.5 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-40 transition-colors"
+                    >
+                      {updateProfile.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Guardar'}
+                    </button>
+                  </div>
+                  {updateProfile.isSuccess && notifyPhone === (profile.notifyPhone ?? '') && (
+                    <p className="mt-2 text-xs text-green-600">Número guardado correctamente.</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -280,22 +323,22 @@ export function ProfilePage() {
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-100">
                   <KeyRound className="h-5 w-5 text-amber-600" />
                 </div>
-                <h2 className="text-lg font-semibold text-gray-900">Cambiar contrasena</h2>
+                <h2 className="text-lg font-semibold text-gray-900">Cambiar contraseña</h2>
               </div>
 
               {pwError && <div className="mb-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-600">{pwError}</div>}
-              {pwSuccess && <div className="mb-4 rounded-lg bg-green-50 px-4 py-3 text-sm text-green-600">Contrasena actualizada correctamente.</div>}
+              {pwSuccess && <div className="mb-4 rounded-lg bg-green-50 px-4 py-3 text-sm text-green-600">Contraseña actualizada correctamente.</div>}
 
               <div className="space-y-5">
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-gray-600">Contrasena actual</label>
+                  <label className="mb-2 block text-sm font-medium text-gray-600">Contraseña actual</label>
                   <div className="relative">
                     <input
                       type={showCurrentPw ? 'text' : 'password'}
                       value={currentPassword}
                       onChange={e => setCurrentPassword(e.target.value)}
                       className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 pr-10 text-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
-                      placeholder="Ingresa tu contrasena actual"
+                      placeholder="Ingresa tu contraseña actual"
                     />
                     <button type="button" onClick={() => setShowCurrentPw(!showCurrentPw)} className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 hover:text-gray-600">
                       {showCurrentPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -304,7 +347,7 @@ export function ProfilePage() {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-gray-600">Nueva contrasena</label>
+                  <label className="mb-2 block text-sm font-medium text-gray-600">Nueva contraseña</label>
                   <div className="relative">
                     <input
                       type={showNewPw ? 'text' : 'password'}
@@ -326,13 +369,13 @@ export function ProfilePage() {
                 </div>
 
                 <div>
-                  <label className="mb-2 block text-sm font-medium text-gray-600">Confirmar nueva contrasena</label>
+                  <label className="mb-2 block text-sm font-medium text-gray-600">Confirmar nueva contraseña</label>
                   <input
                     type="password"
                     value={confirmPassword}
                     onChange={e => setConfirmPassword(e.target.value)}
                     className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm transition-colors focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    placeholder="Repite la nueva contrasena"
+                    placeholder="Repite la nueva contraseña"
                   />
                 </div>
 
@@ -343,7 +386,7 @@ export function ProfilePage() {
                   className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50"
                 >
                   {changePassword.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
-                  {changePassword.isPending ? 'Cambiando...' : 'Cambiar contrasena'}
+                  {changePassword.isPending ? 'Cambiando...' : 'Cambiar contraseña'}
                 </button>
               </div>
             </div>

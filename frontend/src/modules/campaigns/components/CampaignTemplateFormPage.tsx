@@ -1,24 +1,46 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+
+const ACTION_FRIENDLY_NAMES: Record<string, string> = {
+  'SEND_EMAIL_RESUME': 'Enviar email con resumen',
+  'TRANSFER_CHAT': 'Escalar a humano',
+  'SEND_MESSAGE': 'Enviar mensaje',
+  'SEND_RESUME': 'Enviar resumen',
+  'PREMIUM': 'Premium',
+  'CLOSE_CONVERSATION': 'Cerrar conversación',
+  'ESCALATE_TO_HUMAN': 'Escalar a ejecutivo',
+  'SEND_PAYMENT_LINK': 'Enviar enlace de pago',
+  'SEND_DOCUMENT': 'Enviar documento',
+}
+const getFriendlyName = (name: string) => ACTION_FRIENDLY_NAMES[name] ?? name
+
+import { useTenant } from '@/shared/hooks/useTenant'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ArrowLeft, Plus, X, Clock, Zap, FileText, Webhook, Mail, MessageSquare, ChevronDown, ChevronUp, Globe } from 'lucide-react'
+import { ArrowLeft, Plus, X, Clock, Zap, FileText, Webhook, Mail, MessageSquare, ChevronDown, ChevronUp, Globe, Tag, Paperclip, Maximize2 } from 'lucide-react'
 import { useAgents } from '@/shared/hooks/useAgents'
 import { useLabels } from '@/shared/hooks/useLabels'
+import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
+import { CampaignTemplateDocumentsSection } from './CampaignTemplateDocumentsSection'
+import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
 import {
   useCampaignTemplate,
   useCreateCampaignTemplate,
   useUpdateCampaignTemplate,
   useAvailableActions,
   useAvailablePrompts,
+  fetchAvailablePromptDetail,
   type ActionConfig,
+  type PrimaryTemplateSwapConflict,
 } from '@/shared/hooks/useCampaignTemplates'
 
 const schema = z.object({
   name: z.string().min(1, 'El nombre es requerido'),
   agentDefinitionId: z.string().min(1, 'Selecciona un agente'),
   autoCloseHours: z.coerce.number().min(1).max(720).default(72),
+  autoCloseMessage: z.string().nullable().default(null),
   sendFrom: z.string().nullable().default(null),
   sendUntil: z.string().nullable().default(null),
 })
@@ -47,41 +69,118 @@ export function CampaignTemplateFormPage() {
   const isEdit = !!id
   const navigate = useNavigate()
 
-  const { data: existing, isLoading: loadingTemplate } = useCampaignTemplate(id)
+  const { data: existing, isLoading: loadingTemplate, isError: templateError } = useCampaignTemplate(id)
   const { data: agents } = useAgents()
   const { data: labels, isLoading: loadingLabels } = useLabels()
   const { data: availableActions, isLoading: loadingActions } = useAvailableActions()
   const { data: availablePrompts, isLoading: loadingPrompts } = useAvailablePrompts()
   const createMut = useCreateCampaignTemplate()
   const updateMut = useUpdateCampaignTemplate()
+  const { data: tenant } = useTenant()
 
   const [followUpHours, setFollowUpHours] = useState<number[]>(existing?.followUpHours ?? [])
   const [newHour, setNewHour] = useState('')
+  /** Mensajes paralelos a followUpHours. Inicializa desde JSON existente si está. */
+  const [followUpMessages, setFollowUpMessages] = useState<string[]>(() => {
+    if (!existing?.followUpMessagesJson) return existing?.followUpHours.map(() => '') ?? []
+    try {
+      const parsed = JSON.parse(existing.followUpMessagesJson)
+      if (Array.isArray(parsed)) return parsed.map(s => String(s ?? ''))
+    } catch { /* ignore */ }
+    return existing.followUpHours.map(() => '')
+  })
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>(existing?.labelIds ?? [])
   const [selectedActionIds, setSelectedActionIds] = useState<string[]>(existing?.actionIds ?? [])
   const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>(existing?.promptTemplateIds ?? [])
-  const [actionConfigs, setActionConfigs] = useState<Record<string, ActionConfig>>(
-    (existing?.actionConfigs as Record<string, ActionConfig>) ?? {}
-  )
+  // Copia local del prompt — editable por el tenant sin afectar el template global.
+  // El runtime prioriza este valor sobre el global en ProcessIncomingMessageCommand.
+  const [localSystemPrompt, setLocalSystemPrompt] = useState<string>(existing?.systemPrompt ?? '')
+  // Texto original del template al momento de cargar; usado para detectar ediciones locales
+  // y para el botón "Re-sincronizar desde template".
+  const [sourcePromptText, setSourcePromptText] = useState<string>('')
+  const [loadingPromptDetail, setLoadingPromptDetail] = useState(false)
+  const [promptSaveMessage, setPromptSaveMessage] = useState<string | null>(null)
+  const [promptExpanded, setPromptExpanded] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<{
+    title: string
+    description: string
+    confirmLabel: string
+    run: () => void | Promise<void>
+  } | null>(null)
+  const [actionConfigs, setActionConfigs] = useState<Record<string, ActionConfig>>(() => {
+    const raw = existing?.actionConfigs
+    if (!raw) return {}
+    if (typeof raw === 'string') {
+      try { return JSON.parse(raw) } catch { return {} }
+    }
+    return raw as Record<string, ActionConfig>
+  })
   const [expandedActions, setExpandedActions] = useState<Set<string>>(new Set())
   const [configErrors, setConfigErrors] = useState<Record<string, Record<string, string>>>({})
+  const [attentionDays, setAttentionDays] = useState<number[]>(existing?.attentionDays ?? [1, 2, 3, 4, 5])
+  const [attentionStart, setAttentionStart] = useState(existing?.attentionStartTime ?? '08:00')
+  const [attentionEnd, setAttentionEnd] = useState(existing?.attentionEndTime ?? '17:00')
+  const [outOfContextPolicy, setOutOfContextPolicy] = useState(existing?.outOfContextPolicy ?? 'Contain')
+  // Webhook Contract Builder — modal state (Fase 5)
+  const [webhookBuilderActionId, setWebhookBuilderActionId] = useState<string | null>(null)
+  // Tab activa — General / Etiquetas / Acciones / Prompt / Documentos
+  const [activeTab, setActiveTab] = useState<'general' | 'labels' | 'actions' | 'prompt' | 'documents'>('general')
 
-  // Sync when existing loads
-  if (isEdit && existing && followUpHours.length === 0 && existing.followUpHours.length > 0) {
-    setFollowUpHours(existing.followUpHours)
-  }
-  if (isEdit && existing && selectedLabelIds.length === 0 && existing.labelIds.length > 0) {
-    setSelectedLabelIds(existing.labelIds)
-  }
-  if (isEdit && existing && selectedActionIds.length === 0 && existing.actionIds.length > 0) {
-    setSelectedActionIds(existing.actionIds)
-  }
-  if (isEdit && existing && selectedPromptIds.length === 0 && existing.promptTemplateIds.length > 0) {
-    setSelectedPromptIds(existing.promptTemplateIds)
-  }
-  if (isEdit && existing && existing.actionConfigs && Object.keys(actionConfigs).length === 0 && Object.keys(existing.actionConfigs).length > 0) {
-    setActionConfigs(existing.actionConfigs as Record<string, ActionConfig>)
-  }
+  // Sync all state when existing template loads (edit mode)
+  useEffect(() => {
+    if (!existing) return
+    if (existing.followUpHours.length > 0) setFollowUpHours(existing.followUpHours)
+    // Sincronizar mensajes paralelos a las horas. Sin esto, el state local arranca
+    // con [] cuando el template carga async y los textos previos no aparecen en los inputs,
+    // lo que provoca que al guardar se mande null y se pierdan.
+    if (existing.followUpMessagesJson) {
+      try {
+        const parsed = JSON.parse(existing.followUpMessagesJson)
+        if (Array.isArray(parsed)) {
+          const normalized = parsed.map(s => String(s ?? ''))
+          while (normalized.length < existing.followUpHours.length) normalized.push('')
+          setFollowUpMessages(normalized.slice(0, existing.followUpHours.length))
+        }
+      } catch { /* ignore parse errors */ }
+    } else if (existing.followUpHours.length > 0) {
+      setFollowUpMessages(existing.followUpHours.map(() => ''))
+    }
+    if (existing.labelIds.length > 0) setSelectedLabelIds(existing.labelIds)
+    if (existing.actionIds.length > 0) setSelectedActionIds(existing.actionIds)
+    if (existing.promptTemplateIds.length > 0) setSelectedPromptIds(existing.promptTemplateIds)
+    if (existing.actionConfigs) {
+      const raw = existing.actionConfigs
+      const parsed: Record<string, ActionConfig> = typeof raw === 'string'
+        ? (() => { try { return JSON.parse(raw) } catch { return {} } })()
+        : raw as Record<string, ActionConfig>
+      if (Object.keys(parsed).length > 0) setActionConfigs(parsed)
+    }
+    setAttentionDays(existing.attentionDays ?? [1, 2, 3, 4, 5])
+    setAttentionStart(existing.attentionStartTime ?? '08:00')
+    setAttentionEnd(existing.attentionEndTime ?? '17:00')
+    if (existing.outOfContextPolicy) setOutOfContextPolicy(existing.outOfContextPolicy)
+    if (existing.systemPrompt) setLocalSystemPrompt(existing.systemPrompt)
+  }, [existing?.id])
+
+  // Cuando hay un prompt seleccionado, trae el texto original del template global
+  // para mostrar el botón "Re-sincronizar" y detectar si la copia local está modificada.
+  useEffect(() => {
+    const id = selectedPromptIds[0]
+    if (!id) { setSourcePromptText(''); return }
+    let cancelled = false
+    setLoadingPromptDetail(true)
+    fetchAvailablePromptDetail(id)
+      .then((d) => { if (!cancelled) setSourcePromptText(d.systemPrompt ?? '') })
+      .catch(() => { if (!cancelled) setSourcePromptText('') })
+      .finally(() => { if (!cancelled) setLoadingPromptDetail(false) })
+    return () => { cancelled = true }
+  }, [selectedPromptIds])
+
+  useEffect(() => {
+    if (!promptSaveMessage) return
+    const t = setTimeout(() => setPromptSaveMessage(null), 3000)
+    return () => clearTimeout(t)
+  }, [promptSaveMessage])
 
   const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
@@ -90,11 +189,13 @@ export function CampaignTemplateFormPage() {
           name: existing.name,
           agentDefinitionId: existing.agentDefinitionId,
           autoCloseHours: existing.autoCloseHours,
+          autoCloseMessage: existing.autoCloseMessage ?? null,
           sendFrom: existing.sendFrom ?? null,
           sendUntil: existing.sendUntil ?? null,
         }
       : {
           name: '', agentDefinitionId: '', autoCloseHours: 72,
+          autoCloseMessage: null,
           sendFrom: null, sendUntil: null,
         },
   })
@@ -102,12 +203,28 @@ export function CampaignTemplateFormPage() {
   const addFollowUp = () => {
     const h = parseInt(newHour)
     if (!h || h < 1 || followUpHours.includes(h)) return
-    setFollowUpHours([...followUpHours, h].sort((a, b) => a - b))
+    // Insertamos preservando el orden ascendente; mensajes paralelos quedan alineados.
+    const merged = [...followUpHours, h].map((hour, i) => ({ hour, msg: i < followUpHours.length ? followUpMessages[i] ?? '' : '' }))
+    merged.sort((a, b) => a.hour - b.hour)
+    setFollowUpHours(merged.map(x => x.hour))
+    setFollowUpMessages(merged.map(x => x.msg))
     setNewHour('')
   }
 
   const removeFollowUp = (h: number) => {
-    setFollowUpHours(followUpHours.filter(x => x !== h))
+    const idx = followUpHours.indexOf(h)
+    if (idx < 0) return
+    setFollowUpHours(followUpHours.filter((_, i) => i !== idx))
+    setFollowUpMessages(followUpMessages.filter((_, i) => i !== idx))
+  }
+
+  const updateFollowUpMessage = (index: number, value: string) => {
+    setFollowUpMessages(prev => {
+      const next = [...prev]
+      while (next.length < followUpHours.length) next.push('')
+      next[index] = value
+      return next
+    })
   }
 
   const toggleLabel = (labelId: string) => {
@@ -128,14 +245,82 @@ export function CampaignTemplateFormPage() {
       const action = availableActions?.find(a => a.id === actionId)
       if (action && (action.requiresWebhook || action.sendsEmail || action.sendsSms)) {
         setExpandedActions(prev => new Set(prev).add(actionId))
+        // Pre-llenar email del ejecutivo con el email remitente configurado en el tenant
+        if (action.sendsEmail && tenant?.senderEmail) {
+          setActionConfigs(prev => ({
+            ...prev,
+            [actionId]: { ...prev[actionId], emailAddress: prev[actionId]?.emailAddress || tenant.senderEmail! }
+          }))
+        }
       }
     }
   }
 
+  const doChangePrompt = async (promptId: string) => {
+    setSelectedPromptIds([promptId])
+    try {
+      setLoadingPromptDetail(true)
+      const detail = await fetchAvailablePromptDetail(promptId)
+      setLocalSystemPrompt(detail.systemPrompt ?? '')
+      setSourcePromptText(detail.systemPrompt ?? '')
+    } catch {
+      // silencioso — el usuario puede editar a mano si la carga falla
+    } finally {
+      setLoadingPromptDetail(false)
+    }
+  }
+
   const togglePrompt = (promptId: string) => {
-    setSelectedPromptIds(prev =>
-      prev.includes(promptId) ? prev.filter(id => id !== promptId) : [...prev, promptId]
-    )
+    const wasSelected = selectedPromptIds.includes(promptId)
+    // Deseleccionar: no tocamos el texto local — el usuario puede mantenerlo o editarlo.
+    if (wasSelected) {
+      setSelectedPromptIds([])
+      return
+    }
+    const localHasContent = localSystemPrompt.trim().length > 0
+    const localIsModified = localHasContent && localSystemPrompt !== sourcePromptText
+    const hadPreviousSelection = selectedPromptIds.length > 0
+    // Confirmación elegante si se va a sobrescribir una copia modificada o una selección previa.
+    if (localIsModified || hadPreviousSelection) {
+      setConfirmAction({
+        title: 'Cambiar prompt del maestro',
+        description: localIsModified
+          ? 'Este maestro tiene un prompt personalizado. Al cambiar de template se sobrescribirá con el contenido del nuevo. ¿Continuar?'
+          : 'Vas a cambiar el prompt del maestro. El texto del nuevo template reemplazará al actual. ¿Continuar?',
+        confirmLabel: 'Sí, cambiar',
+        run: async () => {
+          await doChangePrompt(promptId)
+        },
+      })
+      return
+    }
+    void doChangePrompt(promptId)
+  }
+
+  const resyncPromptFromTemplate = () => {
+    const id = selectedPromptIds[0]
+    if (!id) return
+    const doResync = async () => {
+      try {
+        setLoadingPromptDetail(true)
+        const detail = await fetchAvailablePromptDetail(id)
+        setLocalSystemPrompt(detail.systemPrompt ?? '')
+        setSourcePromptText(detail.systemPrompt ?? '')
+        setPromptSaveMessage('Prompt re-sincronizado desde el template.')
+      } finally {
+        setLoadingPromptDetail(false)
+      }
+    }
+    if (localSystemPrompt !== sourcePromptText && localSystemPrompt.trim().length > 0) {
+      setConfirmAction({
+        title: 'Re-sincronizar desde template',
+        description: 'Vas a reemplazar tus cambios locales con el texto original del template. Esta acción no se puede deshacer. ¿Continuar?',
+        confirmLabel: 'Sí, re-sincronizar',
+        run: doResync,
+      })
+      return
+    }
+    void doResync()
   }
 
   const updateActionConfig = (actionId: string, field: keyof ActionConfig, value: string) => {
@@ -172,7 +357,7 @@ export function CampaignTemplateFormPage() {
         else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(config.emailAddress.trim())) { actionErrors.emailAddress = 'Correo invalido'; valid = false }
       }
       if (action.sendsSms) {
-        if (!config.smsPhoneNumber?.trim()) { actionErrors.smsPhoneNumber = 'El numero es obligatorio'; valid = false }
+        if (!config.smsPhoneNumber?.trim()) { actionErrors.smsPhoneNumber = 'El número es obligatorio'; valid = false }
       }
 
       if (Object.keys(actionErrors).length > 0) {
@@ -185,32 +370,103 @@ export function CampaignTemplateFormPage() {
     return valid
   }
 
+  // Modal de confirmación cuando el agente ya tiene un maestro primario. El API
+  // devuelve 409 con detalles; reintentamos con confirmSwap=true si el admin acepta.
+  const [swapConflict, setSwapConflict] = useState<PrimaryTemplateSwapConflict | null>(null)
+  const [pendingPayload, setPendingPayload] = useState<Record<string, unknown> | null>(null)
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const extractSwapConflict = (err: any): PrimaryTemplateSwapConflict | null => {
+    const data = err?.response?.data
+    if (data?.error === 'primary_template_swap_required' && data?.currentPrimaryId) {
+      return data as PrimaryTemplateSwapConflict
+    }
+    return null
+  }
+
+  const submitTemplate = (
+    payload: Record<string, unknown>,
+    confirmSwap: boolean
+  ) => {
+    const onConflict = (err: unknown) => {
+      const conflict = extractSwapConflict(err)
+      if (conflict) {
+        setSwapConflict(conflict)
+        setPendingPayload(payload)
+      } else {
+        // Otro error: lo dejamos burbujear (react-query lo expone vía isError).
+        // Si en algún momento queremos toast aquí, este es el lugar.
+        console.error('[CampaignTemplate save error]', err)
+      }
+    }
+    if (isEdit && id) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      updateMut.mutate(
+        { id, confirmSwap, ...(payload as any) },
+        { onSuccess: () => navigate('/campaign-templates'), onError: onConflict }
+      )
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      createMut.mutate(
+        { confirmSwap, ...(payload as any) },
+        { onSuccess: () => navigate('/campaign-templates'), onError: onConflict }
+      )
+    }
+  }
+
   const onSubmit = (data: FormData) => {
     if (!validateActionConfigs()) return
+
+    // Solo serializar followUpMessagesJson si hay al menos un mensaje no vacío;
+    // si todos están vacíos, lo dejamos en null para no inyectar seguimientos al executor.
+    const trimmedMessages = followUpMessages.slice(0, followUpHours.length).map(m => m ?? '')
+    const followUpMessagesJson = trimmedMessages.some(m => m.trim().length > 0)
+      ? JSON.stringify(trimmedMessages)
+      : null
 
     const payload = {
       ...data,
       followUpHours,
+      followUpMessagesJson,
+      autoCloseMessage: data.autoCloseMessage?.trim() ? data.autoCloseMessage : null,
       labelIds: selectedLabelIds,
       actionIds: selectedActionIds,
       actionConfigs: Object.keys(actionConfigs).length > 0 ? JSON.stringify(actionConfigs) : null,
       promptTemplateIds: selectedPromptIds,
       sendFrom: data.sendFrom || null,
       sendUntil: data.sendUntil || null,
-      systemPrompt: '',
+      attentionDays,
+      attentionStartTime: attentionStart,
+      attentionEndTime: attentionEnd,
+      systemPrompt: localSystemPrompt,
       maxRetries: 3,
       retryIntervalHours: 24,
       inactivityCloseHours: 72,
       maxTokens: 1024,
+      outOfContextPolicy,
     }
-    if (isEdit && id) {
-      updateMut.mutate({ id, ...payload }, { onSuccess: () => navigate('/campaign-templates') })
-    } else {
-      createMut.mutate(payload, { onSuccess: () => navigate('/campaign-templates') })
-    }
+    submitTemplate(payload, /*confirmSwap*/ false)
+  }
+
+  const handleConfirmSwap = () => {
+    if (!pendingPayload) return
+    setSwapConflict(null)
+    submitTemplate(pendingPayload, /*confirmSwap*/ true)
+    setPendingPayload(null)
+  }
+
+  const handleCancelSwap = () => {
+    setSwapConflict(null)
+    setPendingPayload(null)
   }
 
   if (isEdit && loadingTemplate) return <div className="py-12 text-center text-gray-400">Cargando...</div>
+  if (isEdit && templateError) return (
+    <div className="py-12 text-center">
+      <p className="text-red-500 mb-4">Error al cargar la campaña maestro.</p>
+      <button onClick={() => window.location.reload()} className="px-4 py-2 bg-blue-600 text-white rounded-lg text-sm">Reintentar</button>
+    </div>
+  )
 
   const isPending = createMut.isPending || updateMut.isPending
   const inputClass = "mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
@@ -218,16 +474,66 @@ export function CampaignTemplateFormPage() {
 
   const hasConfigErrors = Object.keys(configErrors).length > 0
 
+  // Valida si hay errores en los campos generales (nombre, agente, etc.) para
+  // marcar el tab "General" con indicador rojo cuando el form falla validación.
+  const hasGeneralErrors = !!(errors.name || errors.agentDefinitionId || errors.sendFrom || errors.sendUntil)
+
+  // Tab "Acciones" oculto a usuarios — la asignación de acciones a maestros
+  // se hace desde Admin → Editar Cliente → "Acciones asignadas". Acá solo
+  // confundía porque el cliente final no debería tocar webhooks.
+  const tabs = [
+    { key: 'general' as const, label: 'General', icon: Globe, hasError: hasGeneralErrors },
+    { key: 'labels' as const, label: 'Etiquetas', icon: Tag, badge: selectedLabelIds.length },
+    { key: 'prompt' as const, label: 'Prompt', icon: FileText, badge: selectedPromptIds.length },
+    { key: 'documents' as const, label: 'Documentos', icon: Paperclip },
+  ]
+
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">{isEdit ? 'Editar Maestro' : 'Nuevo Maestro de Campana'}</h1>
+      <div className="mb-4 flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-gray-900">{isEdit ? 'Editar Maestro' : 'Nuevo Maestro de Campaña'}</h1>
         <button onClick={() => navigate('/campaign-templates')} className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900">
           <ArrowLeft className="h-4 w-4" /> Volver
         </button>
       </div>
 
+      {/* ─── Tabs en el encabezado: Etiquetas | Acciones | Prompt | Documentos ─── */}
+      <div className="mb-6 rounded-lg bg-white shadow-sm">
+        <div className="flex border-b border-gray-200 overflow-x-auto">
+          {tabs.map(tab => {
+            const Icon = tab.icon
+            const isActive = activeTab === tab.key
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
+                  isActive
+                    ? 'border-blue-600 text-blue-700 bg-blue-50/50'
+                    : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                }`}
+              >
+                <Icon className={`h-4 w-4 ${isActive ? 'text-blue-600' : 'text-gray-400'}`} />
+                <span>{tab.label}</span>
+                {'badge' in tab && tab.badge ? (
+                  <span className={`ml-1 rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${isActive ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>
+                    {tab.badge}
+                  </span>
+                ) : null}
+                {'hasError' in tab && tab.hasError ? (
+                  <span className="ml-1 h-2 w-2 rounded-full bg-red-500" title="Hay campos con error" />
+                ) : null}
+              </button>
+            )
+          })}
+        </div>
+      </div>
+
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
+        {/* ─── TAB: General (Identificación + horarios + seguimientos + cierre + política) ─── */}
+        {activeTab === 'general' && <>
+
         {/* Seccion 1: Identificacion */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-semibold text-gray-900">Identificacion</h2>
@@ -248,9 +554,9 @@ export function CampaignTemplateFormPage() {
           </div>
         </section>
 
-        {/* Seccion 2: Horario de envio */}
+        {/* Seccion 2: Horario de envío */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Horario de envio</h2>
+          <h2 className="mb-4 text-sm font-semibold text-gray-900">Horario de envío</h2>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">Enviar desde</label>
@@ -263,11 +569,79 @@ export function CampaignTemplateFormPage() {
           </div>
         </section>
 
+        {/* Seccion: Horario de atencion de asesores */}
+        <section className="rounded-lg bg-white p-5 shadow-sm">
+          <div className="mb-4 flex items-center gap-2">
+            <Clock className="h-4 w-4 text-blue-600" />
+            <h2 className="text-sm font-semibold text-gray-900">Horario de atencion de asesores</h2>
+          </div>
+          <p className="mb-4 text-xs text-gray-500">
+            El agente usara este horario para informar al cliente cuando puede hablar con un asesor humano.
+          </p>
+
+          {/* Dias de la semana */}
+          <div className="mb-4">
+            <label className="mb-2 block text-sm font-medium text-gray-700">Dias de atencion</label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { num: 1, label: 'Lun' }, { num: 2, label: 'Mar' }, { num: 3, label: 'Mie' },
+                { num: 4, label: 'Jue' }, { num: 5, label: 'Vie' }, { num: 6, label: 'Sab' }, { num: 0, label: 'Dom' },
+              ].map(({ num, label }) => {
+                const selected = attentionDays.includes(num)
+                return (
+                  <button
+                    key={num}
+                    type="button"
+                    onClick={() => setAttentionDays(prev =>
+                      prev.includes(num) ? prev.filter(d => d !== num) : [...prev, num].sort()
+                    )}
+                    className={`rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${
+                      selected
+                        ? 'bg-blue-600 text-white'
+                        : 'border border-gray-300 bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Hora inicio y fin */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Hora de inicio</label>
+              <input
+                type="time"
+                value={attentionStart}
+                onChange={e => setAttentionStart(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Hora de cierre</label>
+              <input
+                type="time"
+                value={attentionEnd}
+                onChange={e => setAttentionEnd(e.target.value)}
+                className={inputClass}
+              />
+            </div>
+          </div>
+        </section>
+
         {/* Seccion 3: Seguimientos automaticos */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Seguimientos automaticos</h2>
-          <p className="mb-3 text-xs text-gray-500">Define los intervalos de seguimiento en horas despues del primer contacto.</p>
-          <div className="mb-3 flex items-center gap-2">
+          <h2 className="mb-1 text-sm font-semibold text-gray-900">Seguimientos automaticos</h2>
+          <p className="mb-3 text-xs text-gray-500">
+            Define los intervalos en horas después del primer contacto. Cada intervalo puede tener su propio mensaje.
+            Variables disponibles: <code className="rounded bg-gray-100 px-1 text-[11px]">{'{nombre}'}</code>{' '}
+            <code className="rounded bg-gray-100 px-1 text-[11px]">{'{poliza}'}</code>{' '}
+            <code className="rounded bg-gray-100 px-1 text-[11px]">{'{aseguradora}'}</code>{' '}
+            <code className="rounded bg-gray-100 px-1 text-[11px]">{'{monto_pendiente}'}</code>.
+          </p>
+          <div className="mb-4 flex items-center gap-2">
             <input
               type="number" min={1} value={newHour}
               onChange={e => setNewHour(e.target.value)}
@@ -282,32 +656,91 @@ export function CampaignTemplateFormPage() {
           {followUpHours.length === 0 ? (
             <p className="text-xs text-gray-400">No hay seguimientos definidos.</p>
           ) : (
-            <div className="flex flex-wrap gap-2">
-              {followUpHours.map(h => (
-                <span key={h} className="flex items-center gap-1.5 rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-700">
-                  <Clock className="h-3.5 w-3.5" /> {h}h
-                  <button type="button" onClick={() => removeFollowUp(h)} className="text-blue-400 hover:text-blue-700"><X className="h-3.5 w-3.5" /></button>
-                </span>
+            <div className="space-y-3">
+              {followUpHours.map((h, idx) => (
+                <div key={h} className="rounded-md border border-gray-200 bg-gray-50 p-3">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5 rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                      <Clock className="h-3.5 w-3.5" /> Seguimiento {idx + 1} · a las {h}h
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeFollowUp(h)}
+                      title="Quitar este seguimiento"
+                      className="rounded p-1 text-gray-400 hover:bg-gray-200 hover:text-red-600"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                  <textarea
+                    value={followUpMessages[idx] ?? ''}
+                    onChange={e => updateFollowUpMessage(idx, e.target.value)}
+                    rows={3}
+                    placeholder={`Mensaje a enviar a las ${h}h. Ej: "Hola {nombre}, queriamos saber si recibiste nuestro mensaje sobre la poliza {poliza}."`}
+                    className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    Si dejas el mensaje vacio, este seguimiento se omitira.
+                  </p>
+                </div>
               ))}
             </div>
           )}
         </section>
 
-        {/* Seccion 3: Cierre automatico */}
+        {/* Seccion 3: Cierre automático */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Cierre automatico</h2>
-          <div className="max-w-xs">
-            <label className="block text-sm font-medium text-gray-700">Cerrar campana despues de (horas)</label>
-            <input type="number" {...register('autoCloseHours')} min={1} max={720} className={inputClass} />
-            {errors.autoCloseHours && <p className="mt-1 text-xs text-red-600">{errors.autoCloseHours.message}</p>}
-            <p className="mt-1 text-xs text-gray-500">Horas despues de enviada la campana para cerrar automaticamente.</p>
+          <h2 className="mb-4 text-sm font-semibold text-gray-900">Cierre automático</h2>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Cerrar campaña después de (horas)</label>
+              <input type="number" {...register('autoCloseHours')} min={1} max={720} className={inputClass} />
+              {errors.autoCloseHours && <p className="mt-1 text-xs text-red-600">{errors.autoCloseHours.message}</p>}
+              <p className="mt-1 text-xs text-gray-500">Horas después de enviada la campaña para cerrar automáticamente.</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700">Mensaje al cerrar (opcional)</label>
+              <textarea
+                {...register('autoCloseMessage')}
+                rows={3}
+                placeholder='Ej: "Cerramos esta gestión por inactividad. Si necesitas algo escribenos."'
+                className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <p className="mt-1 text-xs text-gray-500">Vacio = cierra sin enviar mensaje al cliente.</p>
+            </div>
           </div>
         </section>
 
-        {/* Seccion 4: Etiquetas */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
+        {/* Seccion: Politica del Cerebro — solo visible si BrainEnabled */}
+        {tenant?.brainEnabled && (
+          <section className="rounded-lg bg-white p-5 shadow-sm">
+            <h2 className="mb-4 text-sm font-semibold text-gray-900">Comportamiento del Cerebro ante desvios</h2>
+            <p className="mb-3 text-xs text-gray-500">Define que hace el Cerebro cuando el cliente habla de algo fuera del contexto de esta campaña.</p>
+            <div className="max-w-xs">
+              <select
+                value={outOfContextPolicy}
+                onChange={(e) => setOutOfContextPolicy(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="Contain">Contener — el agente de esta campaña gestiona todo</option>
+                <option value="Transfer">Transferir — el Cerebro ruta al agente mas adecuado</option>
+              </select>
+            </div>
+          </section>
+        )}
+
+        </>}
+        {/* ─── /TAB General ─── */}
+
+        {/* ─── Contenido de los tabs Etiquetas / Acciones / Prompt / Documentos ─── */}
+        {activeTab !== 'general' && (
+        <div className="rounded-lg bg-white shadow-sm">
+          <div className="p-5">
+            {/* ─── TAB: Etiquetas ─── */}
+            {activeTab === 'labels' && (
+        <div>
           <h2 className="mb-4 text-sm font-semibold text-gray-900">Etiquetas de seguimiento</h2>
-          <p className="mb-3 text-xs text-gray-500">Selecciona las etiquetas que se usaran para clasificar los resultados de la campana.</p>
+          <p className="mb-3 text-xs text-gray-500">Selecciona las etiquetas que se usaran para clasificar los resultados de la campaña.</p>
           {loadingLabels ? (
             <p className="text-xs text-gray-400">Cargando etiquetas...</p>
           ) : !labels?.length ? (
@@ -333,10 +766,13 @@ export function CampaignTemplateFormPage() {
               {selectedLabelIds.length > 0 && <p className="mt-2 text-xs text-blue-600">{selectedLabelIds.length} etiqueta{selectedLabelIds.length > 1 ? 's' : ''} seleccionada{selectedLabelIds.length > 1 ? 's' : ''}</p>}
             </div>
           )}
-        </section>
 
-        {/* Seccion 5: Acciones vinculadas */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
+        </div>
+            )}
+
+            {/* ─── TAB: Acciones ─── */}
+            {activeTab === 'actions' && (
+        <div>
           <div className="mb-4 flex items-center gap-2">
             <Zap className="h-5 w-5 text-amber-500" />
             <h2 className="text-sm font-semibold text-gray-900">Acciones vinculadas</h2>
@@ -381,11 +817,12 @@ export function CampaignTemplateFormPage() {
                       <Zap className="h-4 w-4 shrink-0 text-amber-500" />
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-900">{action.name}</span>
+                          <span className="text-sm font-medium text-gray-900">{getFriendlyName(action.name)}</span>
                           <div className="flex gap-1">
                             {action.requiresWebhook && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">Webhook</span>}
                             {action.sendsEmail && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">Email</span>}
                             {action.sendsSms && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">SMS</span>}
+                            {action.defaultWebhookContract && <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">Default ⚡</span>}
                           </div>
                         </div>
                         {action.description && <p className="text-xs text-gray-500">{action.description}</p>}
@@ -409,7 +846,7 @@ export function CampaignTemplateFormPage() {
                         {action.requiresWebhook && (
                           <div className="space-y-3">
                             <div className="flex items-center gap-1.5 text-xs font-semibold text-purple-700 uppercase tracking-wider">
-                              <Webhook className="h-3.5 w-3.5" /> Configuracion de Webhook
+                              <Webhook className="h-3.5 w-3.5" /> Configuración de Webhook
                             </div>
                             <div className="grid grid-cols-3 gap-3">
                               <div className="col-span-2">
@@ -436,26 +873,63 @@ export function CampaignTemplateFormPage() {
                                 {actionErrs.webhookMethod && <p className="mt-1 text-xs text-red-600">{actionErrs.webhookMethod}</p>}
                               </div>
                             </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-medium text-gray-600"><Globe className="inline h-3 w-3 mr-1" />Headers (JSON)</label>
-                              <textarea
-                                value={config.webhookHeaders ?? ''}
-                                onChange={e => updateActionConfig(action.id, 'webhookHeaders', e.target.value)}
-                                rows={2}
-                                placeholder={'{\n  "Authorization": "Bearer token..."\n}'}
-                                className={`${inputClass} font-mono text-xs`}
-                              />
-                            </div>
-                            <div>
-                              <label className="mb-1 block text-xs font-medium text-gray-600">Plantilla JSON del payload</label>
-                              <textarea
-                                value={config.webhookPayload ?? ''}
-                                onChange={e => updateActionConfig(action.id, 'webhookPayload', e.target.value)}
-                                rows={3}
-                                placeholder={'{\n  "conversationId": "{{conversationId}}",\n  "clientPhone": "{{clientPhone}}"\n}'}
-                                className={`${inputClass} font-mono text-xs`}
-                              />
-                              <p className="mt-1 text-xs text-gray-400">Usa {'{{variable}}'} para campos dinamicos.</p>
+                            {!(config.inputSchema || config.outputSchema) && (
+                              <>
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-gray-600"><Globe className="inline h-3 w-3 mr-1" />Headers (JSON)</label>
+                                  <textarea
+                                    value={config.webhookHeaders ?? ''}
+                                    onChange={e => updateActionConfig(action.id, 'webhookHeaders', e.target.value)}
+                                    rows={2}
+                                    placeholder={'{\n  "Authorization": "Bearer token..."\n}'}
+                                    className={`${inputClass} font-mono text-xs`}
+                                  />
+                                </div>
+                                <div>
+                                  <label className="mb-1 block text-xs font-medium text-gray-600">Plantilla JSON del payload</label>
+                                  <textarea
+                                    value={config.webhookPayload ?? ''}
+                                    onChange={e => updateActionConfig(action.id, 'webhookPayload', e.target.value)}
+                                    rows={3}
+                                    placeholder={'{\n  "conversationId": "{{conversationId}}",\n  "clientPhone": "{{clientPhone}}"\n}'}
+                                    className={`${inputClass} font-mono text-xs`}
+                                  />
+                                  <p className="mt-1 text-xs text-gray-400">Usa {'{{variable}}'} para campos dinamicos.</p>
+                                </div>
+                              </>
+                            )}
+
+                            {/* Webhook Contract System — Builder avanzado (Fase 5) */}
+                            <div className="mt-3 pt-3 border-t border-amber-200">
+                              {/* Badge de herencia: si la acción tiene DefaultWebhookContract pero este template no tiene override */}
+                              {action.defaultWebhookContract && !(config.inputSchema || config.outputSchema) && (
+                                <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-purple-50 border border-purple-200 px-3 py-2 text-[11px] text-purple-800">
+                                  <Webhook className="h-3.5 w-3.5 flex-shrink-0" />
+                                  <span>
+                                    <strong>Hereda contrato default</strong> de la acción. Si necesitas configuración diferente para este maestro, usa el boton de abajo.
+                                  </span>
+                                </div>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => setWebhookBuilderActionId(action.id)}
+                                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700"
+                              >
+                                <Webhook className="h-3.5 w-3.5" />
+                                {(config.inputSchema || config.outputSchema)
+                                  ? 'Editar contrato de este maestro'
+                                  : 'Personalizar contrato para este maestro'}
+                                {(config.inputSchema || config.outputSchema) && (
+                                  <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px]">
+                                    Override
+                                  </span>
+                                )}
+                              </button>
+                              <p className="mt-1 text-[10px] text-gray-500">
+                                {(config.inputSchema || config.outputSchema)
+                                  ? 'Este maestro tiene su propia configuración de webhook (override del default de la acción).'
+                                  : 'Define un contrato especifico para este maestro. Si no lo configuras, se usa el default de la acción.'}
+                              </p>
                             </div>
                           </div>
                         )}
@@ -464,7 +938,7 @@ export function CampaignTemplateFormPage() {
                         {action.sendsEmail && (
                           <div className="space-y-2">
                             <div className="flex items-center gap-1.5 text-xs font-semibold text-green-700 uppercase tracking-wider">
-                              <Mail className="h-3.5 w-3.5" /> Configuracion de Email
+                              <Mail className="h-3.5 w-3.5" /> Configuración de Email
                             </div>
                             <div>
                               <label className="mb-1 block text-xs font-medium text-gray-600">Correo electronico *</label>
@@ -484,10 +958,10 @@ export function CampaignTemplateFormPage() {
                         {action.sendsSms && (
                           <div className="space-y-2">
                             <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-700 uppercase tracking-wider">
-                              <MessageSquare className="h-3.5 w-3.5" /> Configuracion de SMS
+                              <MessageSquare className="h-3.5 w-3.5" /> Configuración de SMS
                             </div>
                             <div>
-                              <label className="mb-1 block text-xs font-medium text-gray-600">Numero de telefono *</label>
+                              <label className="mb-1 block text-xs font-medium text-gray-600">Número de teléfono *</label>
                               <div className="flex gap-2 mt-1">
                                 <select
                                   value={(() => {
@@ -542,19 +1016,24 @@ export function CampaignTemplateFormPage() {
                 )
               })}
               {selectedActionIds.length > 0 && (
-                <p className="mt-2 text-xs text-amber-600">{selectedActionIds.length} accion{selectedActionIds.length > 1 ? 'es' : ''} vinculada{selectedActionIds.length > 1 ? 's' : ''}</p>
+                <p className="mt-2 text-xs text-amber-600">{selectedActionIds.length} acción{selectedActionIds.length > 1 ? 'es' : ''} vinculada{selectedActionIds.length > 1 ? 's' : ''}</p>
               )}
             </div>
           )}
-        </section>
+        </div>
+            )}
 
-        {/* Seccion 7: Prompts vinculados */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
+            {/* ─── TAB: Prompt ─── */}
+            {activeTab === 'prompt' && (
+        <div>
           <div className="mb-4 flex items-center gap-2">
             <FileText className="h-5 w-5 text-indigo-500" />
             <h2 className="text-sm font-semibold text-gray-900">Prompts vinculados</h2>
           </div>
-          <p className="mb-3 text-xs text-gray-500">Selecciona los prompt templates que el agente usara en este maestro de campana.</p>
+          <p className="mb-3 text-xs text-gray-500">
+            Selecciona el prompt template que servirá de base. Podés editar el texto debajo — tus cambios
+            quedan guardados en este maestro y no afectan al template original ni a otros maestros.
+          </p>
           {loadingPrompts ? (
             <p className="text-xs text-gray-400">Cargando prompts...</p>
           ) : !availablePrompts?.length ? (
@@ -567,7 +1046,7 @@ export function CampaignTemplateFormPage() {
                 const selected = selectedPromptIds.includes(prompt.id)
                 return (
                   <label key={prompt.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 transition-colors ${selected ? 'border-indigo-500 bg-indigo-50' : 'border-gray-200 hover:bg-gray-50'}`}>
-                    <input type="checkbox" checked={selected} onChange={() => togglePrompt(prompt.id)} className="h-4 w-4 rounded border-gray-300 text-indigo-600" />
+                    <input type="radio" name="promptTemplate" checked={selected} onChange={() => togglePrompt(prompt.id)} className="h-4 w-4 border-gray-300 text-indigo-600" />
                     <FileText className="h-4 w-4 shrink-0 text-indigo-500" />
                     <div className="flex-1">
                       <span className="text-sm font-medium text-gray-900">{prompt.name}</span>
@@ -577,10 +1056,167 @@ export function CampaignTemplateFormPage() {
                   </label>
                 )
               })}
-              {selectedPromptIds.length > 0 && <p className="mt-2 text-xs text-indigo-600">{selectedPromptIds.length} prompt{selectedPromptIds.length > 1 ? 's' : ''} vinculado{selectedPromptIds.length > 1 ? 's' : ''}</p>}
             </div>
           )}
-        </section>
+
+          {/* Editor de la copia local del prompt */}
+          {selectedPromptIds.length > 0 && (() => {
+            const source = availablePrompts?.find(p => p.id === selectedPromptIds[0])
+            const isModified = localSystemPrompt !== sourcePromptText
+            return (
+              <div className="mt-6 rounded-lg border border-gray-200 bg-white p-4">
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-semibold text-gray-900">Prompt del maestro (copia editable)</h3>
+                    {source && (
+                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+                        Copia de: {source.name}
+                      </span>
+                    )}
+                    {isModified && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                        Editado localmente
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPromptExpanded(true)}
+                      className="inline-flex items-center gap-1 rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      title="Ver y editar el prompt en una ventana grande."
+                    >
+                      <Maximize2 className="h-3.5 w-3.5" /> Expandir
+                    </button>
+                    <button
+                      type="button"
+                      onClick={resyncPromptFromTemplate}
+                      disabled={loadingPromptDetail}
+                      className="rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      title="Vuelve a copiar el texto original del template, descartando tus cambios locales."
+                    >
+                      Re-sincronizar desde template
+                    </button>
+                  </div>
+                </div>
+                <textarea
+                  value={localSystemPrompt}
+                  onChange={(e) => setLocalSystemPrompt(e.target.value)}
+                  placeholder={loadingPromptDetail ? 'Cargando texto del template...' : 'El agente usará este texto en todas las conversaciones de este maestro.'}
+                  rows={12}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm font-mono focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  {localSystemPrompt.length} caracteres · Cambios se guardan al presionar {isEdit ? 'Actualizar' : 'Crear maestro'}.
+                </p>
+                {promptSaveMessage && (
+                  <p className="mt-2 text-xs text-emerald-700">{promptSaveMessage}</p>
+                )}
+              </div>
+            )
+          })()}
+
+          {/* Modal expandido: edición a pantalla completa */}
+          {promptExpanded && selectedPromptIds.length > 0 && (() => {
+            const source = availablePrompts?.find(p => p.id === selectedPromptIds[0])
+            const isModified = localSystemPrompt !== sourcePromptText
+            return (
+              <div
+                className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+                onKeyDown={(e) => { if (e.key === 'Escape') setPromptExpanded(false) }}
+              >
+                <div className="flex h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+                  <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+                    <div className="flex items-center gap-2">
+                      <FileText className="h-5 w-5 text-indigo-500" />
+                      <h2 className="text-base font-semibold text-gray-900">Prompt del maestro (copia editable)</h2>
+                      {source && (
+                        <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+                          Copia de: {source.name}
+                        </span>
+                      )}
+                      {isModified && (
+                        <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700">
+                          Editado localmente
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={resyncPromptFromTemplate}
+                        disabled={loadingPromptDetail}
+                        className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                      >
+                        Re-sincronizar desde template
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPromptExpanded(false)}
+                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+                        title="Cerrar"
+                      >
+                        <X className="h-5 w-5" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-hidden p-4">
+                    <textarea
+                      value={localSystemPrompt}
+                      onChange={(e) => setLocalSystemPrompt(e.target.value)}
+                      placeholder={loadingPromptDetail ? 'Cargando texto del template...' : 'El agente usará este texto en todas las conversaciones de este maestro.'}
+                      className="h-full w-full resize-none rounded-md border border-gray-300 px-3 py-2 text-sm font-mono leading-relaxed focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-t border-gray-200 bg-gray-50 px-6 py-3">
+                    <p className="text-xs text-gray-500">
+                      {localSystemPrompt.length} caracteres · Los cambios se guardan al presionar {isEdit ? 'Actualizar' : 'Crear maestro'}.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPromptExpanded(false)}
+                      className="rounded-md border border-gray-300 bg-white px-4 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      Cerrar sin guardar
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPromptExpanded(false)
+                        handleSubmit(onSubmit)()
+                      }}
+                      disabled={updateMut.isPending || createMut.isPending}
+                      className="flex items-center gap-2 rounded-md bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                    >
+                      {(updateMut.isPending || createMut.isPending) && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white/50 border-t-white" />}
+                      Guardar y cerrar
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )
+          })()}
+        </div>
+            )}
+
+            {/* ─── TAB: Documentos ─── */}
+            {activeTab === 'documents' && (
+              isEdit && id ? (
+                <CampaignTemplateDocumentsSection templateId={id} />
+              ) : (
+                <div>
+                  <h2 className="mb-2 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <FileText className="h-4 w-4" />
+                    <p>Guarda el maestro primero para poder adjuntar documentos PDF.</p>
+                  </div>
+                </div>
+              )
+            )}
+          </div>
+        </div>
+        )}
+        {/* ─── /tab content ─── */}
 
         {/* Actions */}
         <div className="flex justify-end gap-3">
@@ -592,6 +1228,97 @@ export function CampaignTemplateFormPage() {
           </button>
         </div>
       </form>
+
+      {/* Webhook Contract Builder Modal (Fase 5) */}
+      {webhookBuilderActionId && (() => {
+        const action = availableActions?.find(a => a.id === webhookBuilderActionId)
+        const currentConfig = actionConfigs[webhookBuilderActionId] ?? {}
+
+        const initial: Partial<WebhookContractBundle> = {
+          webhookUrl: currentConfig.webhookUrl ?? '',
+          webhookMethod: (currentConfig.webhookMethod as WebhookContractBundle['webhookMethod']) ?? 'POST',
+          contentType: (currentConfig.contentType as WebhookContractBundle['contentType']) ?? 'application/json',
+          structure: (currentConfig.structure as WebhookContractBundle['structure']) ?? 'flat',
+          authType: (currentConfig.authType as WebhookContractBundle['authType']) ?? 'None',
+          authValue: currentConfig.authValue,
+          apiKeyHeaderName: currentConfig.apiKeyHeaderName,
+          webhookHeaders: currentConfig.webhookHeaders,
+          timeoutSeconds: currentConfig.timeoutSeconds ?? 10,
+          inputSchema: currentConfig.inputSchema,
+          outputSchema: currentConfig.outputSchema,
+          // Action Trigger Protocol (Fase 5) — cargar TriggerConfig si ya existe
+          triggerConfig: currentConfig.triggerConfig,
+        }
+
+        return (
+          <WebhookBuilderModal
+            initial={initial}
+            actionName={action?.name ?? ''}
+            onClose={() => setWebhookBuilderActionId(null)}
+            onSave={(bundle) => {
+              // Mergear el bundle dentro del actionConfigs[actionId] existente
+              const actionId = webhookBuilderActionId
+              setActionConfigs(prev => ({
+                ...prev,
+                [actionId]: {
+                  ...prev[actionId],
+                  webhookUrl: bundle.webhookUrl,
+                  webhookMethod: bundle.webhookMethod,
+                  contentType: bundle.contentType,
+                  structure: bundle.structure,
+                  authType: bundle.authType,
+                  authValue: bundle.authValue,
+                  apiKeyHeaderName: bundle.apiKeyHeaderName,
+                  webhookHeaders: bundle.webhookHeaders,
+                  timeoutSeconds: bundle.timeoutSeconds,
+                  inputSchema: bundle.inputSchema,
+                  outputSchema: bundle.outputSchema,
+                  // Action Trigger Protocol (Fase 5) — persistir TriggerConfig
+                  triggerConfig: bundle.triggerConfig,
+                },
+              }))
+              setWebhookBuilderActionId(null)
+            }}
+          />
+        )
+      })()}
+
+      {/* Confirmación elegante para cambios destructivos del prompt */}
+      <ConfirmDialog
+        open={!!confirmAction}
+        onClose={() => setConfirmAction(null)}
+        onConfirm={() => {
+          const action = confirmAction
+          setConfirmAction(null)
+          if (action) void action.run()
+        }}
+        title={confirmAction?.title ?? ''}
+        description={confirmAction?.description ?? ''}
+        confirmLabel={confirmAction?.confirmLabel ?? 'Confirmar'}
+        variant="danger"
+      />
+
+      {/* Confirmación de swap de maestro primario.
+          Surge cuando el agente seleccionado ya tiene un maestro primario y
+          el admin intentó crear/editar otro para el mismo agente. Al aceptar,
+          el maestro anterior pierde el flag IsPrimaryForAgent (NO se desactiva
+          — las campañas vivas siguen funcionando con su prompt actual). */}
+      <ConfirmDialog
+        open={!!swapConflict}
+        onClose={handleCancelSwap}
+        onConfirm={handleConfirmSwap}
+        title="Cambiar maestro primario del agente"
+        description={
+          swapConflict
+            ? `Este agente ya tiene un maestro primario asignado: "${swapConflict.currentPrimaryName}". `
+              + 'Si continúas, ese maestro perderá el rol primario y este pasará a ser el que '
+              + 'responde a los mensajes orgánicos (sin campaña activa). Las campañas vivas del '
+              + 'maestro anterior seguirán funcionando sin cambios.'
+            : ''
+        }
+        confirmLabel="Sí, cambiar primario"
+        variant="default"
+      />
     </div>
   )
 }

@@ -37,7 +37,7 @@ export function ForgotPasswordPage() {
             <div className="flex flex-col items-center gap-3 rounded-md bg-green-50 p-4 text-center">
               <Mail className="h-8 w-8 text-green-600" />
               <p className="text-sm text-green-700">
-                Si el correo <strong>{email}</strong> esta registrado, recibiras un enlace para restablecer tu contrasena.
+                Si el correo <strong>{email}</strong> esta registrado, recibiras un enlace para restablecer tu contraseña.
               </p>
             </div>
             <p className="text-center text-xs text-gray-500">
@@ -53,7 +53,7 @@ export function ForgotPasswordPage() {
         ) : (
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="rounded-md bg-blue-50 p-3 text-center text-sm text-blue-700">
-              Ingresa tu correo electronico y te enviaremos un enlace para restablecer tu contrasena.
+              Ingresa tu correo electronico y te enviaremos un enlace para restablecer tu contraseña.
             </div>
 
             {error && <div className="rounded-md bg-red-50 p-3 text-center text-sm text-red-600">{error}</div>}

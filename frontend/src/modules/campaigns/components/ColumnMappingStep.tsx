@@ -10,7 +10,7 @@ interface ColumnMappingStepProps {
 
 const TARGET_FIELDS = [
   { value: '', label: 'No mapear (dato extra)' },
-  { value: 'phone', label: 'Telefono' },
+  { value: 'phone', label: 'Teléfono' },
   { value: 'email', label: 'Email' },
   { value: 'clientName', label: 'Nombre Cliente' },
   { value: 'policyNumber', label: 'No. Poliza' },
@@ -70,7 +70,7 @@ export function ColumnMappingStep({
         <h2 className="mb-4 text-sm font-semibold text-gray-900">Mapeo de columnas</h2>
         <p className="mb-4 text-sm text-gray-500">
           Asigna cada columna del archivo a un campo del sistema. El campo
-          &quot;Telefono&quot; es obligatorio.
+          &quot;Teléfono&quot; es obligatorio.
         </p>
 
         <div className="overflow-hidden rounded-md border border-gray-200">
@@ -127,7 +127,7 @@ export function ColumnMappingStep({
         {!phoneIsMapped && (
           <div className="mt-3 flex items-center gap-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">
             <AlertCircle className="h-4 w-4 shrink-0" />
-            Debes mapear al menos la columna &quot;Telefono&quot; para continuar.
+            Debes mapear al menos la columna &quot;Teléfono&quot; para continuar.
           </div>
         )}
       </section>

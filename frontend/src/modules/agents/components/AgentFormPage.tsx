@@ -1,13 +1,14 @@
+import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useForm, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft, FileText } from 'lucide-react'
+import { ArrowLeft, AlertCircle } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
-import { useAgent, useCreateAgent, useUpdateAgent } from '@/shared/hooks/useAgents'
+import { useAgent, useAgents, useCreateAgent, useUpdateAgent } from '@/shared/hooks/useAgents'
+import { useTenant } from '@/shared/hooks/useTenant'
 import { useWhatsAppLines } from '@/shared/hooks/useWhatsAppLines'
 import { agentSchema, agentDefaults, type AgentFormData } from '../schemas/agentSchema'
-import { AgentDocumentsSection } from './AgentDocumentsSection'
 import type { ChannelType } from '@/shared/types'
 
 const channelOptions: ChannelType[] = ['WhatsApp', 'Email', 'Sms']
@@ -19,8 +20,26 @@ export function AgentFormPage() {
 
   const { data: existing, isLoading } = useAgent(id)
   const { data: whatsAppLines } = useWhatsAppLines()
+  const { data: allAgents } = useAgents()
+  const { data: tenant } = useTenant()
   const createMutation = useCreateAgent()
   const updateMutation = useUpdateAgent()
+
+  // Estado del error backend (409 line_already_assigned).
+  const [lineConflictMessage, setLineConflictMessage] = useState<string | null>(null)
+
+  // Mapa { lineId → agente que ya la usa }. Sirve para anotar el select cuando
+  // BrainEnabled=false. Excluye el agente que estamos editando para no marcarse
+  // a sí mismo como "ocupado".
+  const lineOwners = new Map<string, string>()
+  if (allAgents) {
+    for (const a of allAgents) {
+      if (!a.isActive || !a.whatsAppLineId) continue
+      if (isEdit && id && a.id === id) continue
+      lineOwners.set(a.whatsAppLineId, a.name)
+    }
+  }
+  const enforceLineUniqueness = tenant?.brainEnabled === false
 
   const { register, handleSubmit, control, watch, formState: { errors } } = useForm<AgentFormData>({
     resolver: zodResolver(agentSchema),
@@ -52,12 +71,31 @@ export function AgentFormPage() {
   const promptLength = watch('systemPrompt')?.length ?? 0
 
   const onSubmit = (data: AgentFormData) => {
+    setLineConflictMessage(null)
+
     // Convertir string vacio a null para whatsAppLineId
     const payload = { ...data, whatsAppLineId: data.whatsAppLineId || null }
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const handleError = (err: any) => {
+      const data = err?.response?.data
+      if (data?.error === 'line_already_assigned') {
+        setLineConflictMessage(data.message ?? 'La línea seleccionada ya está asignada a otro agente activo.')
+      } else {
+        console.error('[Agent save error]', err)
+      }
+    }
+
     if (isEdit && id) {
-      updateMutation.mutate({ id, ...payload }, { onSuccess: () => navigate('/agents') })
+      updateMutation.mutate({ id, ...payload }, {
+        onSuccess: () => navigate('/agents'),
+        onError: handleError,
+      })
     } else {
-      createMutation.mutate(payload, { onSuccess: () => navigate('/agents') })
+      createMutation.mutate(payload, {
+        onSuccess: () => navigate('/agents'),
+        onError: handleError,
+      })
     }
   }
 
@@ -124,19 +162,6 @@ export function AgentFormPage() {
           </div>
         </section>
 
-        {/* Seccion 2.5: Documentos de referencia */}
-        {isEdit && id ? (
-          <AgentDocumentsSection agentId={id} />
-        ) : (
-          <section className="rounded-lg bg-white p-5 shadow-sm">
-            <h2 className="mb-2 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
-            <div className="flex items-center gap-2 text-xs text-gray-500">
-              <FileText className="h-4 w-4" />
-              <p>Guarda el agente primero para poder adjuntar documentos PDF.</p>
-            </div>
-          </section>
-        )}
-
         {/* Seccion 3: Canales y horario */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
           <h2 className="mb-4 text-sm font-semibold text-gray-900">Canales y horario</h2>
@@ -171,47 +196,38 @@ export function AgentFormPage() {
               <label className="block text-sm font-medium text-gray-700">Linea de WhatsApp</label>
               <select {...register('whatsAppLineId')} className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
                 <option value="">Sin asignar</option>
-                {whatsAppLines?.map((line) => (
-                  <option key={line.id} value={line.id}>
-                    {line.displayName} {line.phoneNumber ? `(${line.phoneNumber})` : ''} — Instancia: {line.instanceId}
-                  </option>
-                ))}
+                {whatsAppLines?.map((line) => {
+                  const owner = lineOwners.get(line.id)
+                  // Solo deshabilitamos visualmente cuando estamos en plan básico
+                  // (BrainEnabled=false). Con Brain activado se permite compartir.
+                  const disabled = enforceLineUniqueness && !!owner
+                  const label = owner
+                    ? `${line.displayName} ${line.phoneNumber ? `(${line.phoneNumber})` : ''} — ocupada por: ${owner}`
+                    : `${line.displayName} ${line.phoneNumber ? `(${line.phoneNumber})` : ''} — Instancia: ${line.instanceId}`
+                  return (
+                    <option key={line.id} value={line.id} disabled={disabled}>
+                      {label}
+                    </option>
+                  )
+                })}
               </select>
-              <p className="mt-1 text-xs text-gray-500">El numero de WhatsApp que usara este agente para enviar mensajes</p>
+              <p className="mt-1 text-xs text-gray-500">
+                {enforceLineUniqueness
+                  ? 'En el plan básico cada línea puede atender a un solo agente. Activa el Cerebro para compartir línea entre agentes.'
+                  : 'El número de WhatsApp que usara este agente para enviar mensajes.'}
+              </p>
             </div>
+
+            {lineConflictMessage && (
+              <div className="flex items-start gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
+                <span>{lineConflictMessage}</span>
+              </div>
+            )}
           </div>
         </section>
 
-        {/* Seccion 4: Config LLM */}
-        <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Configuracion LLM</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Modelo</label>
-              <select {...register('llmModel')} className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500">
-                <option value="claude-sonnet-4-6">Claude Sonnet 4.6</option>
-                <option value="claude-haiku-4-5-20251001">Claude Haiku 4.5</option>
-              </select>
-            </div>
-            <div className="col-span-2">
-              <label className="block text-sm font-medium text-gray-700">
-                Temperatura: <span className="font-normal text-blue-600">{temperature}</span>
-              </label>
-              <input
-                type="range"
-                {...register('temperature')}
-                min={0}
-                max={1}
-                step={0.1}
-                className="mt-2 w-full accent-blue-600"
-              />
-              <div className="flex justify-between text-xs text-gray-400">
-                <span>0 - Preciso</span>
-                <span>1 - Creativo</span>
-              </div>
-            </div>
-          </div>
-        </section>
+        {/* Seccion 4: Config LLM — solo editable desde el portal de admin */}
 
         {/* Actions */}
         <div className="flex justify-end gap-3">

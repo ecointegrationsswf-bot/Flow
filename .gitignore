@@ -26,3 +26,7 @@ Thumbs.db
 .mcp.json
 publish/api/
 publish/frontend/
+.claude/settings.local.json
+.claude/tmp/
+.claude/app_offline.htm
+.claude/scheduled_tasks.lock

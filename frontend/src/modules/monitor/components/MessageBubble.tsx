@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { format } from 'date-fns'
 import { FileText, Download, CheckCheck, Mic, X, ZoomIn } from 'lucide-react'
 import type { Message } from '@/shared/types'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 const agentAvatars: Record<string, string> = {
   'Agente Cobros': 'https://i.pravatar.cc/150?img=32',
@@ -29,6 +29,7 @@ function parseContent(raw: string | null | undefined): { text: string; mediaUrl:
 export function MessageBubble({ message }: { message: Message }) {
   const isInbound = message.direction === 'Inbound'
   const [lightbox, setLightbox] = useState<string | null>(null)
+  const { time: fmtTime } = useTenantTime()
 
   const { text, mediaUrl, mediaKind } = parseContent(message.content)
 
@@ -146,7 +147,7 @@ export function MessageBubble({ message }: { message: Message }) {
               {message.detectedIntent}
             </span>
           )}
-          <span className="text-[11px]">{message.sentAt ? format(new Date(message.sentAt), 'h:mm a') : ''}</span>
+          <span className="text-[11px]">{fmtTime(message.sentAt)}</span>
           {!isInbound && (
             <CheckCheck className="h-3.5 w-3.5" />
           )}

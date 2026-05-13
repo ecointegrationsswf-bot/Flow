@@ -3,31 +3,50 @@ import { adminClient } from '@/shared/api/adminClient'
 
 export interface ActionDefinition {
   id: string
+  /** null = acción global (catálogo). Guid = acción legacy scopada a ese tenant. */
+  tenantId: string | null
   name: string
   description: string | null
   requiresWebhook: boolean
   sendsEmail: boolean
   sendsSms: boolean
+  /** Acción interna del backend (Worker). No envía webhook/email/SMS — la lógica vive en un IScheduledJobExecutor. */
+  isProcess: boolean
+  /** Marca la acción como descarga de morosidad — aparece en /admin/morosidad y /morosidad. */
+  isDelinquencyDownload: boolean
   webhookUrl: string | null
   webhookMethod: string | null
   isActive: boolean
   createdAt: string
+  /** Action Trigger Protocol — TriggerConfig por defecto. JSON serializado. */
+  defaultTriggerConfig: string | null
+  /** Contrato webhook completo por defecto. JSON serializado del bundle. */
+  defaultWebhookContract: string | null
 }
 
 export interface ActionPayload {
+  /** Omitir o null para crear acción global. Guid para legacy scoped. */
+  tenantId?: string | null
   name: string
   description?: string | null
   requiresWebhook: boolean
   sendsEmail: boolean
   sendsSms: boolean
+  isProcess: boolean
+  isDelinquencyDownload: boolean
   webhookUrl?: string | null
   webhookMethod?: string | null
+  defaultTriggerConfig?: string | null
+  defaultWebhookContract?: string | null
 }
 
-export function useAdminActions() {
+export function useAdminActions(params?: { tenantId?: string; scope?: 'global' }) {
   return useQuery<ActionDefinition[]>({
-    queryKey: ['admin-actions'],
-    queryFn: () => adminClient.get('/admin/actions').then((r: { data: ActionDefinition[] }) => r.data),
+    queryKey: ['admin-actions', params?.tenantId ?? params?.scope ?? 'all'],
+    queryFn: () =>
+      adminClient
+        .get('/admin/actions', { params: params ?? {} })
+        .then((r: { data: ActionDefinition[] }) => r.data),
   })
 }
 

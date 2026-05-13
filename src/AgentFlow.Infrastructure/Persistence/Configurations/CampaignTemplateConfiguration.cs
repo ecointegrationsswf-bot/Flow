@@ -38,11 +38,31 @@ public class CampaignTemplateConfiguration : IEntityTypeConfiguration<CampaignTe
                 v => JsonSerializer.Deserialize<List<Guid>>(v, (JsonSerializerOptions?)null) ?? new List<Guid>()
             ).HasMaxLength(2000);
 
-        b.Property(t => t.ActionConfigs).HasMaxLength(8000);
+        b.Property(t => t.AttentionDays)
+            .HasConversion(
+                v => JsonSerializer.Serialize(v, (JsonSerializerOptions?)null),
+                v => JsonSerializer.Deserialize<List<int>>(v, (JsonSerializerOptions?)null) ?? new List<int> { 1, 2, 3, 4, 5 }
+            ).HasMaxLength(100).HasDefaultValueSql("'[1,2,3,4,5]'");
+        b.Property(t => t.AttentionStartTime).HasMaxLength(5).HasDefaultValueSql("'08:00'");
+        b.Property(t => t.AttentionEndTime).HasMaxLength(5).HasDefaultValueSql("'17:00'");
+
+        b.Property(t => t.ActionConfigs).HasColumnType("nvarchar(max)");
+        b.Property(t => t.FollowUpMessagesJson).HasColumnType("nvarchar(max)");
+        b.Property(t => t.AutoCloseMessage).HasMaxLength(1000);
+        b.Property(t => t.OutOfContextPolicy).HasConversion<string>().HasMaxLength(20).HasDefaultValue(Domain.Enums.OutOfContextPolicy.Contain);
 
         b.HasOne(t => t.Tenant).WithMany().HasForeignKey(t => t.TenantId).OnDelete(DeleteBehavior.Cascade);
         b.HasOne(t => t.AgentDefinition).WithMany().HasForeignKey(t => t.AgentDefinitionId).OnDelete(DeleteBehavior.NoAction);
 
         b.HasIndex(t => t.TenantId);
+
+        // Solo UN maestro primario por agente. Filtered unique index — los
+        // registros con IsPrimaryForAgent = 0 no participan del unique.
+        // En SQL Server se traduce a:
+        //   CREATE UNIQUE INDEX ... WHERE [IsPrimaryForAgent] = 1
+        b.HasIndex(t => new { t.TenantId, t.AgentDefinitionId })
+            .IsUnique()
+            .HasFilter("[IsPrimaryForAgent] = 1 AND [IsActive] = 1")
+            .HasDatabaseName("UX_CampaignTemplate_PrimaryPerAgent");
     }
 }

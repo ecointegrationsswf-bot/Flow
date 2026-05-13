@@ -1,0 +1,144 @@
+// Types TypeScript del Webhook Contract System
+// Refleja los POCOs de AgentFlow.Domain.Webhooks
+
+export type ExecutionMode = 'Inline' | 'FireAndForget' | 'Scheduled'
+export type ParamSource = 'SystemOnly' | 'ConversationOnly' | 'Mixed'
+export type ConversationImpact = 'BlocksResponse' | 'Transparent' | 'UpdatesContext'
+
+export type ContentType = 'application/json' | 'application/x-www-form-urlencoded' | 'multipart/form-data'
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH'
+export type SchemaStructure = 'flat' | 'nested'
+export type SourceType = 'system' | 'conversation' | 'static' | 'labelingResult'
+export type InputDataType = 'string' | 'number' | 'boolean' | 'date' | 'array'
+export type OutputDataType = 'string' | 'number' | 'boolean' | 'date' | 'url' | 'base64' | 'array' | 'object'
+export type OutputAction = 'send_to_agent' | 'send_whatsapp_media' | 'inject_context' | 'log_only' | 'trigger_escalation'
+export type AuthType = 'None' | 'ApiKey' | 'Bearer'
+
+export interface InputField {
+  fieldPath: string
+  sourceType: SourceType
+  sourceKey?: string
+  staticValue?: string
+  dataType: InputDataType
+  required: boolean
+  defaultValue?: string
+}
+
+export interface InputSchema {
+  contentType: ContentType
+  httpMethod: HttpMethod
+  structure: SchemaStructure
+  fields: InputField[]
+}
+
+export interface OutputField {
+  fieldPath: string
+  dataType: OutputDataType
+  mimeType?: string
+  outputAction: OutputAction
+  label: string
+  required: boolean
+}
+
+export interface OutputSchema {
+  fields: OutputField[]
+}
+
+export interface WebhookEndpointConfig {
+  webhookUrl: string
+  webhookMethod: HttpMethod
+  authType: AuthType
+  authValue?: string
+  apiKeyHeaderName?: string
+  webhookHeaders?: string
+  timeoutSeconds: number
+}
+
+/**
+ * Action Trigger Protocol — Capa 1. Metadata que define cuándo y cómo el
+ * agente debe disparar una acción. Se embebe en el JSON ActionConfigs junto
+ * al resto del bundle. Todos los campos son opcionales para mantener
+ * retrocompatibilidad con acciones sin TriggerConfig.
+ *
+ * Lo consume el backend en IActionPromptBuilder para construir el bloque
+ * "ACCIONES DISPONIBLES" que se inyecta al system prompt del agente.
+ */
+export interface TriggerConfig {
+  /** Descripción en lenguaje natural. Mínimo ~20 caracteres para ser útil. */
+  description?: string
+  /** Frases reales que activan la acción. Entre 3 y 7 recomendado. */
+  triggerExamples?: string[]
+  /** Nombres de params que el agente debe confirmar antes de disparar. Referencia InputSchema.fields con sourceType=conversation. */
+  requiresConfirmation?: string[]
+  /** Pregunta sugerida que el agente puede usar cuando faltan confirmaciones. */
+  clarificationPrompt?: string
+}
+
+/**
+ * Bundle completo de configuración de una acción.
+ * Se guarda dentro del JSON CampaignTemplates.ActionConfigs[actionId].
+ * Coexiste con los campos legacy (webhookUrl, webhookMethod, etc.) que
+ * el formulario antiguo ya maneja.
+ */
+export interface WebhookContractBundle extends WebhookEndpointConfig {
+  contentType: ContentType
+  structure: SchemaStructure
+  inputSchema?: InputSchema
+  outputSchema?: OutputSchema
+  /** Action Trigger Protocol (Fase 5) — opcional, define cuándo el agente puede disparar la acción. */
+  triggerConfig?: TriggerConfig
+}
+
+// ── Test endpoint ──
+
+export interface TestWebhookRequest {
+  webhookUrl: string
+  webhookMethod: HttpMethod
+  contentType: ContentType
+  authType: AuthType
+  authValue?: string
+  apiKeyHeaderName?: string
+  webhookHeaders?: string
+  timeoutSeconds: number
+  samplePayload?: Record<string, unknown>
+}
+
+export interface DetectedFieldDto {
+  fieldPath: string
+  dataType: string
+}
+
+export interface TestWebhookResponse {
+  success: boolean
+  httpStatus: number
+  responseBody?: unknown
+  rawBody?: string
+  detectedFields?: DetectedFieldDto[]
+  errorMessage?: string
+  durationMs: number
+}
+
+// ── Catálogo de sourceKeys del sistema (para el dropdown del editor) ──
+
+export const SYSTEM_SOURCE_KEYS: { key: string; label: string; group: string }[] = [
+  { key: 'contact.phone', label: 'Teléfono del contacto', group: 'Contacto' },
+  { key: 'contact.name', label: 'Nombre del contacto', group: 'Contacto' },
+  { key: 'contact.email', label: 'Email del contacto', group: 'Contacto' },
+  { key: 'contact.policyNumber', label: 'Número de póliza', group: 'Contacto' },
+  { key: 'contact.insuranceCompany', label: 'Aseguradora', group: 'Contacto' },
+  { key: 'contact.pendingAmount', label: 'Monto pendiente', group: 'Contacto' },
+
+  { key: 'conversation.id', label: 'ID de conversación', group: 'Conversación' },
+  { key: 'conversation.createdAt', label: 'Fecha inicio conversación', group: 'Conversación' },
+
+  { key: 'session.id', label: 'ID de sesión', group: 'Sesión' },
+  { key: 'session.origin', label: 'Origen (Inbound/Campaign)', group: 'Sesión' },
+  { key: 'session.agentSlug', label: 'Slug del agente activo', group: 'Sesión' },
+
+  { key: 'campaign.id', label: 'ID de campaña', group: 'Campaña' },
+  { key: 'campaign.name', label: 'Nombre de campaña', group: 'Campaña' },
+
+  { key: 'tenant.id', label: 'ID del tenant', group: 'Tenant' },
+  { key: 'tenant.name', label: 'Nombre del tenant', group: 'Tenant' },
+  { key: 'tenant.slug', label: 'Slug del tenant', group: 'Tenant' },
+]

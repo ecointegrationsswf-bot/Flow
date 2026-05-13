@@ -12,7 +12,7 @@ import { useAdminCategories } from '@/modules/admin/hooks/useAdminCategories'
 
 const templateSchema = z.object({
   name: z.string().min(1, 'El nombre es requerido').max(100),
-  category: z.string().min(1, 'La categoria es requerida'),
+  category: z.string().min(1, 'La categoría es requerida'),
   isActive: z.boolean().default(true),
   systemPrompt: z.string().min(10, 'El prompt debe tener al menos 10 caracteres'),
   tone: z.string().nullable().default(null),
@@ -106,7 +106,7 @@ export function AgentTemplateFormPage() {
               {errors.name && <p className="mt-1 text-xs text-red-600">{errors.name.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700">Categoria *</label>
+              <label className="block text-sm font-medium text-gray-700">Categoría *</label>
               <select {...register('category')} className={inputClass}>
                 <option value="">-- Seleccionar --</option>
                 {activeCategories.map((c) => (
@@ -143,7 +143,7 @@ export function AgentTemplateFormPage() {
 
         {/* Seccion 3: Config LLM */}
         <section className="rounded-lg bg-white p-5 shadow-sm">
-          <h2 className="mb-4 text-sm font-semibold text-gray-900">Configuracion LLM</h2>
+          <h2 className="mb-4 text-sm font-semibold text-gray-900">Configuración LLM</h2>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">Modelo</label>

@@ -100,7 +100,7 @@ export function CampaignFixedUploadPage() {
     uploadMutation.mutate(fd, {
       onSuccess: () => setDone(true),
       onError: (err: unknown) => {
-        const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Error al crear la campana.'
+        const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Error al crear la campaña.'
         setError(msg)
       },
     })
@@ -110,15 +110,15 @@ export function CampaignFixedUploadPage() {
   if (done) {
     return (
       <div>
-        <PageHeader title="Campana creada" />
+        <PageHeader title="Campaña creada" />
         <div className="mx-auto max-w-md space-y-4 text-center">
           <CheckCircle className="mx-auto h-12 w-12 text-green-500" />
-          <p className="text-lg font-semibold text-gray-900">Campana creada exitosamente</p>
+          <p className="text-lg font-semibold text-gray-900">Campaña creada exitosamente</p>
           <button
             onClick={() => navigate('/campaigns')}
             className="rounded-lg bg-blue-600 px-6 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
           >
-            Ver campanas
+            Ver campañas
           </button>
         </div>
       </div>
@@ -131,7 +131,7 @@ export function CampaignFixedUploadPage() {
 
       <div>
         <PageHeader
-          title="Nueva campana — Formato fijo"
+          title="Nueva campaña — Formato fijo"
           subtitle="Columnas requeridas: NombreCliente, Celular, CodigoPais, KeyValue"
           action={
             <button
@@ -150,14 +150,14 @@ export function CampaignFixedUploadPage() {
             {REQUIRED_COLUMNS.map((col) => (
               <span key={col} className="rounded-md bg-blue-100 px-2.5 py-0.5 text-xs font-mono font-medium text-blue-800">{col}</span>
             ))}
-            <span className="text-xs text-blue-600 ml-1">+ columnas extra capturadas automaticamente</span>
+            <span className="text-xs text-blue-600 ml-1">+ columnas extra capturadas automáticamente</span>
           </div>
 
           {/* Configuración */}
           <div className="rounded-lg bg-white p-5 shadow-sm space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Nombre de la campana *</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nombre de la campaña *</label>
                 <input
                   type="text"
                   value={name}
@@ -314,7 +314,7 @@ export function CampaignFixedUploadPage() {
             >
               {uploadMutation.isPending
                 ? <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" /> Creando...</>
-                : 'Crear campana'}
+                : 'Crear campaña'}
             </button>
           )}
         </div>

@@ -15,7 +15,8 @@ public record ConversationDetail(
     string Channel,
     bool IsHumanHandled,
     DateTime LastActivityAt,
-    IEnumerable<MessageDetail> Messages
+    IEnumerable<MessageDetail> Messages,
+    string? CampaignName
 );
 
 public record MessageDetail(
@@ -41,6 +42,14 @@ public class GetConversationDetailHandler(IConversationRepository repo)
         if (conv is null || conv.TenantId != q.TenantId)
             return null;
 
+        // Obtener nombre de campaña usando el repositorio existente
+        string? campaignName = null;
+        if (conv.CampaignId.HasValue)
+        {
+            var campaign = await repo.GetCampaignAsync(conv.CampaignId.Value, ct);
+            campaignName = campaign?.Name;
+        }
+
         return new ConversationDetail(
             conv.Id,
             conv.ClientPhone,
@@ -61,7 +70,8 @@ public class GetConversationDetailHandler(IConversationRepository repo)
                     m.ExternalMessageId,
                     m.AgentName,
                     m.DetectedIntent
-                ))
+                )),
+            campaignName
         );
     }
 }

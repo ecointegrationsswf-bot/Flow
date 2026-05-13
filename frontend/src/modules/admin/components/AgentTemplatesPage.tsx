@@ -7,6 +7,7 @@ import {
   type AgentTemplate,
 } from '@/modules/admin/hooks/useAdminAgentTemplates'
 import { MigrateTemplateModal } from './MigrateTemplateModal'
+import { confirmDialog } from '@/shared/components/dialog'
 
 export function AgentTemplatesPage() {
   const navigate = useNavigate()
@@ -19,7 +20,7 @@ export function AgentTemplatesPage() {
   const grouped = useMemo(() => {
     if (!templates) return {}
     return templates.reduce<Record<string, AgentTemplate[]>>((acc, t) => {
-      const cat = t.category || 'Sin categoria'
+      const cat = t.category || 'Sin categoría'
       if (!acc[cat]) acc[cat] = []
       acc[cat].push(t)
       return acc
@@ -38,7 +39,8 @@ export function AgentTemplatesPage() {
   }
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Eliminar esta plantilla?')) return
+    const ok = await confirmDialog({ title: 'Eliminar plantilla', description: '¿Seguro que quieres eliminar esta plantilla de agente?', confirmLabel: 'Eliminar', variant: 'danger' })
+    if (!ok) return
     await deleteMut.mutateAsync(id)
   }
 

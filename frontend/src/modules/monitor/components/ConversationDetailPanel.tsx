@@ -3,7 +3,8 @@ import { UserCheck, PauseCircle, PlayCircle, Send, Paperclip, Smile, X, Loader2,
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { MessageBubble } from './MessageBubble'
 import { useConversationDetail, useTakeConversation, useSendReply, useSendFile, useReactivateAgent } from '@/shared/hooks/useMonitor'
-import { format } from 'date-fns'
+import { usePermissions } from '@/shared/hooks/usePermissions'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
 interface ConversationDetailPanelProps {
   conversationId: string
@@ -17,6 +18,10 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  const { hasPermission } = usePermissions()
+  const canTake = hasPermission('take_conversation')
+  const { time: fmtTime } = useTenantTime()
 
   const { data: conversation, isLoading } = useConversationDetail(conversationId)
   const takeMutation = useTakeConversation()
@@ -70,7 +75,7 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
   if (!conversation) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-gray-400">
-        No se pudo cargar la conversacion
+        No se pudo cargar la conversación
       </div>
     )
   }
@@ -78,16 +83,21 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
   const isSending = replyMutation.isPending || fileMutation.isPending
   const displayName = conversation.clientName ?? conversation.clientPhone
 
-  // Get time for header
-  const lastTime = conversation.lastActivityAt ? format(new Date(conversation.lastActivityAt), 'h:mm a') : ''
+  // Get time for header (en zona horaria del tenant)
+  const lastTime = fmtTime(conversation.lastActivityAt)
 
   return (
     <div className="flex h-full flex-col">
       {/* Header — clean white with name and actions */}
       <div className="flex items-center justify-between border-b border-gray-200 bg-white px-6 py-3">
         <div className="flex items-center gap-3">
-          <div>
+          <div className="flex items-center gap-2">
             <p className="text-base font-semibold text-gray-900">{displayName}</p>
+            {conversation.campaignName && (
+              <span className="rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-600 border border-blue-100">
+                {conversation.campaignName}
+              </span>
+            )}
           </div>
         </div>
 
@@ -104,7 +114,7 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
              conversation.status}
           </span>
 
-          {!conversation.isHumanHandled ? (
+          {canTake && (!conversation.isHumanHandled ? (
             <button
               onClick={() => takeMutation.mutate(conversationId)}
               disabled={takeMutation.isPending}
@@ -120,7 +130,7 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
             >
               <PlayCircle className="h-3.5 w-3.5" /> Reactivar IA
             </button>
-          )}
+          ))}
 
           <button className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
             <MoreVertical className="h-5 w-5" />
@@ -171,43 +181,56 @@ export function ConversationDetailPanel({ conversationId }: ConversationDetailPa
         </div>
       )}
 
-      {/* Input area — matching reference: emoji, clip, text field, send */}
-      <div className="flex items-end gap-3 border-t border-gray-200 bg-white px-6 py-3">
-        <button type="button" className="mb-1 rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
-          <Smile className="h-5 w-5" />
-        </button>
-
-        <button type="button" onClick={() => fileInputRef.current?.click()} className="mb-1 rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
-          <Paperclip className="h-5 w-5" />
-        </button>
-
-        <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelect} accept="image/*,.pdf" />
-
-        <div className="flex-1">
-          <textarea
-            ref={textareaRef}
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
-            rows={1}
-            className="w-full resize-none rounded-xl border border-gray-200 bg-[#f6f6f6] px-4 py-2.5 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400/50 focus:border-blue-400"
-            style={{ maxHeight: 120 }}
-          />
+      {/* Input area */}
+      {!canTake ? (
+        <div className="flex items-center justify-center gap-2 border-t border-gray-200 bg-gray-50 px-6 py-3">
+          <p className="text-xs text-gray-400">Solo lectura — sin permiso para intervenir conversaciones</p>
         </div>
+      ) : conversation.isHumanHandled ? (
+        <div className="flex items-center justify-center gap-2 border-t border-gray-200 bg-gray-50 px-6 py-4">
+          <UserCheck className="h-4 w-4 text-amber-500 shrink-0" />
+          <p className="text-sm text-gray-500">
+            Un ejecutivo está atendiendo esta conversación por WhatsApp. El chat del monitor está deshabilitado.
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-end gap-3 border-t border-gray-200 bg-white px-6 py-3">
+          <button type="button" className="mb-1 rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
+            <Smile className="h-5 w-5" />
+          </button>
 
-        <button
-          onClick={handleSend}
-          disabled={(!reply.trim() && !selectedFile) || isSending}
-          className="mb-0.5 flex h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors shrink-0"
-        >
-          {isSending ? (
-            <Loader2 className="h-5 w-5 animate-spin" />
-          ) : (
-            <Send className="h-5 w-5" />
-          )}
-        </button>
-      </div>
+          <button type="button" onClick={() => fileInputRef.current?.click()} className="mb-1 rounded-full p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors">
+            <Paperclip className="h-5 w-5" />
+          </button>
+
+          <input ref={fileInputRef} type="file" className="hidden" onChange={handleFileSelect} accept="image/*,.pdf" />
+
+          <div className="flex-1">
+            <textarea
+              ref={textareaRef}
+              value={reply}
+              onChange={(e) => setReply(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Type a message..."
+              rows={1}
+              className="w-full resize-none rounded-xl border border-gray-200 bg-[#f6f6f6] px-4 py-2.5 text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-400/50 focus:border-blue-400"
+              style={{ maxHeight: 120 }}
+            />
+          </div>
+
+          <button
+            onClick={handleSend}
+            disabled={(!reply.trim() && !selectedFile) || isSending}
+            className="mb-0.5 flex h-10 w-10 items-center justify-center rounded-full bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 transition-colors shrink-0"
+          >
+            {isSending ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Send className="h-5 w-5" />
+            )}
+          </button>
+        </div>
+      )}
     </div>
   )
 }

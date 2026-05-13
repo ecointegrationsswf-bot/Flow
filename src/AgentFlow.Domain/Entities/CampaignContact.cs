@@ -27,10 +27,34 @@ public class CampaignContact
     // Almacena el array de registros agrupados por número de teléfono
     public string? ContactDataJson { get; set; }
 
-    // Estado
+    // Estado gestión (resultado de negocio — ¿pagó, rechazó, etc.?)
     public bool IsPhoneValid { get; set; } = true;
     public int RetryCount { get; set; }
     public GestionResult Result { get; set; } = GestionResult.Pending;
     public DateTime? LastContactAt { get; set; }
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// JSON array (List<int>) de índices de seguimientos ya enviados a este contacto.
+    /// Garantiza idempotencia del FollowUpExecutor: si por algún reintento Hangfire
+    /// dispara dos veces el mismo job, el índice ya estará en la lista y se omitirá.
+    /// Default '[]' — se inicializa vacío.
+    /// </summary>
+    public string? FollowUpsSentJson { get; set; } = "[]";
+
+    // Estado de despacho (técnico — ¿llegó el mensaje?)
+    public DispatchStatus DispatchStatus { get; set; } = DispatchStatus.Pending;
+    public DateTime? ClaimedAt { get; set; }
+    public DateTime? SentAt { get; set; }
+    public int DispatchAttempts { get; set; }
+    public string? GeneratedMessage { get; set; }       // Mensaje final enviado (auditoría)
+    public string? ExternalMessageId { get; set; }      // ID de UltraMsg
+    public string? DispatchError { get; set; }          // Detalle del último error
+
+    /// <summary>
+    /// Cuándo el CampaignWorker puede tomar este contacto. NULL = inmediato.
+    /// Lo usa el Intake para diferir contactos que excedieron el warm-up del día
+    /// (ScheduledFor = mañana a las BusinessHoursStart del tenant).
+    /// </summary>
+    public DateTime? ScheduledFor { get; set; }
 }

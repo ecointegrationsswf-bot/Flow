@@ -10,27 +10,35 @@ namespace AgentFlow.Infrastructure.Campaigns;
 /// <summary>
 /// Servicio que envía los mensajes de una campaña de forma controlada.
 ///
-/// Reglas anti-ban:
-/// - Delay aleatorio de 8-15 segundos entre cada mensaje
-/// - Máximo 200 mensajes por hora por número
-/// - Máximo 1,000 mensajes por día por número
+/// Reglas anti-ban (todas parametrizadas por Tenant a partir de Fase 3 v2):
+/// - Delay base entre mensajes = 60 / Tenant.CampaignMessagesPerMinute, con jitter ±20%
+/// - Tope por lote = Tenant.CampaignMaxPerHour
+/// - Tope diario por tenant = Tenant.CampaignMaxPerDay
 /// - Solo envía dentro del horario de oficina del tenant (default 8am-5pm Panamá)
-/// - Si UltraMsg responde error, pausa 30 minutos
+/// - Si el provider responde 3+ errores consecutivos, frena el lote
 ///
 /// El servicio NO programa los envíos — solo ejecuta un lote.
-/// Hangfire (o quien lo llame) se encarga de programar cuándo corre.
+/// El CampaignWorker (BackgroundService) se encarga de programar cuándo corre.
+///
+/// Garantías de aislamiento (lo invoca el CampaignWorker):
+/// - El Worker procesa tenants en paralelo, pero las campañas DE UN TENANT son
+///   secuenciales (FIFO LaunchedAt). Eso impide que dos campañas del mismo número
+///   compitan por el rate limit y dupliquen el throughput observado por Meta.
+/// - El claim atómico (Queued→Claimed con ExecuteUpdate filtrado por DispatchStatus)
+///   garantiza que dos instancias del Worker NUNCA tomen el mismo CampaignContact.
 /// </summary>
 public class CampaignDispatcherService(
     AgentFlowDbContext db,
     IChannelProviderFactory providerFactory,
+    IWebhookEventDispatcher eventDispatcher,
+    IScheduledJobRepository scheduledJobs,
+    IInitialMessageGenerator? messageGenerator,
+    IBusinessHoursClock businessHours,
     ILogger<CampaignDispatcherService> logger)
 {
-    // ── Configuración anti-ban ────────────────────────
-    private const int MinDelaySeconds = 8;      // mínimo entre mensajes
-    private const int MaxDelaySeconds = 15;     // máximo entre mensajes
-    private const int MaxPerHour = 200;         // máximo mensajes por hora
-    private const int MaxPerDay = 1000;         // máximo mensajes por día
-    private const int ErrorPauseMinutes = 30;   // pausa ante error de UltraMsg
+    // ── Mínimos de seguridad — tope inferior aunque la config diga lo contrario ──
+    private const int MinDelaySecondsFloor = 3;     // jamás bajamos de 3s entre mensajes
+    private const int ConsecutiveErrorThreshold = 3; // 3 errores seguidos → frena
 
     private static readonly Random _random = new();
 
@@ -46,9 +54,11 @@ public class CampaignDispatcherService(
     /// </summary>
     public async Task<DispatchResult> DispatchBatchAsync(Guid campaignId, CancellationToken ct = default)
     {
-        // ── 1. Cargar campaña con su tenant ──────────────
+        // ── 1. Cargar campaña con su tenant + template ────
+        // Template necesario porque el horario de envío vive ahí (con prioridad sobre el tenant).
         var campaign = await db.Campaigns
             .Include(c => c.Tenant)
+            .Include(c => c.CampaignTemplate)
             .FirstOrDefaultAsync(c => c.Id == campaignId, ct);
 
         if (campaign is null)
@@ -61,14 +71,46 @@ public class CampaignDispatcherService(
         if (tenant is null)
             return new DispatchResult(0, 0, "Tenant no encontrado", DispatchStopReason.Error);
 
-        // ── 2. Verificar horario de oficina ──────────────
-        if (!IsWithinBusinessHours(tenant))
+        // Off-switch del tenant (no relanza, no envía).
+        if (!tenant.CampaignDispatchEnabled)
         {
-            logger.LogInformation(
-                "Campaña {CampaignId}: fuera de horario ({Start}-{End} {TZ}). Será reprogramada.",
-                campaignId, tenant.BusinessHoursStart, tenant.BusinessHoursEnd, tenant.TimeZone);
-            return new DispatchResult(0, 0, "Fuera de horario de oficina", DispatchStopReason.OutsideBusinessHours);
+            logger.LogInformation("Campaña {CampaignId}: dispatch deshabilitado para tenant {TenantId}.",
+                campaignId, tenant.Id);
+            return new DispatchResult(0, 0, "Dispatch deshabilitado por tenant", DispatchStopReason.CampaignInactive);
         }
+
+        // ── 2. Cierre temprano: si NO queda ningún contacto en estado in-flight, la
+        //      campaña ya terminó. Marcamos Completed independientemente del horario
+        //      de oficina — cerrar una campaña terminada no es lo mismo que enviar.
+        var hasActive = await db.CampaignContacts.AnyAsync(cc => cc.CampaignId == campaignId
+                            && (cc.DispatchStatus == DispatchStatus.Pending
+                                || cc.DispatchStatus == DispatchStatus.Queued
+                                || cc.DispatchStatus == DispatchStatus.Claimed
+                                || cc.DispatchStatus == DispatchStatus.Retry
+                                || cc.DispatchStatus == DispatchStatus.Deferred), ct);
+        if (!hasActive)
+        {
+            campaign.CompletedAt = DateTime.UtcNow;
+            campaign.Status = CampaignStatus.Completed;
+            campaign.IsActive = false;
+            await db.SaveChangesAsync(ct);
+
+            logger.LogInformation("Campaña {CampaignId}: completada (cierre temprano fuera de horario o sin in-flight).", campaignId);
+
+            try { await eventDispatcher.DispatchAsync("CampaignFinished", campaignId.ToString(), campaign.TenantId, ct); }
+            catch (Exception ex) { logger.LogError(ex, "DispatchAsync CampaignFinished falló (continuamos)."); }
+
+            return new DispatchResult(0, 0, "Campaña completada", DispatchStopReason.AllContactsProcessed);
+        }
+
+        // ── 3. Verificar horario de envío (solo bloquea ENVÍO; el cierre ya pasó arriba) ──
+        var hoursCheck = IsWithinBusinessHours(campaign, tenant);
+        if (!hoursCheck.Within)
+        {
+            logger.LogInformation("Campaña {CampaignId}: fuera de horario — {Reason}", campaignId, hoursCheck.Reason);
+            return new DispatchResult(0, 0, "Fuera de horario", DispatchStopReason.OutsideBusinessHours);
+        }
+        logger.LogDebug("Campaña {CampaignId}: {Reason}", campaignId, hoursCheck.Reason);
 
         // ── 3. Obtener provider del tenant ───────────────
         var provider = await providerFactory.GetProviderAsync(tenant.Id, ct);
@@ -78,99 +120,220 @@ public class CampaignDispatcherService(
             return new DispatchResult(0, 0, "Sin línea WhatsApp activa", DispatchStopReason.NoProvider);
         }
 
-        // ── 4. Contar envíos del día (para límite diario) ─
-        var todayUtc = DateTime.UtcNow.Date;
-        var sentToday = await db.Set<CampaignContact>()
-            .Where(cc => cc.Campaign!.TenantId == tenant.Id
-                      && cc.LastContactAt != null
-                      && cc.LastContactAt >= todayUtc)
-            .CountAsync(ct);
+        // Configuración del tenant (rate limit, topes) con safe-floor sobre el delay.
+        var maxPerHour = Math.Max(1, tenant.CampaignMaxPerHour);
+        var maxPerDay = Math.Max(1, tenant.CampaignMaxPerDay);
+        var messagesPerMinute = Math.Max(1, tenant.CampaignMessagesPerMinute);
+        var baseDelaySeconds = Math.Max(MinDelaySecondsFloor, 60.0 / messagesPerMinute);
 
-        if (sentToday >= MaxPerDay)
+        // ── 4. Contar envíos del día por tenant (para límite diario) ─
+        var todayUtc = DateTime.UtcNow.Date;
+        var sentToday = await (
+            from cc in db.CampaignContacts
+            join c in db.Campaigns on cc.CampaignId equals c.Id
+            where c.TenantId == tenant.Id
+               && cc.SentAt != null
+               && cc.SentAt >= todayUtc
+            select cc.Id
+        ).CountAsync(ct);
+
+        if (sentToday >= maxPerDay)
         {
             logger.LogInformation("Campaña {CampaignId}: límite diario alcanzado ({Sent}/{Max}).",
-                campaignId, sentToday, MaxPerDay);
+                campaignId, sentToday, maxPerDay);
             return new DispatchResult(0, sentToday, "Límite diario alcanzado", DispatchStopReason.DailyLimitReached);
         }
 
-        // ── 5. Obtener contactos pendientes ──────────────
-        var pendingContacts = await db.Set<CampaignContact>()
+        // ── 5. Claim atómico Queued → Claimed (anti double-send entre Workers concurrentes) ─
+        // Estrategia: ExecuteUpdate filtrado por DispatchStatus=Queued. Si dos workers ven
+        // el mismo candidato, el primero que ejecuta el UPDATE gana — el segundo no encuentra
+        // filas con DispatchStatus=Queued para esos IDs y quedará procesando 0.
+        var nowUtc = DateTime.UtcNow;
+        var batchSize = Math.Min(maxPerHour, maxPerDay - sentToday);
+
+        // Paso A: identificar candidatos del lote — IDs en orden FIFO.
+        var candidateIds = await db.CampaignContacts
             .Where(cc => cc.CampaignId == campaignId
-                      && cc.IsPhoneValid
-                      && cc.Result == GestionResult.Pending
-                      && cc.LastContactAt == null)  // nunca contactado
+                      && cc.DispatchStatus == DispatchStatus.Queued
+                      && (cc.ScheduledFor == null || cc.ScheduledFor <= nowUtc))
             .OrderBy(cc => cc.CreatedAt)
-            .Take(MaxPerHour)                        // máximo por lote
+            .Take(batchSize)
+            .Select(cc => cc.Id)
+            .ToListAsync(ct);
+
+        if (candidateIds.Count == 0)
+        {
+            // No quedan Queued elegibles. ¿Ya completamos todo o sólo estamos en pausa?
+            // IMPORTANTE: incluimos Pending — son contactos legacy v1 que aún no pasaron
+            // por el intake v2. Si los hay, NO marcamos Completed: la campaña está en
+            // un flujo legacy y no nos toca cerrarla.
+            var hasMore = await db.CampaignContacts
+                .AnyAsync(cc => cc.CampaignId == campaignId
+                             && (cc.DispatchStatus == DispatchStatus.Pending
+                                 || cc.DispatchStatus == DispatchStatus.Queued
+                                 || cc.DispatchStatus == DispatchStatus.Claimed
+                                 || cc.DispatchStatus == DispatchStatus.Retry
+                                 || cc.DispatchStatus == DispatchStatus.Deferred), ct);
+
+            if (!hasMore)
+            {
+                campaign.CompletedAt = DateTime.UtcNow;
+                campaign.Status = CampaignStatus.Completed;
+                campaign.IsActive = false;
+                await db.SaveChangesAsync(ct);
+
+                logger.LogInformation("Campaña {CampaignId}: completada. Todos los contactos procesados.", campaignId);
+
+                try { await eventDispatcher.DispatchAsync("CampaignFinished", campaignId.ToString(), campaign.TenantId, ct); }
+                catch (Exception ex) { logger.LogError(ex, "DispatchAsync CampaignFinished falló (continuamos)."); }
+
+                return new DispatchResult(0, 0, "Campaña completada", DispatchStopReason.AllContactsProcessed);
+            }
+
+            // Hay Deferred / Retry pendientes pero no aún elegibles (ScheduledFor en el futuro).
+            return new DispatchResult(0, 0, "Sin contactos elegibles ahora", DispatchStopReason.BatchCompleted);
+        }
+
+        // Paso B: claim atómico — solo los que sigan Queued.
+        var claimedAt = DateTime.UtcNow;
+        var actuallyClaimed = await db.CampaignContacts
+            .Where(cc => candidateIds.Contains(cc.Id) && cc.DispatchStatus == DispatchStatus.Queued)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.DispatchStatus, DispatchStatus.Claimed)
+                .SetProperty(c => c.ClaimedAt, claimedAt), ct);
+
+        if (actuallyClaimed == 0)
+        {
+            // Otra instancia del Worker se llevó todos los candidatos. No es un error — solo no me toca.
+            return new DispatchResult(0, 0, "Otro worker tomó el lote", DispatchStopReason.BatchCompleted);
+        }
+
+        // Paso C: recargar los efectivamente Claimed por mí (filtro por ClaimedAt para distinguir
+        // de Claims de otras instancias que pudieran haber ganado otros candidatos).
+        var pendingContacts = await db.CampaignContacts
+            .Where(cc => candidateIds.Contains(cc.Id)
+                      && cc.DispatchStatus == DispatchStatus.Claimed
+                      && cc.ClaimedAt == claimedAt)
             .ToListAsync(ct);
 
         if (pendingContacts.Count == 0)
         {
-            // Todos los contactos ya fueron procesados
-            campaign.CompletedAt = DateTime.UtcNow;
-            campaign.IsActive = false;
-            await db.SaveChangesAsync(ct);
-
-            logger.LogInformation("Campaña {CampaignId}: completada. Todos los contactos procesados.", campaignId);
-            return new DispatchResult(0, 0, "Campaña completada", DispatchStopReason.AllContactsProcessed);
+            // Caso raro: otro worker nos ganó la carrera entre el ExecuteUpdate y el SELECT.
+            return new DispatchResult(0, 0, "Otro worker tomó el lote (post-claim)", DispatchStopReason.BatchCompleted);
         }
 
-        // ── 6. Marcar campaña como iniciada ──────────────
-        if (campaign.StartedAt is null)
+        // ── 6. Marcar campaña como iniciada (idempotente) ──
+        var isFirstStart = campaign.StartedAt is null;
+        if (isFirstStart)
         {
             campaign.StartedAt = DateTime.UtcNow;
             await db.SaveChangesAsync(ct);
+
+            try { await eventDispatcher.DispatchAsync("CampaignStarted", campaignId.ToString(), campaign.TenantId, ct); }
+            catch (Exception ex) { logger.LogError(ex, "DispatchAsync CampaignStarted falló (continuamos)."); }
+
+            // El auto-cierre es responsabilidad del sweeper global
+            // (CampaignAutoCloseSweepExecutor / cron AUTO_CLOSE_CAMPAIGN_SWEEP).
+            // Antes acá programábamos un job DelayFromEvent por campaña — eso
+            // saturaba ScheduledWebhookJobs. El sweeper tick cada 30 min revisa
+            // todas las Running y cierra las que pasen su AutoCloseHours.
         }
 
-        // ── 7. Enviar mensajes uno a uno ─────────────────
+        // ── 7. Enviar mensajes uno a uno (con rate limit del tenant) ─────────────────
         var sent = 0;
         var failed = 0;
+        var consecutiveErrors = 0;
 
         foreach (var contact in pendingContacts)
         {
             if (ct.IsCancellationRequested) break;
 
-            // Verificar horario antes de cada envío
-            if (!IsWithinBusinessHours(tenant))
+            // Verificar horario antes de cada envío.
+            var hoursCheckMid = IsWithinBusinessHours(campaign, tenant);
+            if (!hoursCheckMid.Within)
             {
-                logger.LogInformation("Campaña {CampaignId}: salió del horario durante el envío.", campaignId);
+                logger.LogInformation("Campaña {CampaignId}: salió del horario — {Reason}", campaignId, hoursCheckMid.Reason);
+                // Devolver al pool: vuelvo a Queued para que el Worker reintente más tarde.
+                contact.DispatchStatus = DispatchStatus.Queued;
+                contact.ClaimedAt = null;
                 break;
             }
 
-            // Verificar límite diario
-            if (sentToday + sent >= MaxPerDay)
+            // Verificar límite diario.
+            if (sentToday + sent >= maxPerDay)
             {
                 logger.LogInformation("Campaña {CampaignId}: límite diario alcanzado durante el envío.", campaignId);
+                contact.DispatchStatus = DispatchStatus.Queued;
+                contact.ClaimedAt = null;
                 break;
             }
 
             try
             {
-                // Construir mensaje personalizado con datos del contacto
-                var message = BuildInitialMessage(contact, campaign);
+                // Preferimos Claude (paridad con n8n: usa el prompt del CampaignTemplate).
+                // Si falla o no está configurado el LLM, caemos al template básico.
+                string? message = null;
+                if (messageGenerator is not null)
+                {
+                    try { message = await messageGenerator.GenerateAsync(campaign, contact, ct); }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "Campaña {CampaignId}: generación con Claude falló para {Phone}, uso template.",
+                            campaignId, contact.PhoneNumber);
+                    }
+                }
+                message ??= BuildInitialMessage(contact, campaign);
+                var sendNow = DateTime.UtcNow;
 
                 var result = await provider.SendMessageAsync(
                     new SendMessageRequest(contact.PhoneNumber, message), ct);
 
                 if (result.Success)
                 {
-                    contact.LastContactAt = DateTime.UtcNow;
-                    contact.RetryCount++;
+                    contact.DispatchStatus = DispatchStatus.Sent;
+                    contact.SentAt = sendNow;
+                    contact.LastContactAt = sendNow;       // mantenido para compatibilidad legacy
+                    contact.ExternalMessageId = result.ExternalMessageId;
+                    contact.GeneratedMessage = message;
+                    contact.DispatchAttempts++;
+                    contact.DispatchError = null;
                     sent++;
+                    consecutiveErrors = 0;
                     logger.LogDebug("Campaña {CampaignId}: enviado a {Phone} (#{Count})",
                         campaignId, contact.PhoneNumber, sent);
+
+                    // Persistir Conversation + Message del envío inicial — sin esto el monitor
+                    // no muestra la campaña hasta que el cliente responde (replicaba la lógica
+                    // del N8nCallbackController.cs).
+                    try { await PersistOutboundConversationAsync(campaign, contact, message, result.ExternalMessageId, sendNow, ct); }
+                    catch (Exception ex) { logger.LogError(ex, "Persistir conversación inicial falló para {Phone}", contact.PhoneNumber); }
+
+                    // Los follow-ups los maneja el sweeper global
+                    // (FollowUpSweepExecutor / cron FOLLOW_UP_SWEEP cada 5 min).
+                    // El sweeper lee CampaignContact.SentAt + FollowUpsSentJson
+                    // para saber qué índice toca enviar, sin necesidad de un job
+                    // por contacto. Antes acá programábamos N×M jobs; ahora 0.
                 }
                 else
                 {
-                    contact.LastContactAt = DateTime.UtcNow;
+                    contact.DispatchAttempts++;
+                    contact.DispatchError = Truncate(result.Error, 2000);
+                    contact.LastContactAt = sendNow;
                     failed++;
+                    consecutiveErrors++;
                     logger.LogWarning("Campaña {CampaignId}: error enviando a {Phone}: {Error}",
                         campaignId, contact.PhoneNumber, result.Error);
 
-                    // Si hay error, posible ban parcial → pausar
-                    if (failed >= 3)
+                    // Si superó el max attempts → Error definitivo. Si no → Retry.
+                    contact.DispatchStatus = contact.DispatchAttempts >= 3
+                        ? DispatchStatus.Error
+                        : DispatchStatus.Retry;
+                    contact.ClaimedAt = null;
+
+                    if (consecutiveErrors >= ConsecutiveErrorThreshold)
                     {
-                        logger.LogWarning("Campaña {CampaignId}: 3+ errores consecutivos. Pausando {Min} min.",
-                            campaignId, ErrorPauseMinutes);
+                        logger.LogWarning("Campaña {CampaignId}: {Threshold}+ errores consecutivos. Frenando lote.",
+                            campaignId, ConsecutiveErrorThreshold);
                         break;
                     }
                 }
@@ -179,24 +342,47 @@ public class CampaignDispatcherService(
             {
                 logger.LogError(ex, "Campaña {CampaignId}: excepción enviando a {Phone}",
                     campaignId, contact.PhoneNumber);
+                contact.DispatchAttempts++;
+                contact.DispatchError = Truncate(ex.Message, 2000);
+                contact.DispatchStatus = contact.DispatchAttempts >= 3
+                    ? DispatchStatus.Error
+                    : DispatchStatus.Retry;
+                contact.ClaimedAt = null;
                 failed++;
+                consecutiveErrors++;
 
-                if (failed >= 3) break;
+                if (consecutiveErrors >= ConsecutiveErrorThreshold) break;
             }
 
-            // ── Delay anti-ban ───────────────────────────
-            var delay = _random.Next(MinDelaySeconds, MaxDelaySeconds + 1);
-            await Task.Delay(TimeSpan.FromSeconds(delay), ct);
+            // Persistir estado del contacto + ProcessedContacts en vivo para que
+            // el frontend pueda mostrar progreso 1/N, 2/N, ... mientras corre el lote.
+            // (En lugar de actualizar solo al final del batch.)
+            campaign.ProcessedContacts = await db.CampaignContacts
+                .CountAsync(cc => cc.CampaignId == campaignId
+                               && (cc.DispatchStatus == DispatchStatus.Sent
+                                   || cc.DispatchStatus == DispatchStatus.Error
+                                   || cc.DispatchStatus == DispatchStatus.Skipped
+                                   || cc.DispatchStatus == DispatchStatus.Duplicate), ct);
+            await db.SaveChangesAsync(ct);
+
+            // ── Delay anti-ban: base = 60s/MessagesPerMinute, ±20% jitter ───────
+            var jitter = (_random.NextDouble() * 0.4) - 0.2;     // [-0.2, +0.2]
+            var actualDelay = Math.Max(MinDelaySecondsFloor, baseDelaySeconds * (1 + jitter));
+            await Task.Delay(TimeSpan.FromSeconds(actualDelay), ct);
         }
 
         // ── 8. Actualizar contadores de la campaña ───────
-        campaign.ProcessedContacts = await db.Set<CampaignContact>()
-            .CountAsync(cc => cc.CampaignId == campaignId && cc.LastContactAt != null, ct);
+        campaign.ProcessedContacts = await db.CampaignContacts
+            .CountAsync(cc => cc.CampaignId == campaignId
+                           && (cc.DispatchStatus == DispatchStatus.Sent
+                               || cc.DispatchStatus == DispatchStatus.Error
+                               || cc.DispatchStatus == DispatchStatus.Skipped
+                               || cc.DispatchStatus == DispatchStatus.Duplicate), ct);
 
         await db.SaveChangesAsync(ct);
 
-        var stopReason = failed >= 3 ? DispatchStopReason.TooManyErrors
-            : sentToday + sent >= MaxPerDay ? DispatchStopReason.DailyLimitReached
+        var stopReason = consecutiveErrors >= ConsecutiveErrorThreshold ? DispatchStopReason.TooManyErrors
+            : sentToday + sent >= maxPerDay ? DispatchStopReason.DailyLimitReached
             : DispatchStopReason.BatchCompleted;
 
         logger.LogInformation(
@@ -205,6 +391,9 @@ public class CampaignDispatcherService(
 
         return new DispatchResult(sent, failed, null, stopReason);
     }
+
+    private static string? Truncate(string? s, int max) =>
+        s is null ? null : s.Length <= max ? s : s[..max];
 
     /// <summary>
     /// Construye el mensaje inicial personalizado para un contacto.
@@ -235,23 +424,200 @@ public class CampaignDispatcherService(
     }
 
     /// <summary>
-    /// Verifica si estamos dentro del horario de oficina del tenant.
-    /// Convierte la hora UTC actual a la zona horaria del tenant y compara.
+    /// Crea la Conversation + Message correspondiente al primer envío de la campaña.
+    /// Sin esto, el monitor solo ve el contacto cuando el cliente responde.
+    /// Replica la lógica de N8nCallbackController para mantener paridad con el flujo legacy.
     /// </summary>
-    private static bool IsWithinBusinessHours(Tenant tenant)
+    private async Task PersistOutboundConversationAsync(
+        Campaign campaign,
+        CampaignContact contact,
+        string content,
+        string? externalMessageId,
+        DateTime sentAtUtc,
+        CancellationToken ct)
     {
-        try
+        var tenantId = campaign.TenantId;
+        var phone    = contact.PhoneNumber;
+
+        // 1. Cerrar conversaciones activas previas del mismo número (excepto las
+        //    que están siendo atendidas por un humano). Mantiene el invariante de
+        //    "una sola conversación abierta por contacto".
+        var previousActive = await db.Conversations
+            .Where(c => c.TenantId == tenantId
+                     && c.ClientPhone == phone
+                     && c.Status != ConversationStatus.Closed
+                     && !c.IsHumanHandled)
+            .ToListAsync(ct);
+
+        foreach (var prev in previousActive)
         {
-            var tz = TimeZoneInfo.FindSystemTimeZoneById(tenant.TimeZone);
-            var nowInTz = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
-            var currentTime = TimeOnly.FromDateTime(nowInTz);
-            return currentTime >= tenant.BusinessHoursStart && currentTime <= tenant.BusinessHoursEnd;
+            prev.Status         = ConversationStatus.Closed;
+            prev.ClosedAt       = sentAtUtc;
+            prev.LastActivityAt = sentAtUtc;
+
+            db.Set<GestionEvent>().Add(new GestionEvent
+            {
+                Id             = Guid.NewGuid(),
+                ConversationId = prev.Id,
+                Result         = GestionResult.Pending,
+                Origin         = "system:campaign-superseded",
+                Notes          = $"Conversación cerrada automáticamente por nueva campaña {campaign.Name} ({campaign.Id})",
+                OccurredAt     = sentAtUtc,
+            });
         }
-        catch
+
+        // 2. Crear la conversación nueva.
+        var conversation = new Conversation
         {
-            // Si la zona horaria es inválida, asumir que estamos en horario
-            return true;
+            Id             = Guid.NewGuid(),
+            TenantId       = tenantId,
+            ClientPhone    = phone,
+            ClientName     = contact.ClientName,
+            PolicyNumber   = contact.PolicyNumber,
+            Channel        = campaign.Channel,
+            ActiveAgentId  = campaign.AgentDefinitionId,
+            CampaignId     = campaign.Id,
+            Status         = ConversationStatus.WaitingClient,
+            StartedAt      = sentAtUtc,
+            LastActivityAt = sentAtUtc,
+        };
+        db.Conversations.Add(conversation);
+
+        // 3. Persistir el mensaje saliente.
+        db.Set<Message>().Add(new Message
+        {
+            Id                = Guid.NewGuid(),
+            ConversationId    = conversation.Id,
+            Direction         = MessageDirection.Outbound,
+            Status            = MessageStatus.Sent,
+            Content           = content,
+            ExternalMessageId = externalMessageId,
+            IsFromAgent       = true,
+            AgentName         = campaign.CampaignTemplate?.Name ?? campaign.Name,
+            SentAt            = sentAtUtc,
+        });
+
+        // 4. Reflejar el envío en el ContactGroup de morosidad (Descargas → Enviado).
+        // Idempotente — solo marca grupos que aún no tenían FirstMessageSentAt.
+        // Sin esto la columna "Enviado" en la pantalla Descargas queda vacía aunque
+        // el WhatsApp ya salió. Replica la lógica del N8nCallbackController.
+        var groupsToMark = await db.ContactGroups
+            .Where(g => g.CampaignId == campaign.Id
+                     && g.PhoneNormalized == phone
+                     && g.FirstMessageSentAt == null)
+            .ToListAsync(ct);
+        foreach (var g in groupsToMark)
+        {
+            g.FirstMessageSentAt = sentAtUtc;
+            if (g.Status == ContactGroupStatus.Pending || g.Status == ContactGroupStatus.CampaignCreated)
+                g.Status = ContactGroupStatus.MessageSent;
         }
+
+        await db.SaveChangesAsync(ct);
+    }
+
+    // ── Modelo viejo (RETIRADO): jobs DelayFromEvent uno por contacto/campaña ──
+    //
+    // Antes acá había:
+    //   ScheduleFollowUpsForContactAsync(...)  — creaba N jobs FOLLOW_UP_MESSAGE
+    //   ScheduleAutoCloseAsync(...)            — creaba 1 job AUTO_CLOSE_CAMPAIGN
+    //
+    // Eso saturaba ScheduledWebhookJobs (un row por cada (contacto × follow-up) +
+    // uno por campaña). Migramos al modelo "sweeper": dos cron jobs globales
+    // (FOLLOW_UP_SWEEP cada 5 min, AUTO_CLOSE_CAMPAIGN_SWEEP cada 30 min) que
+    // recorren CampaignContacts y Campaigns en cada tick. La tabla queda con
+    // tamaño constante sin importar cuántas campañas se lancen.
+    //
+    // Si necesitás revertir, ver commits anteriores a este — el código vive en
+    // la historia de git.
+
+    /// <summary>
+    /// Resuelve el Id de una ActionDefinition global por su Name. Si no existe,
+    /// loguea warning y devuelve null — los executors específicos no se invocan
+    /// si no hay action en BD (la app debería seedearla al boot).
+    /// </summary>
+    private async Task<Guid?> GetOrFailActionDefinitionIdAsync(string name, CancellationToken ct)
+    {
+        var id = await db.ActionDefinitions
+            .Where(a => a.TenantId == null && a.Name == name && a.IsActive)
+            .Select(a => (Guid?)a.Id)
+            .FirstOrDefaultAsync(ct);
+        if (id is null)
+        {
+            logger.LogWarning(
+                "ActionDefinition global '{Name}' no existe — no se programan jobs. Aplica el seed al boot.", name);
+        }
+        return id;
+    }
+
+    /// <summary>
+    /// Verifica si estamos dentro del horario de envío para esta campaña, priorizando
+    /// <c>CampaignTemplate.SendFrom/SendUntil</c> ("Horario de envío" del frontend)
+    /// sobre el horario por defecto del tenant. Retorna también un diagnóstico
+    /// legible con la hora efectiva — útil para debuguear discrepancias TZ
+    /// servidor/frontend.
+    ///
+    /// IMPORTANTE: NO usa <c>AttentionStartTime/EndTime</c> — esos son el horario de
+    /// "atención de asesores humanos" (otra cosa: define cuándo un humano puede
+    /// retomar la conversación). El horario que controla el envío masivo de la
+    /// campaña son <c>SendFrom/SendUntil</c>.
+    /// </summary>
+    private static (bool Within, string Reason) IsWithinBusinessHours(Campaign campaign, Tenant tenant)
+    {
+        // 1) Resolver ventana — template.SendFrom/Until tiene prioridad si está configurado.
+        TimeOnly start; TimeOnly end; string source;
+        var t = campaign.CampaignTemplate;
+        if (t is not null
+            && !string.IsNullOrWhiteSpace(t.SendFrom)
+            && !string.IsNullOrWhiteSpace(t.SendUntil)
+            && TimeOnly.TryParse(t.SendFrom, out start)
+            && TimeOnly.TryParse(t.SendUntil, out end))
+        {
+            source = "CampaignTemplate.SendFrom/Until";
+        }
+        else
+        {
+            start = tenant.BusinessHoursStart;
+            end = tenant.BusinessHoursEnd;
+            source = "Tenant.BusinessHours";
+        }
+
+        // 2) Resolver TZ con fallbacks (Windows IDs vs IANA names — varía por SO/runtime).
+        var tz = ResolveTimeZone(tenant.TimeZone);
+        var nowInTz = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tz);
+        var currentTime = TimeOnly.FromDateTime(nowInTz);
+
+        // 3) Hora dentro del rango. Soporta ventanas que cruzan medianoche
+        //    (ej: SendFrom=22:00, SendUntil=06:00 = ventana nocturna).
+        var inRange = start <= end
+            ? currentTime >= start && currentTime <= end
+            : currentTime >= start || currentTime <= end;
+        if (!inRange)
+            return (false,
+                $"hora {currentTime:HH:mm} fuera de [{start:HH:mm}-{end:HH:mm}] " +
+                $"(source={source}, tz={tz.Id}, now={nowInTz:yyyy-MM-dd HH:mm})");
+
+        return (true,
+            $"dentro [{start:HH:mm}-{end:HH:mm}] (source={source}, tz={tz.Id}, now={currentTime:HH:mm})");
+    }
+
+    /// <summary>
+    /// Resuelve la TimeZoneInfo aceptando tanto IDs IANA ("America/Panama") como
+    /// Windows ("SA Pacific Standard Time"). En .NET 10 ambos formatos funcionan
+    /// nativamente, pero en runtimes/OS más viejos hace falta convertir.
+    /// </summary>
+    private static TimeZoneInfo ResolveTimeZone(string? tzId)
+    {
+        if (string.IsNullOrWhiteSpace(tzId)) return TimeZoneInfo.Utc;
+        if (TimeZoneInfo.TryFindSystemTimeZoneById(tzId, out var direct) && direct is not null)
+            return direct;
+        if (TimeZoneInfo.TryConvertIanaIdToWindowsId(tzId, out var winId)
+            && TimeZoneInfo.TryFindSystemTimeZoneById(winId, out var winTz) && winTz is not null)
+            return winTz;
+        if (TimeZoneInfo.TryConvertWindowsIdToIanaId(tzId, out var ianaId)
+            && TimeZoneInfo.TryFindSystemTimeZoneById(ianaId, out var ianaTz) && ianaTz is not null)
+            return ianaTz;
+        return TimeZoneInfo.Utc;
     }
 }
 

@@ -61,6 +61,9 @@ export interface Campaign {
   completedAt: string | null
   createdAt: string
   createdByUserId: string
+  launchedByUserId?: string | null
+  status?: string
+  launchedAt?: string | null
 }
 
 export interface ConversationSummary {
@@ -86,6 +89,7 @@ export interface Conversation {
   channel: ChannelType
   activeAgentId?: string
   campaignId?: string
+  campaignName?: string
   status: ConversationStatus
   isHumanHandled: boolean
   handledByUserId?: string
@@ -130,18 +134,20 @@ export interface AppUser {
   isActive: boolean
   canEditPhone: boolean
   allowedAgentIds: string[]
+  permissions: string[]
   avatarUrl?: string | null
   createdAt: string
   lastLoginAt?: string
 }
 
-export interface AgentDocument {
+export interface CampaignTemplateDocument {
   id: string
   fileName: string
   blobUrl: string
   contentType: string
   fileSizeBytes: number
   uploadedAt: string
+  description: string | null
 }
 
 export interface ConversationLabel {

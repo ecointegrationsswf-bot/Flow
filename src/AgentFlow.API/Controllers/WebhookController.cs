@@ -2,8 +2,10 @@ using System.Text.Json;
 using AgentFlow.Application.Modules.Webhooks;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Messaging;
 using AgentFlow.Infrastructure.Persistence;
 using AgentFlow.Infrastructure.Storage;
+using Hangfire;
 using MediatR;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -18,8 +20,126 @@ public class WebhookController(
     AgentFlowDbContext db,
     IBlobStorageService blobStorage,
     IHttpClientFactory httpClientFactory,
-    AgentFlow.Domain.Interfaces.ITranscriptionService transcriptionService) : ControllerBase
+    AgentFlow.Domain.Interfaces.ITranscriptionService transcriptionService,
+    IMessageBufferStore messageBuffer,
+    AgentFlow.Infrastructure.Messaging.InProcessMessageDebouncer debouncer,
+    AgentFlow.Domain.Interfaces.IInboundMessageQueue inboundQueue,
+    IConfiguration configuration,
+    IBackgroundJobClient? jobClient = null) : ControllerBase
 {
+    // Flag de transición. Default true para no romper deploys que aún no
+    // tengan el Worker on-prem actualizado con el dispatcher. Cuando el
+    // Worker esté operando, poner Inbox:UseInProcessDebouncer=false en
+    // appsettings y solo la cola SQL será la fuente de procesamiento.
+    private bool DebouncerEnabled =>
+        configuration.GetValue("Inbox:UseInProcessDebouncer", true);
+    /// <summary>
+    /// Despacha un mensaje entrante. Si el tenant tiene MessageBufferSeconds > 0
+    /// (debounce activo), el mensaje se agrega al buffer Redis y se programa un
+    /// job Hangfire que procesa el buffer cuando el cliente deja de escribir.
+    /// Si es 0, se procesa inmediatamente vía mediator (comportamiento anterior).
+    /// </summary>
+    private async Task<(bool Buffered, Guid? ConversationId, string? ReplyText, string? AgentType, Guid? QueueItemId)> DispatchAsync(
+        Guid tenantId, string fromPhone, string message, ChannelType channel,
+        string? clientName, string? externalId, string? mediaUrl, string? mediaType,
+        CancellationToken ct,
+        Guid? whatsAppLineId = null)
+    {
+        int bufferSec = 0;
+        try
+        {
+            bufferSec = await db.Tenants
+                .Where(t => t.Id == tenantId)
+                .Select(t => (int?)t.MessageBufferSeconds)
+                .FirstOrDefaultAsync(ct) ?? 0;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Dispatch] No pude leer MessageBufferSeconds, fallback a directo: {ex.Message}");
+        }
+
+        // Doble-escritura (Día 1): persistimos en la cola durable antes de
+        // tocar el debouncer. Aunque el AppPool muera, la fila Pending queda
+        // en BD y el watchdog/dispatcher del Worker la rescata.
+        // Tolerante a fallos: si el upsert falla NO bloqueamos el flujo —
+        // el debouncer seguía funcionando antes sin la cola, y mantenemos
+        // ese comportamiento mientras estabilizamos.
+        Guid? queueItemId = null;
+        try
+        {
+            queueItemId = await inboundQueue.UpsertAsync(new AgentFlow.Domain.Interfaces.InboundMessageUpsertRequest(
+                TenantId: tenantId,
+                FromPhone: fromPhone,
+                Channel: channel.ToString(),
+                WhatsAppLineId: whatsAppLineId,
+                MessageContent: message ?? string.Empty,
+                ClientName: clientName,
+                ExternalMessageId: externalId,
+                MediaUrl: mediaUrl,
+                MediaType: mediaType,
+                BufferSeconds: bufferSec > 0 ? bufferSec : 12), ct);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Dispatch] InboundQueue.UpsertAsync falló (no bloqueante): {ex.Message}");
+        }
+
+        // Si el debouncer está apagado por flag (Inbox:UseInProcessDebouncer=false),
+        // delegamos COMPLETAMENTE al Worker on-prem vía la cola SQL. El cliente
+        // recibe respuesta cuando el InboundMessageDispatcher reclame el item
+        // (5-15s) o el watchdog lo escale (≤ 2 min). No tocamos al debouncer.
+        if (bufferSec > 0 && !DebouncerEnabled)
+        {
+            return (true, null, null, null, queueItemId);
+        }
+
+        // Debounce in-process — agrupa mensajes ráfaga del mismo (tenant, phone).
+        // Reset real del timer en cada mensaje nuevo. Sin dependencia de
+        // Hangfire/Redis (más confiable en hosting compartido como Smartasp).
+        // Por defecto sigue activo como acelerador del hot-path; cuando se
+        // active el flag de apagado, esta rama no se ejecuta.
+        if (bufferSec > 0)
+        {
+            try
+            {
+                debouncer.Enqueue(
+                    tenantId, fromPhone, channel,
+                    message ?? string.Empty, clientName, externalId,
+                    mediaUrl, mediaType, bufferSec,
+                    whatsAppLineId,
+                    queueItemId);
+                return (true, null, null, null, queueItemId);
+            }
+            catch (Exception ex)
+            {
+                // Falla absoluta del debouncer (no debería pasar, in-process) — fallback directo.
+                Console.WriteLine($"[Dispatch] Debouncer falló ({ex.GetType().Name}: {ex.Message}). Fallback a flujo directo.");
+            }
+        }
+
+        try
+        {
+            var result = await mediator.Send(new ProcessIncomingMessageCommand(
+                tenantId, fromPhone, message ?? string.Empty, channel, clientName, externalId,
+                mediaUrl, mediaType, whatsAppLineId), ct);
+            if (queueItemId.HasValue)
+            {
+                try { await inboundQueue.MarkRepliedAsync(queueItemId.Value, outboundMessageId: null, ct); }
+                catch (Exception qex) { Console.WriteLine($"[Dispatch] MarkReplied falló: {qex.Message}"); }
+            }
+            return (false, result.ConversationId, result.ReplyText, result.AgentType, queueItemId);
+        }
+        catch (Exception ex)
+        {
+            if (queueItemId.HasValue)
+            {
+                try { await inboundQueue.MarkFailedAsync(queueItemId.Value, "direct-dispatch", ex.GetType().Name + ": " + ex.Message, maxAttempts: 3, ct); }
+                catch (Exception qex) { Console.WriteLine($"[Dispatch] MarkFailed falló: {qex.Message}"); }
+            }
+            throw;
+        }
+    }
+
     /// <summary>
     /// Endpoint normalizado — usado por n8n o cualquier integrador que ya tenga
     /// el TenantId en el header X-Tenant-Id.
@@ -32,16 +152,16 @@ public class WebhookController(
         if (tenantId == Guid.Empty)
             return BadRequest(new { error = "TenantId requerido. Envía header X-Tenant-Id o JWT válido." });
 
-        var result = await mediator.Send(new ProcessIncomingMessageCommand(
-            tenantId,
-            dto.From,
-            dto.Body,
-            Enum.Parse<ChannelType>(dto.Channel, true),
-            dto.ClientName,
-            dto.ExternalId
-        ), ct);
+        var channel = Enum.Parse<ChannelType>(dto.Channel, true);
+        var dispatch = await DispatchAsync(
+            tenantId, dto.From, dto.Body, channel,
+            dto.ClientName, dto.ExternalId,
+            mediaUrl: null, mediaType: null, ct);
 
-        return Ok(new { result.ConversationId, result.ReplyText, result.AgentType });
+        if (dispatch.Buffered)
+            return Accepted(new { buffered = true, message = "Mensaje agregado al buffer — se procesará tras el debounce." });
+
+        return Ok(new { dispatch.ConversationId, dispatch.ReplyText, dispatch.AgentType });
     }
 
     /// <summary>
@@ -355,29 +475,37 @@ public class WebhookController(
         }
 
         // ── 11. Procesar mensaje ──────────────────────────
-        var result = await mediator.Send(new ProcessIncomingMessageCommand(
-            line.TenantId.Value,
-            fromPhone,
-            messageText,
-            ChannelType.WhatsApp,
-            clientName,
-            payload.Id,
-            mediaUrl,
-            mediaType
-        ), ct);
-
-        // Actualizar bitácora como procesado exitosamente
-        log.Status = "processed";
-        log.StatusReason = result.AgentType;
-        db.WebhookLogs.Add(log);
-        await db.SaveChangesAsync(ct);
-
-        return Ok(new
+        try
         {
-            status = "processed",
-            conversationId = result.ConversationId,
-            agentType = result.AgentType
-        });
+            var dispatch = await DispatchAsync(
+                line.TenantId.Value, fromPhone, messageText, ChannelType.WhatsApp,
+                clientName, payload.Id, mediaUrl, mediaType, ct,
+                whatsAppLineId: line.Id);
+
+            // Actualizar bitácora — si fue bufferizado marcamos como 'buffered'
+            log.Status = dispatch.Buffered ? "buffered" : "processed";
+            log.StatusReason = dispatch.Buffered ? "debounce-active" : dispatch.AgentType;
+            db.WebhookLogs.Add(log);
+            await db.SaveChangesAsync(ct);
+
+            return Ok(new
+            {
+                status = log.Status,
+                conversationId = dispatch.ConversationId,
+                agentType = dispatch.AgentType,
+                buffered = dispatch.Buffered
+            });
+        }
+        catch (Exception ex)
+        {
+            // Capturar error para diagnóstico
+            var errorDetail = ex.Message + " | " + (ex.InnerException?.Message ?? "") + " | " + ex.StackTrace;
+            log.Status = "error";
+            log.StatusReason = errorDetail.Length > 2000 ? errorDetail.Substring(0, 2000) : errorDetail;
+            db.WebhookLogs.Add(log);
+            try { await db.SaveChangesAsync(ct); } catch { }
+            return StatusCode(500, new { error = ex.Message });
+        }
     }
 
     /// <summary>

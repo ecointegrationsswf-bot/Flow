@@ -8,6 +8,8 @@ export interface AvailableAction {
   requiresWebhook: boolean
   sendsEmail: boolean
   sendsSms: boolean
+  /** JSON del DefaultWebhookContract — si existe, los templates heredan sin config propia */
+  defaultWebhookContract?: string | null
 }
 
 export interface AvailablePrompt {
@@ -23,7 +25,11 @@ export interface CampaignTemplate {
   agentDefinitionId: string
   agentName: string | null
   followUpHours: number[]
+  /** JSON array de mensajes de seguimiento, paralelo a followUpHours (Fase 2). NULL = sin seguimientos automáticos. */
+  followUpMessagesJson: string | null
   autoCloseHours: number
+  /** Mensaje enviado al cerrar automáticamente la campaña (Fase 2). NULL = cerrar sin avisar. */
+  autoCloseMessage: string | null
   labelIds: string[]
   sendEmail: boolean
   emailAddress: string | null
@@ -38,6 +44,10 @@ export interface CampaignTemplate {
   inactivityCloseHours: number
   closeConditionKeyword: string | null
   maxTokens: number
+  attentionDays: number[]
+  attentionStartTime: string
+  attentionEndTime: string
+  outOfContextPolicy: string
   isActive: boolean
   createdAt: string
   updatedAt: string
@@ -47,7 +57,9 @@ export interface CampaignTemplatePayload {
   name: string
   agentDefinitionId: string
   followUpHours: number[]
+  followUpMessagesJson?: string | null
   autoCloseHours: number
+  autoCloseMessage?: string | null
   labelIds: string[]
   sendEmail?: boolean
   emailAddress?: string | null
@@ -62,6 +74,10 @@ export interface CampaignTemplatePayload {
   inactivityCloseHours: number
   closeConditionKeyword?: string | null
   maxTokens: number
+  attentionDays?: number[]
+  attentionStartTime?: string
+  attentionEndTime?: string
+  outOfContextPolicy?: string
 }
 
 export interface ActionConfig {
@@ -71,6 +87,27 @@ export interface ActionConfig {
   webhookPayload?: string
   emailAddress?: string
   smsPhoneNumber?: string
+
+  // ── Webhook Contract System (Fase 5) ──
+  // Extensiones opcionales para el contrato tipificado.
+  // Se guardan dentro del mismo JSON actionConfigs[actionId] sin romper los campos legacy.
+  // Tipado como `any` para evitar import cíclico con el módulo webhookBuilder.
+  contentType?: string
+  structure?: string
+  authType?: string
+  authValue?: string
+  apiKeyHeaderName?: string
+  timeoutSeconds?: number
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  inputSchema?: any
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  outputSchema?: any
+
+  // ── Action Trigger Protocol (Fase 5) ──
+  // Metadata que define cuándo el agente IA debe disparar esta acción.
+  // Se persiste junto al resto del bundle.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  triggerConfig?: any
 }
 
 export function useCampaignTemplates() {
@@ -94,11 +131,23 @@ export function useCampaignTemplate(id: string | undefined) {
   })
 }
 
+/**
+ * Detalles del 409 que devuelve el API cuando el agente ya tiene un maestro
+ * primario y el admin no confirmó el swap. La UI lo usa para mostrar la modal.
+ */
+export interface PrimaryTemplateSwapConflict {
+  error: 'primary_template_swap_required'
+  message: string
+  currentPrimaryId: string
+  currentPrimaryName: string
+}
+
 export function useCreateCampaignTemplate() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (payload: CampaignTemplatePayload) => {
-      const { data } = await api.post('/campaign-templates', payload)
+    mutationFn: async ({ confirmSwap, ...payload }: CampaignTemplatePayload & { confirmSwap?: boolean }) => {
+      const qs = confirmSwap ? '?confirmSwap=true' : ''
+      const { data } = await api.post(`/campaign-templates${qs}`, payload)
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
@@ -108,8 +157,9 @@ export function useCreateCampaignTemplate() {
 export function useUpdateCampaignTemplate() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async ({ id, ...payload }: CampaignTemplatePayload & { id: string }) => {
-      const { data } = await api.put(`/campaign-templates/${id}`, payload)
+    mutationFn: async ({ id, confirmSwap, ...payload }: CampaignTemplatePayload & { id: string; confirmSwap?: boolean }) => {
+      const qs = confirmSwap ? '?confirmSwap=true' : ''
+      const { data } = await api.put(`/campaign-templates/${id}${qs}`, payload)
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
@@ -121,6 +171,17 @@ export function useDeleteCampaignTemplate() {
   return useMutation({
     mutationFn: async (id: string) => {
       const { data } = await api.delete(`/campaign-templates/${id}`)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
+  })
+}
+
+export function useDuplicateCampaignTemplate() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
+      const { data } = await api.post(`/campaign-templates/${id}/duplicate`, { name })
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
@@ -145,4 +206,20 @@ export function useAvailablePrompts() {
       return data
     },
   })
+}
+
+export interface AvailablePromptDetail {
+  id: string
+  name: string
+  description: string | null
+  systemPrompt: string
+}
+
+/**
+ * Trae el texto completo (SystemPrompt) de un prompt template visible para el tenant.
+ * Se usa para copiarlo al CampaignTemplate.SystemPrompt editable en el maestro.
+ */
+export async function fetchAvailablePromptDetail(id: string): Promise<AvailablePromptDetail> {
+  const { data } = await api.get<AvailablePromptDetail>(`/campaign-templates/available-prompts/${id}`)
+  return data
 }

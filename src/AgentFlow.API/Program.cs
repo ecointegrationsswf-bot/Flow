@@ -33,19 +33,39 @@ if (!string.IsNullOrEmpty(redisConn))
         var redis = ConnectionMultiplexer.Connect(redisConn + ",abortConnect=false,connectTimeout=3000");
         builder.Services.AddSingleton<IConnectionMultiplexer>(redis);
         builder.Services.AddScoped<ISessionStore, RedisSessionStore>();
+        builder.Services.AddScoped<IMessageBufferStore, AgentFlow.Infrastructure.Messaging.RedisMessageBufferStore>();
         Console.WriteLine("Redis conectado");
     }
     catch
     {
         Console.WriteLine("Redis no disponible. Usando InMemorySessionStore.");
         builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
+        builder.Services.AddSingleton<IMessageBufferStore, AgentFlow.Infrastructure.Messaging.InMemoryMessageBufferStore>();
     }
 }
 else
 {
     Console.WriteLine("Redis no configurado. Usando InMemorySessionStore.");
     builder.Services.AddSingleton<ISessionStore, InMemorySessionStore>();
+    builder.Services.AddSingleton<IMessageBufferStore, AgentFlow.Infrastructure.Messaging.InMemoryMessageBufferStore>();
 }
+
+// MessageBufferFlushJob — LEGACY (Hangfire). Se mantiene registrado por si quedan
+// jobs viejos en BD pero el flujo activo usa InProcessMessageDebouncer.
+builder.Services.AddScoped<AgentFlow.Infrastructure.Messaging.MessageBufferFlushJob>();
+
+// Debouncer in-process — singleton, sin dependencia de Hangfire/Redis.
+// Reemplaza el approach anterior que dependía de Hangfire+Redis para timing,
+// que en Smartasp fallaba por reciclajes de AppPool y silenciosamente caía
+// al flujo directo (mensajes procesados uno por uno sin agrupar).
+builder.Services.AddSingleton<AgentFlow.Infrastructure.Messaging.InProcessMessageDebouncer>();
+
+// Cola durable de mensajes entrantes (Día 1 — doble escritura). Sobrevive
+// reciclados de AppPool y permite que el Worker on-prem sea la fuente
+// autoritativa de procesamiento. El debouncer in-memory queda como
+// acelerador del hot-path.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInboundMessageQueue,
+    AgentFlow.Infrastructure.Messaging.SqlInboundMessageQueue>();
 
 // ── Anthropic Claude ───────────────────────────────────
 // El sistema usa la API key del tenant (tabla Tenants.LlmApiKey).
@@ -64,8 +84,34 @@ Console.WriteLine(!string.IsNullOrEmpty(cfg["OpenAI:ApiKey"]) && cfg["OpenAI:Api
     ? "OpenAI Whisper configurado — transcripción de notas de voz activa."
     : "OpenAI Whisper no configurado — notas de voz sin transcripción.");
 
-// ── Email (SendGrid) ────────────────────────────────────
-builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService, AgentFlow.Infrastructure.Email.SendGridEmailService>();
+// ── Email provider seleccionable ────────────────────────
+// "Resend" → ResendEmailService (HTTP a api.resend.com)
+// "Smtp"   → SmtpEmailService (SMTP estándar — Gmail, Office365, Brevo)
+// otro/null → SendGridEmailService (default histórico)
+{
+    var emailProvider = cfg["Email:Provider"] ?? "SendGrid";
+    if (string.Equals(emailProvider, "Resend", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+            AgentFlow.Infrastructure.Email.ResendEmailService>();
+        Console.WriteLine($"Email provider: Resend (from={cfg["Resend:FromEmail"]}).");
+    }
+    else if (string.Equals(emailProvider, "Smtp", StringComparison.OrdinalIgnoreCase))
+    {
+        builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+            AgentFlow.Infrastructure.Email.SmtpEmailService>();
+        Console.WriteLine($"Email provider: SMTP ({cfg["Smtp:Host"]}:{cfg["Smtp:Port"] ?? "587"}).");
+    }
+    else
+    {
+        builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
+            AgentFlow.Infrastructure.Email.SendGridEmailService>();
+        Console.WriteLine("Email provider: SendGrid.");
+    }
+}
+
+// Filter del controller InternalEmailController — valida X-Internal-Email-Key.
+builder.Services.AddScoped<AgentFlow.API.Controllers.InternalEmailKeyFilter>();
 
 // ── MediatR ────────────────────────────────────────────
 builder.Services.AddMediatR(c =>
@@ -78,6 +124,8 @@ builder.Services.AddSingleton<ConversationNotifier>();
 builder.Services.AddSingleton<IConversationNotifier>(sp => sp.GetRequiredService<ConversationNotifier>());
 
 // ── Hangfire — opcional, no bloquea el inicio si la BD no responde ──
+// NOTA: AddHangfireServer() registra un IHostedService cuyo StartAsync() puede lanzar
+// una excepción no capturada que mata el host. Lo envolvemos en un safe wrapper.
 var hangfireEnabled = false;
 try
 {
@@ -103,6 +151,85 @@ catch (Exception ex)
 // ── Campaign Dispatcher (envío de campañas con rate limiting) ────────
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>();
+// Business hours en TZ del tenant — necesario para programar follow-ups
+// dentro del horario laboral del cliente.
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IBusinessHoursClock,
+    AgentFlow.Infrastructure.Time.BusinessHoursClock>();
+// Generador de mensaje con Claude (paridad con n8n) — usado por el dispatcher v2.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInitialMessageGenerator,
+    AgentFlow.Infrastructure.AI.InitialMessageGenerator>();
+
+// ── CampaignIntakeService v2 (reemplazo de la fase A+B+C de n8n) ─────
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDuplicateChecker,
+    AgentFlow.Infrastructure.Campaigns.V2.DuplicateChecker>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ITransferChatService,
+    AgentFlow.Infrastructure.Campaigns.TransferChatService>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ISendEmailResumeService,
+    AgentFlow.Infrastructure.Campaigns.SendEmailResumeService>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.ICampaignLauncher,
+    AgentFlow.Infrastructure.Campaigns.CampaignLauncher>();
+
+// ── Scheduled Webhook Worker (Fase 1 Campaign Automation) ────────────
+// Repositorios + dispatcher de eventos + executor genérico + BackgroundService.
+// Independiente de Hangfire — no compite por sus 2 workers.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.ScheduledJobRepository>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IJobExecutionRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.JobExecutionRepository>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IJobExecutionItemRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.JobExecutionItemRepository>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWebhookEventDispatcher,
+    AgentFlow.Infrastructure.ScheduledJobs.WebhookEventDispatcher>();
+
+// Auditor compartido — ver skill `scheduled-jobs`.
+builder.Services.AddScoped<AgentFlow.Infrastructure.ScheduledJobs.JobExecutionAuditor>();
+
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.DefaultWebhookExecutor>();
+
+// Fase 2 executors — slugs FOLLOW_UP_MESSAGE y AUTO_CLOSE_CAMPAIGN.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.FollowUpExecutor>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.CampaignAutoCloseExecutor>();
+
+// Fase 3 executor — slug LABEL_CONVERSATIONS (etiquetado IA + webhook resultado).
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.ConversationLabelingJob>();
+
+// Fase 3 executor — slug SEND_LABELING_SUMMARY (Excel + Azure Blob + email).
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.SendLabelingSummaryExecutor>();
+
+// Slug NOTIFY_GESTION — batch cron que dispara el webhook de gestión por cada
+// conversación etiquetada desde la última corrida (cutoff = job.LastRunAt).
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.NotifyGestionBatchExecutor>();
+
+// Slug DOWNLOAD_DELINQUENCY_DATA — descarga JSON de morosidad por tenant y lo procesa.
+// Cron configurado en /admin/scheduled-jobs (ej: "0 8 * * *" → diario 8am Panamá).
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.DelinquencyDownloadExecutor>();
+
+// NOTA: ScheduledWebhookWorker corre en AgentFlow.Worker on-premise (Windows Service).
+// Si se registra también acá se ejecuta dos veces — los locks optimistas evitan
+// duplicar la ejecución del MISMO job, pero generan contención sobre la tabla
+// ScheduledWebhookJobs y duplican carga de CPU/BD. Para mantener una sola fuente
+// de procesamiento, solo se registra acá si se setea Worker:EnableInApi=true en
+// appsettings (escenario: deploys que NO tengan Worker on-prem corriendo).
+if (cfg.GetValue("Worker:EnableInApi", false))
+{
+    Console.WriteLine("[Startup] ScheduledWebhookWorker activo dentro del API (Worker:EnableInApi=true).");
+    builder.Services.AddHostedService<AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
+}
+else
+{
+    Console.WriteLine("[Startup] ScheduledWebhookWorker delegado al Worker on-prem (set Worker:EnableInApi=true para correrlo aquí).");
+}
+
+// ── Módulo Morosidad ─────────────────────────────────────────────────────
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDelinquencyProcessor,
+    AgentFlow.Infrastructure.Morosidad.DelinquencyProcessor>();
 
 // ── Auth — JWT siempre configurado (necesario para super admin [Authorize]) ──
 var jwtSecret = cfg["Jwt:Secret"] ?? "AgentFlow_Dev_Secret_Key_Min32Chars!!";
@@ -161,6 +288,34 @@ builder.Services.AddScoped<IAgentRepository, AgentRepository>();
 builder.Services.AddScoped<ICampaignRepository, CampaignRepository>();
 builder.Services.AddScoped<IContextDispatcher, ContextDispatcher>();
 
+// ── Cerebro ─────────────────────────────────────────────
+builder.Services.AddScoped<IAgentRegistry, AgentFlow.Infrastructure.Brain.AgentRegistryService>();
+builder.Services.AddScoped<IClassifierService, AgentFlow.Infrastructure.Brain.ClassifierService>();
+builder.Services.AddScoped<IValidationService, AgentFlow.Infrastructure.Brain.ValidationService>();
+builder.Services.AddScoped<IBrainService, AgentFlow.Infrastructure.Brain.BrainService>();
+
+// ── Webhook Contract System ────────────────────────────
+builder.Services.AddMemoryCache();
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.ISystemContextBuilder,
+    AgentFlow.Infrastructure.Webhooks.SystemContextBuilder>();
+builder.Services.AddSingleton<AgentFlow.Domain.Webhooks.IPayloadBuilder,
+    AgentFlow.Infrastructure.Webhooks.PayloadBuilder>();
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IHttpDispatcher,
+    AgentFlow.Infrastructure.Webhooks.HttpDispatcher>();
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IOutputInterpreter,
+    AgentFlow.Infrastructure.Webhooks.OutputInterpreter>();
+builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ActionConfigReader>();
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionExecutorService,
+    AgentFlow.Infrastructure.Webhooks.ActionExecutorService>();
+// Action Trigger Protocol — Fase 0 (NoOp). En Fase 2 se reemplaza la implementación.
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionPromptBuilder,
+    AgentFlow.Infrastructure.Webhooks.ActionPromptBuilder>();
+
+// Documentos de referencia por campaña — Fase 1 (builder + fetch).
+// La inyección en el runtime del agente se hace en Fase 2.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDocumentReferencePromptBuilder,
+    AgentFlow.Infrastructure.AI.DocumentReferencePromptBuilder>();
+
 // ── Tenant context ─────────────────────────────────────
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ITenantContext, HttpTenantContext>();
@@ -193,6 +348,7 @@ builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 10 * 1024 * 
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
     {
+        o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase;
         o.JsonSerializerOptions.Converters.Add(
             new System.Text.Json.Serialization.JsonStringEnumConverter());
     });
@@ -210,12 +366,48 @@ builder.Services.AddCors(o => o.AddPolicy("dev", p =>
 
 var app = builder.Build();
 
+// ── Migraciones automáticas (todos los entornos) ─────────
+{
+    using var scope = app.Services.CreateScope();
+    var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
+    try
+    {
+        db.Database.Migrate();
+        Console.WriteLine("[Startup] Migraciones aplicadas correctamente.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Error al aplicar migraciones: {ex.Message}");
+    }
+
+    // Garantizar columnas críticas aunque la migración haya fallado parcialmente
+    try
+    {
+        using var scope2 = app.Services.CreateScope();
+        var db2 = scope2.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AppUsers') AND name = 'Permissions')
+            BEGIN
+                ALTER TABLE AppUsers ADD Permissions nvarchar(2000) NOT NULL DEFAULT '[]';
+            END");
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActionConfigs')
+            BEGIN
+                ALTER TABLE CampaignTemplates ADD ActionConfigs nvarchar(max) NULL;
+            END");
+        Console.WriteLine("[Startup] Columnas de seguridad verificadas.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] Error verificando columnas: {ex.Message}");
+    }
+}
+
 // ── Seed de tenant para desarrollo ──────────────────────
 if (isDev)
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
-    db.Database.Migrate();
 
     // Agregar columna ActionConfigs si no existe (evita depender de migraciones con Designer)
     db.Database.ExecuteSqlRaw(@"
@@ -289,6 +481,7 @@ if (isDev)
 }
 
 // ── Seed super admin en producción (si no existe ninguno) ───────────
+try
 {
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<AgentFlowDbContext>();
@@ -313,16 +506,399 @@ if (isDev)
     try
     {
         db.Database.ExecuteSqlRaw(@"
-            IF NOT EXISTS (
-                SELECT 1 FROM sys.columns
-                WHERE object_id = OBJECT_ID('CampaignContacts')
-                  AND name = 'ContactDataJson'
-            )
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'ContactDataJson')
+            BEGIN ALTER TABLE CampaignContacts ADD ContactDataJson nvarchar(MAX) NULL; END");
+    }
+    catch { }
+
+    // Columnas de dispatch en CampaignContacts
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DispatchStatus')
+            BEGIN ALTER TABLE CampaignContacts ADD DispatchStatus nvarchar(30) NOT NULL DEFAULT 'Pending'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'ClaimedAt')
+            BEGIN ALTER TABLE CampaignContacts ADD ClaimedAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'SentAt')
+            BEGIN ALTER TABLE CampaignContacts ADD SentAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DispatchAttempts')
+            BEGIN ALTER TABLE CampaignContacts ADD DispatchAttempts int NOT NULL DEFAULT 0; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'GeneratedMessage')
+            BEGIN ALTER TABLE CampaignContacts ADD GeneratedMessage nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'ExternalMessageId')
+            BEGIN ALTER TABLE CampaignContacts ADD ExternalMessageId nvarchar(200) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DispatchError')
+            BEGIN ALTER TABLE CampaignContacts ADD DispatchError nvarchar(2000) NULL; END");
+    }
+    catch { }
+
+    // Columnas de lanzamiento en Campaigns
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'Status')
+            BEGIN ALTER TABLE Campaigns ADD Status nvarchar(30) NOT NULL DEFAULT 'Pending'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LaunchedAt')
+            BEGIN ALTER TABLE Campaigns ADD LaunchedAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LaunchedByUserId')
+            BEGIN ALTER TABLE Campaigns ADD LaunchedByUserId nvarchar(100) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'CampaignMessageDelaySeconds')
+            BEGIN ALTER TABLE Tenants ADD CampaignMessageDelaySeconds int NOT NULL DEFAULT 10; END");
+    }
+    catch { }
+
+    // Tabla CampaignDispatchLogs
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'CampaignDispatchLogs')
             BEGIN
-                ALTER TABLE CampaignContacts ADD ContactDataJson nvarchar(MAX) NULL;
+                CREATE TABLE CampaignDispatchLogs (
+                    Id                  uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    CampaignId          uniqueidentifier NOT NULL,
+                    CampaignContactId   uniqueidentifier NOT NULL,
+                    TenantId            uniqueidentifier NOT NULL,
+                    AttemptNumber       int NOT NULL DEFAULT 1,
+                    PromptSnapshot      nvarchar(MAX) NULL,
+                    ContactDataSnapshot nvarchar(MAX) NULL,
+                    GeneratedMessage    nvarchar(MAX) NULL,
+                    PhoneNumber         nvarchar(20) NOT NULL,
+                    UltraMsgResponse    nvarchar(MAX) NULL,
+                    ExternalMessageId   nvarchar(200) NULL,
+                    Status              nvarchar(20) NOT NULL,
+                    ErrorDetail         nvarchar(2000) NULL,
+                    DurationMs          int NOT NULL DEFAULT 0,
+                    OccurredAt          datetime2 NOT NULL DEFAULT GETUTCDATE()
+                );
+                CREATE INDEX IX_CampaignDispatchLogs_Campaign ON CampaignDispatchLogs (CampaignId, OccurredAt);
+                CREATE INDEX IX_CampaignDispatchLogs_Contact  ON CampaignDispatchLogs (CampaignContactId);
             END");
     }
-    catch { /* Tabla aún no existe o columna ya creada */ }
+    catch { }
+
+    // ── Columnas de CampaignTemplates (migraciones que pueden no haberse aplicado en prod) ──
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActionIds')
+            BEGIN ALTER TABLE CampaignTemplates ADD ActionIds nvarchar(2000) NOT NULL DEFAULT '[]'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'PromptTemplateIds')
+            BEGIN ALTER TABLE CampaignTemplates ADD PromptTemplateIds nvarchar(2000) NOT NULL DEFAULT '[]'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActionConfigs')
+            BEGIN ALTER TABLE CampaignTemplates ADD ActionConfigs nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'SystemPrompt')
+            BEGIN ALTER TABLE CampaignTemplates ADD SystemPrompt nvarchar(MAX) NOT NULL DEFAULT ''; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'SendFrom')
+            BEGIN ALTER TABLE CampaignTemplates ADD SendFrom nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'SendUntil')
+            BEGIN ALTER TABLE CampaignTemplates ADD SendUntil nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'MaxRetries')
+            BEGIN ALTER TABLE CampaignTemplates ADD MaxRetries int NOT NULL DEFAULT 3; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'RetryIntervalHours')
+            BEGIN ALTER TABLE CampaignTemplates ADD RetryIntervalHours int NOT NULL DEFAULT 24; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'InactivityCloseHours')
+            BEGIN ALTER TABLE CampaignTemplates ADD InactivityCloseHours int NOT NULL DEFAULT 72; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'CloseConditionKeyword')
+            BEGIN ALTER TABLE CampaignTemplates ADD CloseConditionKeyword nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'MaxTokens')
+            BEGIN ALTER TABLE CampaignTemplates ADD MaxTokens int NOT NULL DEFAULT 1024; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AttentionDays')
+            BEGIN ALTER TABLE CampaignTemplates ADD AttentionDays nvarchar(100) NOT NULL DEFAULT '[1,2,3,4,5]'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AttentionStartTime')
+            BEGIN ALTER TABLE CampaignTemplates ADD AttentionStartTime nvarchar(5) NOT NULL DEFAULT '08:00'; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AttentionEndTime')
+            BEGIN ALTER TABLE CampaignTemplates ADD AttentionEndTime nvarchar(5) NOT NULL DEFAULT '17:00'; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] CampaignTemplates columns: {ex.Message}"); }
+
+    // ── Columnas de Tenants (migraciones MoveSendGridToTenant, AddTenantLlmConfiguration) ──
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'SendGridApiKey')
+            BEGIN ALTER TABLE Tenants ADD SendGridApiKey nvarchar(500) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'SenderEmail')
+            BEGIN ALTER TABLE Tenants ADD SenderEmail nvarchar(200) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LlmApiKey')
+            BEGIN ALTER TABLE Tenants ADD LlmApiKey nvarchar(500) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LlmModel')
+            BEGIN ALTER TABLE Tenants ADD LlmModel nvarchar(100) NOT NULL DEFAULT ''; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LlmProvider')
+            BEGIN ALTER TABLE Tenants ADD LlmProvider nvarchar(50) NOT NULL DEFAULT ''; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Tenants columns: {ex.Message}"); }
+
+    // ── Columnas adicionales en Campaigns y AppUsers ──────────────────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LaunchedByUserPhone')
+            BEGIN ALTER TABLE Campaigns ADD LaunchedByUserPhone nvarchar(20) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AppUsers') AND name = 'NotifyPhone')
+            BEGIN ALTER TABLE AppUsers ADD NotifyPhone nvarchar(20) NULL; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Campaigns/AppUsers columns: {ex.Message}"); }
+
+    // ── ActionDefinitions.IsProcess (Fase 3 — acciones internas) ──────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionDefinitions') AND name = 'IsProcess')
+            BEGIN ALTER TABLE ActionDefinitions ADD IsProcess bit NOT NULL DEFAULT 0; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] ActionDefinitions.IsProcess: {ex.Message}"); }
+
+    // ── Tabla ActionDefinitions (migración AddActionDefinitions) ──────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ActionDefinitions')
+            BEGIN
+                CREATE TABLE ActionDefinitions (
+                    Id              uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    Name            nvarchar(100) NOT NULL,
+                    Description     nvarchar(500) NULL,
+                    RequiresWebhook bit NOT NULL DEFAULT 0,
+                    SendsEmail      bit NOT NULL DEFAULT 0,
+                    SendsSms        bit NOT NULL DEFAULT 0,
+                    WebhookUrl      nvarchar(500) NULL,
+                    WebhookMethod   nvarchar(10) NULL,
+                    IsActive        bit NOT NULL DEFAULT 1,
+                    CreatedAt       datetime2 NOT NULL DEFAULT GETUTCDATE(),
+                    UpdatedAt       datetime2 NULL
+                );
+                CREATE UNIQUE INDEX IX_ActionDefinitions_Name ON ActionDefinitions (Name);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] ActionDefinitions table: {ex.Message}"); }
+
+    // ── Tabla PromptTemplates (migración AddPromptTemplates) ──────────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'PromptTemplates')
+            BEGIN
+                CREATE TABLE PromptTemplates (
+                    Id              uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    Name            nvarchar(200) NOT NULL,
+                    Description     nvarchar(500) NULL,
+                    CategoryId      uniqueidentifier NULL,
+                    SystemPrompt    nvarchar(MAX) NULL,
+                    ResultPrompt    nvarchar(MAX) NULL,
+                    AnalysisPrompts nvarchar(MAX) NULL,
+                    FieldMapping    nvarchar(MAX) NULL,
+                    IsActive        bit NOT NULL DEFAULT 1,
+                    CreatedAt       datetime2 NOT NULL DEFAULT GETUTCDATE(),
+                    UpdatedAt       datetime2 NULL,
+                    CONSTRAINT FK_PromptTemplates_AgentCategories
+                        FOREIGN KEY (CategoryId) REFERENCES AgentCategories(Id) ON DELETE SET NULL
+                );
+                CREATE INDEX IX_PromptTemplates_CategoryId ON PromptTemplates (CategoryId);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] PromptTemplates table: {ex.Message}"); }
+
+    // ── Seed acción SEND_EMAIL_RESUME si no existe ─────────────────────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM ActionDefinitions WHERE Name = 'SEND_EMAIL_RESUME')
+            BEGIN
+                INSERT INTO ActionDefinitions (Id, Name, Description, RequiresWebhook, SendsEmail, SendsSms, IsActive, CreatedAt)
+                VALUES ('d221c23d-fa0c-41ad-b356-60df013c877f', 'SEND_EMAIL_RESUME',
+                        'Envía un email con el resumen de la gestión al cerrar la conversación',
+                        0, 1, 0, 1, GETUTCDATE());
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] SEND_EMAIL_RESUME seed: {ex.Message}"); }
+
+    // ── Fase 1: tablas ScheduledWebhookJobs (self-healing) ────────────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ScheduledWebhookJobs')
+            BEGIN
+                CREATE TABLE ScheduledWebhookJobs (
+                    Id                  uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    ActionDefinitionId  uniqueidentifier NOT NULL,
+                    TriggerType         nvarchar(20) NOT NULL,
+                    CronExpression      nvarchar(100) NULL,
+                    TriggerEvent        nvarchar(100) NULL,
+                    DelayMinutes        int NULL,
+                    Scope               nvarchar(20) NOT NULL DEFAULT 'AllTenants',
+                    IsActive            bit NOT NULL DEFAULT 1,
+                    NextRunAt           datetime2 NULL,
+                    LastRunAt           datetime2 NULL,
+                    LastRunStatus       nvarchar(20) NULL,
+                    LastRunSummary      nvarchar(1000) NULL,
+                    ConsecutiveFailures int NOT NULL DEFAULT 0,
+                    CreatedAt           datetime2 NOT NULL DEFAULT GETUTCDATE(),
+                    UpdatedAt           datetime2 NOT NULL DEFAULT GETUTCDATE(),
+                    CONSTRAINT FK_SWJ_Action FOREIGN KEY (ActionDefinitionId) REFERENCES ActionDefinitions(Id)
+                );
+                CREATE INDEX IX_SWJ_Active_Next ON ScheduledWebhookJobs (IsActive, NextRunAt);
+                CREATE INDEX IX_SWJ_TriggerEvent ON ScheduledWebhookJobs (TriggerEvent);
+            END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ScheduledWebhookJobExecutions')
+            BEGIN
+                CREATE TABLE ScheduledWebhookJobExecutions (
+                    Id              uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    JobId           uniqueidentifier NOT NULL,
+                    StartedAt       datetime2 NOT NULL,
+                    CompletedAt     datetime2 NOT NULL,
+                    Status          nvarchar(20) NOT NULL,
+                    TotalRecords    int NOT NULL DEFAULT 0,
+                    SuccessCount    int NOT NULL DEFAULT 0,
+                    FailureCount    int NOT NULL DEFAULT 0,
+                    ErrorDetail     nvarchar(MAX) NULL,
+                    TriggeredBy     nvarchar(50) NULL,
+                    ContextId       nvarchar(200) NULL,
+                    CONSTRAINT FK_SWJE_Job FOREIGN KEY (JobId) REFERENCES ScheduledWebhookJobs(Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IX_SWJE_Job_Started ON ScheduledWebhookJobExecutions (JobId, StartedAt);
+            END");
+        // Detalle granular por sub-item (tenant/conversación/usuario) de cada ejecución.
+        // Permite mostrar atribución por item en la UI cuando un job AllTenants falla
+        // solo en algunos sub-elementos.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'ScheduledWebhookJobExecutionItems')
+            BEGIN
+                CREATE TABLE ScheduledWebhookJobExecutionItems (
+                    Id              uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    ExecutionId     uniqueidentifier NOT NULL,
+                    TenantId        uniqueidentifier NULL,
+                    ContextType     nvarchar(30) NOT NULL,
+                    ContextId       nvarchar(200) NULL,
+                    ContextLabel    nvarchar(300) NULL,
+                    Status          nvarchar(20) NOT NULL,
+                    ErrorMessage    nvarchar(MAX) NULL,
+                    DurationMs      int NULL,
+                    CreatedAt       datetime2 NOT NULL,
+                    CONSTRAINT FK_SWJEI_Execution FOREIGN KEY (ExecutionId)
+                        REFERENCES ScheduledWebhookJobExecutions(Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IX_SWJEI_Execution_Status ON ScheduledWebhookJobExecutionItems (ExecutionId, Status);
+                CREATE INDEX IX_SWJEI_Tenant ON ScheduledWebhookJobExecutionItems (TenantId);
+            END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionDefinitions') AND name = 'ScheduleConfig')
+            BEGIN ALTER TABLE ActionDefinitions ADD ScheduleConfig nvarchar(MAX) NULL; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] ScheduledWebhookJobs: {ex.Message}"); }
+
+    // ── Fase 2: columnas de Follow-up + AutoClose (self-healing) ──────────
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'FollowUpMessagesJson')
+            BEGIN ALTER TABLE CampaignTemplates ADD FollowUpMessagesJson nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AutoCloseMessage')
+            BEGIN ALTER TABLE CampaignTemplates ADD AutoCloseMessage nvarchar(1000) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'FollowUpsSentJson')
+            BEGIN ALTER TABLE CampaignContacts ADD FollowUpsSentJson nvarchar(200) NULL DEFAULT '[]'; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Fase 2 columns: {ex.Message}"); }
+
+    // ── InboundMessageQueueItems — cola durable de mensajes entrantes (Día 1) ──
+    // Patrón self-healing igual que el resto del schema: idempotente con IF NOT EXISTS.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'InboundMessageQueueItems')
+            BEGIN
+                CREATE TABLE InboundMessageQueueItems (
+                    Id                  uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    TenantId            uniqueidentifier NOT NULL,
+                    FromPhone           varchar(30) NOT NULL,
+                    Channel             varchar(20) NOT NULL DEFAULT 'WhatsApp',
+                    WhatsAppLineId      uniqueidentifier NULL,
+                    ClientName          nvarchar(200) NULL,
+                    ExternalMessageId   varchar(100) NULL,
+                    MediaUrl            nvarchar(MAX) NULL,
+                    MediaType           varchar(30) NULL,
+                    MessagesJson        nvarchar(MAX) NOT NULL DEFAULT '[]',
+                    FirstReceivedAt     datetime2 NOT NULL,
+                    LastReceivedAt      datetime2 NOT NULL,
+                    BufferSeconds       int NOT NULL DEFAULT 12,
+                    Status              varchar(20) NOT NULL DEFAULT 'Pending',
+                    ClaimedAt           datetime2 NULL,
+                    ClaimedBy           varchar(80) NULL,
+                    StartedAt           datetime2 NULL,
+                    CompletedAt         datetime2 NULL,
+                    AttemptCount        int NOT NULL DEFAULT 0,
+                    LastError           nvarchar(MAX) NULL,
+                    LastErrorStep       varchar(50) NULL,
+                    OutboundMessageId   uniqueidentifier NULL,
+                    EscalatedToUserId   uniqueidentifier NULL,
+                    EscalatedAt         datetime2 NULL
+                );
+                CREATE INDEX IX_IMQ_Status_LastAt ON InboundMessageQueueItems (Status, LastReceivedAt);
+                CREATE INDEX IX_IMQ_Tenant_Phone_Status ON InboundMessageQueueItems (TenantId, FromPhone, Status);
+                CREATE INDEX IX_IMQ_FirstReceived ON InboundMessageQueueItems (FirstReceivedAt);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] InboundMessageQueueItems: {ex.Message}"); }
+
+    // ── Fase 3: columnas de etiquetado IA (self-healing) ──
+    // Solo persistimos en Conversations el resultado de la clasificación.
+    // El horario y el webhook de resultado son ScheduledWebhookJobs en /admin/scheduled-jobs.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'LabelId')
+            BEGIN ALTER TABLE Conversations ADD LabelId uniqueidentifier NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'LabeledAt')
+            BEGIN ALTER TABLE Conversations ADD LabeledAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LabelingSummarySentAt')
+            BEGIN ALTER TABLE Campaigns ADD LabelingSummarySentAt datetime2 NULL; END");
+        // Si quedaron residuos de iteraciones previas, los dropeamos para mantener el schema limpio.
+        db.Database.ExecuteSqlRaw(@"
+            IF EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'LabelingJobHourUtc')
+            BEGIN ALTER TABLE CampaignTemplates DROP COLUMN LabelingJobHourUtc; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Fase 3 columns: {ex.Message}"); }
+
+    // ── Fase 2/3: seed ActionDefinitions globales (idempotente) ──
+    try
+    {
+        var seedLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("CampaignAutomationSeeder");
+        AgentFlow.Infrastructure.ScheduledJobs.CampaignAutomationSeeder
+            .SeedAsync(db, seedLogger).GetAwaiter().GetResult();
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] CampaignAutomationSeeder: {ex.Message}"); }
 
     if (!db.SuperAdmins.Any())
     {
@@ -338,6 +914,11 @@ if (isDev)
         db.SaveChanges();
         Console.WriteLine("[Seed] Super Admin creado en producción.");
     }
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"[Startup] Error en bloque de seed/schema: {ex.Message}");
+    // No lanzar — el API debe arrancar aunque el schema check falle
 }
 
 // ── Security headers ─────────────────────────────────

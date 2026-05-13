@@ -17,16 +17,45 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
     public async Task<Conversation?> GetByIdAsync(Guid id, CancellationToken ct = default)
         => await db.Conversations
             .Include(c => c.Messages)
+            .Include(c => c.Campaign)   // para mostrar el nombre de campaña en el monitor
             .FirstOrDefaultAsync(c => c.Id == id, ct);
 
-    public async Task<IEnumerable<Conversation>> GetActiveByTenantAsync(Guid tenantId, CancellationToken ct = default)
-        => await db.Conversations
+    public async Task<IEnumerable<Conversation>> GetActiveByTenantAsync(
+        Guid tenantId,
+        DateTime? fromUtc = null,
+        DateTime? toUtc = null,
+        string? launchedByUserId = null,
+        CancellationToken ct = default)
+    {
+        var q = db.Conversations
             .Include(c => c.ActiveAgent)   // necesario para agentType/agentName en el monitor
             .Include(c => c.Messages)      // necesario para lastMessagePreview
-            .Where(c => c.TenantId == tenantId)
+            .Where(c => c.TenantId == tenantId);
+
+        // Filtro por fecha civil en zona horaria del tenant (Panamá = UTC-5, sin DST).
+        // DATE(LastActivityAt - 5h) BETWEEN DATE(@from) AND DATE(@to) — así una
+        // conversación a las 22:20 PA del 04/05 (que en UTC quedó como 03:20 del 05/05)
+        // aparece bajo el filtro 04/05 PA, junto con las del 13:00 PA del mismo día.
+        // EF Core traduce DateTime.AddHours(...).Date a CAST(DATEADD(hour, -5, ...) AS DATE).
+        const int paOffsetHours = -5;
+        if (fromUtc.HasValue) q = q.Where(c => c.LastActivityAt.AddHours(paOffsetHours).Date >= fromUtc.Value.Date);
+        if (toUtc.HasValue)   q = q.Where(c => c.LastActivityAt.AddHours(paOffsetHours).Date <= toUtc.Value.Date);
+
+        if (!string.IsNullOrWhiteSpace(launchedByUserId))
+        {
+            // Conversaciones cuyo Campaign.LaunchedByUserId coincide,
+            // O conversaciones sin CampaignId (chats orgánicos / no-campaña visibles para todos).
+            var userKey = launchedByUserId.Trim();
+            q = q.Where(c => c.CampaignId == null
+                          || db.Campaigns.Any(camp => camp.Id == c.CampaignId
+                                                   && camp.LaunchedByUserId == userKey));
+        }
+
+        return await q
             .OrderByDescending(c => c.LastActivityAt)
             .Take(200)                     // límite para no sobrecargar el monitor
             .ToListAsync(ct);
+    }
 
     public async Task<Conversation> CreateAsync(Conversation conversation, CancellationToken ct = default)
     {
@@ -49,6 +78,12 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
         db.Set<Message>().Add(message);
     }
 
+    public async Task AddGestionEventAsync(GestionEvent ev, CancellationToken ct = default)
+    {
+        db.Set<GestionEvent>().Add(ev);
+        await Task.CompletedTask;
+    }
+
     public async Task SaveChangesAsync(CancellationToken ct = default)
     {
         await db.SaveChangesAsync(ct);
@@ -59,4 +94,14 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
             .Where(c => c.TenantId == tenantId && c.Status == status)
             .OrderByDescending(c => c.LastActivityAt)
             .ToListAsync(ct);
+
+    public async Task<Campaign?> GetCampaignAsync(Guid campaignId, CancellationToken ct = default)
+        => await db.Campaigns.FirstOrDefaultAsync(c => c.Id == campaignId, ct);
+
+    public async Task<Conversation?> GetLatestByPhoneAsync(Guid tenantId, string phone, CancellationToken ct = default)
+        => await db.Conversations
+            .Include(c => c.Messages)
+            .Where(c => c.TenantId == tenantId && c.ClientPhone == phone)
+            .OrderByDescending(c => c.LastActivityAt)
+            .FirstOrDefaultAsync(ct);
 }

@@ -37,6 +37,23 @@ public class Conversation
     public DateTime? ClosedAt { get; set; }
     public DateTime LastActivityAt { get; set; } = DateTime.UtcNow;
 
+    // ── Fase 3 — Etiquetado IA ────────────────────────────────────────────
+    /// <summary>Etiqueta asignada por el clasificador IA. NULL = aún sin etiquetar.</summary>
+    public Guid? LabelId { get; set; }
+    public ConversationLabel? Label { get; set; }
+    /// <summary>UTC. Cuándo el clasificador asignó la etiqueta.</summary>
+    public DateTime? LabeledAt { get; set; }
+
+    /// <summary>
+    /// Resultado JSON crudo extraído por el labeling worker basado en
+    /// Tenant.LabelingResultSchemaPrompt. Los webhooks lo consultan mapeando
+    /// sus campos vía sourceType=labelingResult (ej: result.comentario).
+    /// NULL = el tenant no tiene schema configurado o el LLM no devolvió JSON.
+    /// </summary>
+    public string? LabelingResultJson { get; set; }
+    // El envío del webhook de resultado al cliente NO se persiste aquí: es una
+    // ActionDefinition programada que se audita en ScheduledWebhookJobExecutions.
+
     public ICollection<Message> Messages { get; set; } = [];
     public ICollection<GestionEvent> GestionEvents { get; set; } = [];
 }

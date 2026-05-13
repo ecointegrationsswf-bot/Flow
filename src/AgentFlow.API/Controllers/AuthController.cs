@@ -17,6 +17,7 @@ public record LoginRequest(string Email, string Password);
 public record UpdateSendGridRequest(string? SendGridApiKey, string? SenderEmail);
 public record UpdateLlmConfigRequest(string LlmProvider, string? LlmApiKey, string LlmModel);
 public record UpdateTimezoneRequest(string TimeZone);
+public record UpdateCampaignDelayRequest(int DelaySeconds);
 public record ForgotPasswordRequest(string Email);
 public record ResetPasswordRequest(string Token, string NewPassword);
 public record Verify2FARequest(string TempToken, string Code);
@@ -33,7 +34,8 @@ public record UserInfo(
     string FullName,
     string Email,
     string Role,
-    string? AvatarUrl = null
+    string? AvatarUrl = null,
+    List<string>? Permissions = null
 );
 
 [ApiController]
@@ -142,7 +144,8 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 FullName: user.FullName,
                 Email: user.Email,
                 Role: user.Role.ToString(),
-                AvatarUrl: user.AvatarUrl
+                AvatarUrl: user.AvatarUrl,
+                Permissions: user.Permissions ?? []
             )
         ));
     }
@@ -185,7 +188,10 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
             issuer: "agentflow-api",
             audience: "agentflow-app",
             claims: claims,
-            expires: DateTime.UtcNow.AddHours(12),
+            // 8h: el usuario hace login completo (password + 2FA) UNA VEZ por
+            // jornada laboral. Mientras el JWT está en localStorage del browser,
+            // cualquier reapertura de ventana dentro de las 8h omite 2FA.
+            expires: DateTime.UtcNow.AddHours(8),
             signingCredentials: creds
         );
 
@@ -214,7 +220,11 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 LlmApiKey = string.IsNullOrEmpty(t.LlmApiKey) ? null : "***" + t.LlmApiKey.Substring(Math.Max(0, t.LlmApiKey.Length - 4)),
                 t.LlmModel,
                 SendGridApiKey = string.IsNullOrEmpty(t.SendGridApiKey) ? null : "***" + t.SendGridApiKey.Substring(Math.Max(0, t.SendGridApiKey.Length - 4)),
-                t.SenderEmail
+                t.SenderEmail,
+                t.CampaignMessageDelaySeconds,
+                t.BrainEnabled,
+                t.WebhookContractEnabled,
+                t.ReferenceDocumentsEnabled
             })
             .FirstOrDefaultAsync(ct);
 
@@ -280,6 +290,95 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
         await db.SaveChangesAsync(ct);
         return Ok(new { message = "Configuracion de LLM actualizada." });
     }
+
+    [HttpPut("tenant/campaign-delay")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateCampaignDelay([FromBody] UpdateCampaignDelayRequest req, CancellationToken ct)
+    {
+        if (req.DelaySeconds < 3 || req.DelaySeconds > 120)
+            return BadRequest(new { error = "El delay debe estar entre 3 y 120 segundos." });
+
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        tenant.CampaignMessageDelaySeconds = req.DelaySeconds;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { delaySeconds = tenant.CampaignMessageDelaySeconds });
+    }
+
+    [HttpPut("tenant/brain")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateBrainEnabled([FromBody] UpdateBrainEnabledRequest req, CancellationToken ct)
+    {
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        // Si se intenta activar, verificar que existe un Agente Welcome
+        if (req.BrainEnabled)
+        {
+            var hasWelcome = await db.AgentRegistryEntries
+                .AnyAsync(r => r.TenantId == tenantId && r.IsWelcome && r.IsActive, ct);
+            if (!hasWelcome)
+                return BadRequest(new { error = "Debes registrar un Agente Welcome antes de activar el Cerebro. Ve a Cerebro → Registro de agentes." });
+        }
+
+        tenant.BrainEnabled = req.BrainEnabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { tenant.BrainEnabled });
+    }
+
+    public record UpdateBrainEnabledRequest(bool BrainEnabled);
+
+    [HttpPut("tenant/webhook-contract")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateWebhookContractEnabled([FromBody] UpdateWebhookContractRequest req, CancellationToken ct)
+    {
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        tenant.WebhookContractEnabled = req.Enabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { tenant.WebhookContractEnabled });
+    }
+
+    public record UpdateWebhookContractRequest(bool Enabled);
+
+    /// <summary>
+    /// Activa o desactiva la inyección de Documentos de Referencia (PDFs adjuntos al
+    /// maestro de campaña) en el contexto del agente. Desactivado = comportamiento
+    /// pre-feature (el agente no lee los PDFs aunque estén cargados).
+    /// </summary>
+    [HttpPut("tenant/reference-documents")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> UpdateReferenceDocumentsEnabled(
+        [FromBody] UpdateReferenceDocumentsRequest req, CancellationToken ct)
+    {
+        var tenantIdStr = User.FindFirst("tenant_id")?.Value;
+        if (tenantIdStr is null || !Guid.TryParse(tenantIdStr, out var tenantId))
+            return Unauthorized();
+
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        tenant.ReferenceDocumentsEnabled = req.Enabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { tenant.ReferenceDocumentsEnabled });
+    }
+
+    public record UpdateReferenceDocumentsRequest(bool Enabled);
 
     [HttpPost("forgot-password")]
     [EnableRateLimiting("auth")]
@@ -412,4 +511,44 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
 
         return CryptographicOperations.FixedTimeEquals(hash, storedHashBytes);
     }
+
+    // Retorna el usuario autenticado con permisos frescos desde la BD
+    [HttpGet("me")]
+    [Microsoft.AspNetCore.Authorization.Authorize]
+    public async Task<IActionResult> GetMe(CancellationToken ct)
+    {
+        var userId = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
+            ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (userId is null || !Guid.TryParse(userId, out var id))
+            return Unauthorized();
+
+        var user = await db.AppUsers
+            .Where(u => u.Id == id)
+            .Select(u => new
+            {
+                Id = u.Id.ToString(),
+                u.FullName,
+                u.Email,
+                Role = u.Role.ToString(),
+                u.AvatarUrl,
+                u.Permissions,
+            })
+            .FirstOrDefaultAsync(ct);
+
+        if (user is null) return NotFound();
+
+        return Ok(new UserInfo(
+            Id: user.Id,
+            FullName: user.FullName,
+            Email: user.Email,
+            Role: user.Role,
+            AvatarUrl: user.AvatarUrl,
+            Permissions: user.Permissions ?? []
+        ));
+    }
+
+    // Endpoint ligero para mantener el app pool activo (keep-alive)
+    [HttpGet("ping")]
+    [Microsoft.AspNetCore.Authorization.AllowAnonymous]
+    public IActionResult Ping() => Ok(new { status = "ok", ts = DateTime.UtcNow });
 }

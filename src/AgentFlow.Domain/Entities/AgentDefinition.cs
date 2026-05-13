@@ -49,7 +49,4 @@ public class AgentDefinition
 
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
-
-    // Documentos de referencia (PDFs)
-    public List<AgentDocument> Documents { get; set; } = [];
 }

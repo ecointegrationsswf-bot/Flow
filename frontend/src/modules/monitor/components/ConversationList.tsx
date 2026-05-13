@@ -1,12 +1,20 @@
 import { useMemo, useState } from 'react'
-import { Search } from 'lucide-react'
-import { format, isToday, isYesterday, differenceInMinutes } from 'date-fns'
+import { Search, CalendarRange, X } from 'lucide-react'
+import { differenceInMinutes } from 'date-fns'
 import type { ConversationSummary, ConversationStatus } from '@/shared/types'
+import { useTenantTime } from '@/shared/hooks/useTenantTime'
+import { useCampaignLaunchers } from '@/shared/hooks/useMonitor'
 
 interface ConversationListProps {
   conversations: ConversationSummary[]
   selectedId: string | null
   onSelect: (id: string) => void
+  fromDate: string
+  toDate: string
+  onFromDateChange: (v: string) => void
+  onToDateChange: (v: string) => void
+  launchedByUserId: string
+  onLaunchedByUserIdChange: (v: string) => void
 }
 
 
@@ -24,14 +32,18 @@ function getAvatarBg(name: string) {
   return colors[Math.abs(hash) % colors.length]
 }
 
-function formatTime(dateStr: string) {
-  const d = new Date(dateStr)
-  if (isToday(d)) return format(d, 'h:mm a')
-  if (isYesterday(d)) return 'Ayer'
-  return format(d, 'dd/MM/yyyy')
-}
-
-export function ConversationList({ conversations, selectedId, onSelect }: ConversationListProps) {
+export function ConversationList({
+  conversations, selectedId, onSelect,
+  fromDate, toDate, onFromDateChange, onToDateChange,
+  launchedByUserId, onLaunchedByUserIdChange,
+}: ConversationListProps) {
+  const tt = useTenantTime()
+  const { data: launchers = [] } = useCampaignLaunchers()
+  const formatTime = (dateStr: string) => {
+    if (tt.isToday(dateStr))     return tt.time(dateStr)
+    if (tt.isYesterday(dateStr)) return 'Ayer'
+    return tt.date(dateStr)
+  }
   const [search, setSearch] = useState('')
   const [filterAgent, setFilterAgent] = useState('')
   const [filterStatus, setFilterStatus] = useState<ConversationStatus | ''>('')
@@ -87,6 +99,46 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
         </div>
       </div>
 
+      {/* Date range filter */}
+      <div className="flex items-center gap-2 px-4 pb-2 text-xs text-gray-600">
+        <CalendarRange className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+        <input
+          type="date" value={fromDate}
+          onChange={e => onFromDateChange(e.target.value)}
+          className="flex-1 rounded-md border border-gray-200 bg-[#f6f6f6] px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400/50"
+        />
+        <span className="text-gray-400">→</span>
+        <input
+          type="date" value={toDate}
+          onChange={e => onToDateChange(e.target.value)}
+          className="flex-1 rounded-md border border-gray-200 bg-[#f6f6f6] px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400/50"
+        />
+        {(fromDate || toDate) && (
+          <button
+            onClick={() => { onFromDateChange(''); onToDateChange('') }}
+            title="Limpiar fechas"
+            className="rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        )}
+      </div>
+
+      {/* Launched-by-user filter */}
+      <div className="px-4 pb-2">
+        <select
+          value={launchedByUserId}
+          onChange={e => onLaunchedByUserIdChange(e.target.value)}
+          className="w-full rounded-lg border border-gray-200 bg-[#f6f6f6] px-3 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
+          title="Filtra por el usuario que lanzó la campaña. Las conversaciones sin campaña son visibles para todos."
+        >
+          <option value="">Todas las campañas (cualquier usuario)</option>
+          {launchers.map(l => (
+            <option key={l.key} value={l.key}>{l.label}</option>
+          ))}
+        </select>
+      </div>
+
       {/* Filters */}
       <div className="flex gap-2 px-4 pb-3">
         <select
@@ -140,6 +192,12 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
                   {c.status === 'Active' && (
                     <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-green-400" />
                   )}
+                  {c.status === 'EscalatedToHuman' && (
+                    <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-orange-400" title="Escalado a humano" />
+                  )}
+                  {isStale && (
+                    <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-red-500" title="Sin respuesta del cliente" />
+                  )}
                 </div>
 
                 <div className="min-w-0 flex-1">
@@ -156,7 +214,6 @@ export function ConversationList({ conversations, selectedId, onSelect }: Conver
                       {c.lastMessagePreview ?? '—'}
                     </p>
                     <div className="flex shrink-0 items-center gap-1">
-                      {isStale && <span className="h-2.5 w-2.5 rounded-full bg-red-500" />}
                       {c.isHumanHandled && (
                         <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">H</span>
                       )}

@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Loader2, Save, Mail, Brain, Clock } from 'lucide-react'
-import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone } from '@/shared/hooks/useTenant'
+import { Loader2, Save, Mail, Brain, Clock, MessageSquare } from 'lucide-react'
+import { ToggleLeft, ToggleRight } from 'lucide-react'
+import { Webhook } from 'lucide-react'
+import { useTenant, useUpdateTenantSendGrid, useUpdateTenantLlm, useUpdateTenantTimezone, useUpdateCampaignDelay, useUpdateBrainEnabled, useUpdateWebhookContract, useUpdateReferenceDocumentsEnabled } from '@/shared/hooks/useTenant'
 
 const TIMEZONES = [
   { value: 'America/Panama',      label: 'America/Panama (UTC-5)' },
@@ -47,6 +49,10 @@ export function TenantSettingsTab() {
   const updateSendGrid = useUpdateTenantSendGrid()
   const updateLlm = useUpdateTenantLlm()
   const updateTimezone = useUpdateTenantTimezone()
+  const updateDelay = useUpdateCampaignDelay()
+  const updateBrain = useUpdateBrainEnabled()
+  const updateWebhookContract = useUpdateWebhookContract()
+  const updateReferenceDocs = useUpdateReferenceDocumentsEnabled()
 
   const [sendGridApiKey, setSendGridApiKey] = useState('')
   const [senderEmail, setSenderEmail] = useState('')
@@ -58,6 +64,9 @@ export function TenantSettingsTab() {
   const [timeZone, setTimeZone] = useState('America/Panama')
   const [timezoneSaved, setTimezoneSaved] = useState(false)
 
+  const [campaignDelay, setCampaignDelay] = useState(10)
+  const [delaySaved, setDelaySaved] = useState(false)
+
   useEffect(() => {
     if (tenant) {
       setSendGridApiKey('')
@@ -66,6 +75,7 @@ export function TenantSettingsTab() {
       setLlmApiKey('')
       setLlmModel(tenant.llmModel ?? 'claude-sonnet-4-6')
       setTimeZone(tenant.timeZone ?? 'America/Panama')
+      setCampaignDelay(tenant.campaignMessageDelaySeconds ?? 10)
     }
   }, [tenant])
 
@@ -73,6 +83,12 @@ export function TenantSettingsTab() {
     await updateTimezone.mutateAsync(timeZone)
     setTimezoneSaved(true)
     setTimeout(() => setTimezoneSaved(false), 2500)
+  }
+
+  const handleSaveDelay = async () => {
+    await updateDelay.mutateAsync(campaignDelay)
+    setDelaySaved(true)
+    setTimeout(() => setDelaySaved(false), 2500)
   }
 
   const handleSaveSendGrid = () => {
@@ -108,7 +124,7 @@ export function TenantSettingsTab() {
   if (error || !tenant) {
     return (
       <div className="rounded-lg bg-red-50 p-4 text-sm text-red-600">
-        Error al cargar la informacion del tenant.
+        Error al cargar la información del tenant.
       </div>
     )
   }
@@ -119,7 +135,7 @@ export function TenantSettingsTab() {
     <div className="space-y-6">
       {/* Info del tenant */}
       <div className="rounded-lg bg-white p-5 shadow-sm">
-        <h3 className="mb-4 text-sm font-semibold text-gray-900">Informacion del tenant</h3>
+        <h3 className="mb-4 text-sm font-semibold text-gray-900">Información del tenant</h3>
         <div className="space-y-4">
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -139,7 +155,7 @@ export function TenantSettingsTab() {
               <p className="mt-1 text-sm text-gray-900">{tenant.whatsAppProvider}</p>
             </div>
             <div>
-              <label className="block text-xs font-medium text-gray-500">Telefono WhatsApp</label>
+              <label className="block text-xs font-medium text-gray-500">Teléfono WhatsApp</label>
               <p className="mt-1 text-sm text-gray-900">{tenant.whatsAppPhoneNumber || '—'}</p>
             </div>
             <div>
@@ -193,7 +209,7 @@ export function TenantSettingsTab() {
       <div className="rounded-lg bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center gap-2">
           <Brain className="h-4 w-4 text-purple-600" />
-          <h3 className="text-sm font-semibold text-gray-900">Configuracion del modelo de IA (LLM)</h3>
+          <h3 className="text-sm font-semibold text-gray-900">Configuración del modelo de IA (LLM)</h3>
         </div>
         <p className="mb-4 text-xs text-gray-500">
           Selecciona el proveedor de inteligencia artificial y el modelo que usaran los agentes de este tenant para responder mensajes.
@@ -242,14 +258,67 @@ export function TenantSettingsTab() {
             className="flex items-center gap-2 rounded-lg bg-purple-600 px-4 py-2 text-sm font-medium text-white hover:bg-purple-700 disabled:opacity-50 transition-colors"
           >
             {updateLlm.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {updateLlm.isPending ? 'Guardando...' : 'Guardar configuracion LLM'}
+            {updateLlm.isPending ? 'Guardando...' : 'Guardar configuración LLM'}
           </button>
           {updateLlm.isSuccess && (
-            <p className="mt-2 text-sm text-green-600">Configuracion de LLM actualizada correctamente.</p>
+            <p className="mt-2 text-sm text-green-600">Configuración de LLM actualizada correctamente.</p>
           )}
           {updateLlm.isError && (
-            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuracion de LLM.</p>
+            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuración de LLM.</p>
           )}
+        </div>
+      </div>
+
+      {/* Delay entre mensajes de campaña */}
+      <div className="rounded-lg bg-white p-5 shadow-sm">
+        <div className="mb-4 flex items-center gap-2">
+          <MessageSquare className="h-4 w-4 text-green-600" />
+          <h3 className="text-sm font-semibold text-gray-900">Delay entre mensajes de campaña</h3>
+        </div>
+        <p className="mb-5 text-xs text-gray-500">
+          Tiempo de espera entre cada mensaje enviado al lanzar una campaña. Valores bajos pueden causar bloqueos de WhatsApp. Recomendado: 8–15 segundos.
+        </p>
+        <div className="space-y-3">
+          <div className="flex items-center gap-4">
+            <input
+              type="range"
+              min={3}
+              max={120}
+              step={1}
+              value={campaignDelay}
+              onChange={e => setCampaignDelay(Number(e.target.value))}
+              className="flex-1 accent-green-600"
+            />
+            <div className="flex w-24 items-center gap-1">
+              <input
+                type="number"
+                min={3}
+                max={120}
+                value={campaignDelay}
+                onChange={e => setCampaignDelay(Math.min(120, Math.max(3, Number(e.target.value))))}
+                className="w-16 rounded-md border border-gray-300 px-2 py-1.5 text-center text-sm focus:border-green-500 focus:outline-none focus:ring-1 focus:ring-green-500"
+              />
+              <span className="text-xs text-gray-500">seg</span>
+            </div>
+          </div>
+          <div className="flex justify-between text-xs text-gray-400">
+            <span>3 seg (mínimo)</span>
+            <span className={`font-medium ${campaignDelay <= 5 ? 'text-red-500' : campaignDelay <= 10 ? 'text-yellow-600' : 'text-green-600'}`}>
+              {campaignDelay <= 5 ? 'Riesgo de bloqueo' : campaignDelay <= 10 ? 'Aceptable' : 'Seguro'}
+            </span>
+            <span>120 seg (máximo)</span>
+          </div>
+        </div>
+        <div className="mt-4">
+          <button
+            type="button"
+            onClick={handleSaveDelay}
+            disabled={updateDelay.isPending}
+            className="flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            {updateDelay.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            {delaySaved ? '¡Guardado!' : updateDelay.isPending ? 'Guardando...' : 'Guardar delay'}
+          </button>
         </div>
       </div>
 
@@ -257,10 +326,10 @@ export function TenantSettingsTab() {
       <div className="rounded-lg bg-white p-5 shadow-sm">
         <div className="mb-4 flex items-center gap-2">
           <Mail className="h-4 w-4 text-blue-600" />
-          <h3 className="text-sm font-semibold text-gray-900">Configuracion de Email (SendGrid)</h3>
+          <h3 className="text-sm font-semibold text-gray-900">Configuración de Email (SendGrid)</h3>
         </div>
         <p className="mb-4 text-xs text-gray-500">
-          Configura el token de SendGrid y la cuenta de correo para el envio de emails desde las campanas de este tenant.
+          Configura el token de SendGrid y la cuenta de correo para el envío de emails desde las campañas de este tenant.
         </p>
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -292,15 +361,125 @@ export function TenantSettingsTab() {
             className="flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 transition-colors"
           >
             {updateSendGrid.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-            {updateSendGrid.isPending ? 'Guardando...' : 'Guardar configuracion'}
+            {updateSendGrid.isPending ? 'Guardando...' : 'Guardar configuración'}
           </button>
           {updateSendGrid.isSuccess && (
-            <p className="mt-2 text-sm text-green-600">Configuracion actualizada correctamente.</p>
+            <p className="mt-2 text-sm text-green-600">Configuración actualizada correctamente.</p>
           )}
           {updateSendGrid.isError && (
-            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuracion.</p>
+            <p className="mt-2 text-sm text-red-600">Error al actualizar la configuración.</p>
           )}
         </div>
+      </div>
+
+      {/* Seccion: Cerebro */}
+      <div className="rounded-lg bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Brain className="h-5 w-5 text-indigo-600" />
+          <h2 className="text-base font-semibold text-gray-900">Cerebro — Orquestacion Inteligente</h2>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-4">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Activar el Cerebro para este tenant</p>
+            <p className="text-xs text-gray-500 mt-1 max-w-md">
+              Cuando esta activo, todos los mensajes entrantes pasan por el Cerebro antes de ser asignados a un agente.
+              Requiere al menos un Agente Welcome configurado en el registro de agentes.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => updateBrain.mutate(!tenant?.brainEnabled)}
+            disabled={updateBrain.isPending}
+            className="transition-colors"
+          >
+            {tenant?.brainEnabled ? (
+              <ToggleRight className="h-8 w-8 text-indigo-600" />
+            ) : (
+              <ToggleLeft className="h-8 w-8 text-gray-300" />
+            )}
+          </button>
+        </div>
+        {updateBrain.isError && (
+          <p className="mt-2 text-sm text-red-600">{(updateBrain.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
+        )}
+        {updateBrain.isSuccess && (
+          <p className="mt-2 text-sm text-green-600">Configuración del Cerebro actualizada.</p>
+        )}
+      </div>
+
+      {/* Seccion: Webhook Contract / Action Trigger Protocol */}
+      <div className="rounded-lg bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Webhook className="h-5 w-5 text-purple-600" />
+          <h2 className="text-base font-semibold text-gray-900">Webhook Contract System</h2>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-4">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Activar Webhook Contract y Action Trigger Protocol</p>
+            <p className="text-xs text-gray-500 mt-1 max-w-md">
+              Cuando esta activo, las acciones configuradas en los maestros de campaña pueden ejecutar
+              webhooks externos y el agente IA puede disparar acciones automáticamente durante las conversaciones.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => updateWebhookContract.mutate(!tenant?.webhookContractEnabled)}
+            disabled={updateWebhookContract.isPending}
+            className="transition-colors"
+          >
+            {tenant?.webhookContractEnabled ? (
+              <ToggleRight className="h-8 w-8 text-purple-600" />
+            ) : (
+              <ToggleLeft className="h-8 w-8 text-gray-300" />
+            )}
+          </button>
+        </div>
+        {updateWebhookContract.isError && (
+          <p className="mt-2 text-sm text-red-600">{(updateWebhookContract.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
+        )}
+        {updateWebhookContract.isSuccess && (
+          <p className="mt-2 text-sm text-green-600">Configuración de Webhook Contract actualizada.</p>
+        )}
+      </div>
+
+      {/* Seccion: Documentos de Referencia */}
+      <div className="rounded-lg bg-white p-6 shadow-sm">
+        <div className="flex items-center gap-2 mb-4">
+          <Webhook className="h-5 w-5 text-emerald-600" />
+          <h2 className="text-base font-semibold text-gray-900">Documentos de Referencia (PDFs)</h2>
+        </div>
+
+        <div className="flex items-center justify-between rounded-lg border border-gray-200 px-4 py-4">
+          <div>
+            <p className="text-sm font-medium text-gray-800">Inyectar PDFs adjuntos al contexto del agente</p>
+            <p className="text-xs text-gray-500 mt-1 max-w-md">
+              Cuando está activo, los PDFs que cargues en el tab "Documentos" de cada maestro se
+              envían al agente como contexto. El agente los consulta cuando su prompt base no
+              cubre la pregunta del cliente. Desactivado = los PDFs se siguen guardando pero el
+              agente no los lee.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => updateReferenceDocs.mutate(!tenant?.referenceDocumentsEnabled)}
+            disabled={updateReferenceDocs.isPending}
+            className="transition-colors"
+          >
+            {tenant?.referenceDocumentsEnabled ? (
+              <ToggleRight className="h-8 w-8 text-emerald-600" />
+            ) : (
+              <ToggleLeft className="h-8 w-8 text-gray-300" />
+            )}
+          </button>
+        </div>
+        {updateReferenceDocs.isError && (
+          <p className="mt-2 text-sm text-red-600">{(updateReferenceDocs.error as any)?.response?.data?.error ?? 'Error al actualizar.'}</p>
+        )}
+        {updateReferenceDocs.isSuccess && (
+          <p className="mt-2 text-sm text-green-600">Configuración de Documentos de Referencia actualizada.</p>
+        )}
       </div>
     </div>
   )

@@ -16,5 +16,17 @@ public class ConversationConfiguration : IEntityTypeConfiguration<Conversation>
         b.Property(c => c.GestionResult).HasConversion<string>();
         b.HasMany(c => c.Messages).WithOne(m => m.Conversation).HasForeignKey(m => m.ConversationId);
         b.HasMany(c => c.GestionEvents).WithOne(g => g.Conversation).HasForeignKey(g => g.ConversationId);
+
+        // Fase 3 — relación con ConversationLabel + índice para queries del LabelingJob.
+        b.HasOne(c => c.Label)
+            .WithMany()
+            .HasForeignKey(c => c.LabelId)
+            // NoAction porque ConversationLabel tiene FK al Tenant que cascadea a Conversations,
+            // y SetNull crearía multiple cascade paths. Si se borra una label se queda
+            // referenciada huérfana — la limpieza es responsabilidad del CRUD de labels.
+            .OnDelete(DeleteBehavior.NoAction);
+        b.HasIndex(c => new { c.TenantId, c.Status, c.LabelId });
+
+        b.Property(c => c.LabelingResultJson).HasColumnType("nvarchar(max)");
     }
 }

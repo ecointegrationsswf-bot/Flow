@@ -1,4 +1,5 @@
 using AgentFlow.Application.Modules.Campaigns;
+using AgentFlow.Application.Modules.Campaigns.LaunchV2;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Storage;
@@ -7,11 +8,16 @@ using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.ComponentModel.DataAnnotations;
+using System.IdentityModel.Tokens.Jwt;
+using System.Text.Json;
+using AgentFlow.Infrastructure.Persistence;
+using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
 public record CampaignUploadRequest(string Name, Guid AgentId, DateTime? ScheduledAt);
-public record UploadFixedFormatRequest([Required] string Name, [Required] Guid AgentId, DateTime? ScheduledAt);
+public record LaunchV2Request(int WarmupDay = 0);
+public record UploadFixedFormatRequest([Required] string Name, [Required] Guid AgentId, DateTime? ScheduledAt, Guid? CampaignTemplateId = null);
 
 public record CreateCampaignFromFileRequest(
     string Name,
@@ -30,8 +36,19 @@ public class CampaignsController(
     IExcelFileProcessor excelProcessor,
     IFixedFormatCampaignService fixedFormatService,
     IBlobStorageService blobStorage,
-    ICampaignRepository campaignRepo) : ControllerBase
+    ICampaignRepository campaignRepo,
+    AgentFlowDbContext db,
+    IConfiguration cfg,
+    IHttpClientFactory httpClientFactory) : ControllerBase
 {
+    // Devuelve el nombre completo del usuario autenticado (claim full_name),
+    // con fallback a email y luego a "system".
+    private string CurrentUser =>
+        User.FindFirst("full_name")?.Value
+        ?? User.FindFirst(JwtRegisteredClaimNames.Email)?.Value
+        ?? User.Identity?.Name
+        ?? "system";
+
     /// <summary>
     /// Lista todas las campañas del tenant autenticado.
     /// Muestra: nombre, estado, total contactos, fecha creación, etc.
@@ -54,6 +71,10 @@ public class CampaignsController(
             c.CompletedAt,
             c.CreatedAt,
             c.SourceFileName,
+            Status = c.Status.ToString(),
+            c.LaunchedAt,
+            c.CreatedByUserId,
+            c.LaunchedByUserId,
             // Progreso en porcentaje
             Progress = c.TotalContacts > 0
                 ? Math.Round((double)c.ProcessedContacts / c.TotalContacts * 100, 1)
@@ -101,27 +122,46 @@ public class CampaignsController(
     }
 
     /// <summary>
-    /// Lanza el envío de una campaña. Programa un job en Hangfire
-    /// que enviará los mensajes de forma controlada (anti-ban).
+    /// Lanza la campaña usando el flujo v2 (en proceso, sin n8n). Aplica
+    /// dedup contra campañas activas del tenant y warm-up por día. El envío
+    /// real lo realiza el CampaignWorker en el Worker Service.
+    /// </summary>
+    [HttpPost("{id:guid}/launch-v2")]
+    public async Task<IActionResult> LaunchV2(Guid id, [FromBody] LaunchV2Request? body, CancellationToken ct)
+    {
+        var phone = User.FindFirst("phone")?.Value;
+        var result = await mediator.Send(new LaunchCampaignV2Command(
+            CampaignId: id,
+            TenantId: tenantCtx.TenantId,
+            LaunchedByUserId: CurrentUser,
+            LaunchedByUserPhone: phone,
+            WarmupDay: body?.WarmupDay ?? 0
+        ), ct);
+
+        return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>
+    /// Lanza el envío de una campaña. Internamente delega al flujo v2 (CampaignWorker
+    /// en el Worker Service) — el endpoint queda como alias por compatibilidad con
+    /// clientes existentes. El parámetro <c>warmupDay</c> es opcional (default 0).
     /// </summary>
     [HttpPost("{id:guid}/start")]
-    public IActionResult StartCampaign(
+    public async Task<IActionResult> StartCampaign(
         Guid id,
-        [FromServices] Hangfire.IBackgroundJobClient? jobClient)
+        [FromQuery] int warmupDay = 0,
+        CancellationToken ct = default)
     {
-        if (jobClient is null)
-            return StatusCode(503, new { error = "Hangfire no disponible. El envío masivo requiere Hangfire." });
+        var phone = User.FindFirst("phone")?.Value;
+        var result = await mediator.Send(new LaunchCampaignV2Command(
+            CampaignId: id,
+            TenantId: tenantCtx.TenantId,
+            LaunchedByUserId: CurrentUser,
+            LaunchedByUserPhone: phone,
+            WarmupDay: warmupDay
+        ), ct);
 
-        // Programar el primer lote inmediatamente
-        var jobId = jobClient.Enqueue<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>(
-            job => job.ExecuteAsync(id, CancellationToken.None));
-
-        return Ok(new
-        {
-            message = "Campaña iniciada. Los mensajes se enviarán de forma controlada.",
-            hangfireJobId = jobId,
-            campaignId = id
-        });
+        return result.Success ? Ok(result) : BadRequest(result);
     }
 
     /// <summary>
@@ -140,21 +180,281 @@ public class CampaignsController(
     }
 
     /// <summary>
-    /// Reactiva una campaña pausada.
+    /// Reactiva una campaña pausada. Solo marca <c>IsActive=true</c>; el CampaignWorker
+    /// la recoge en el próximo tick (≤30s) si está en estado Running.
     /// </summary>
     [HttpPost("{id:guid}/resume")]
-    public IActionResult ResumeCampaign(
-        Guid id,
-        [FromServices] Hangfire.IBackgroundJobClient? jobClient)
+    public async Task<IActionResult> ResumeCampaign(Guid id, CancellationToken ct)
     {
-        if (jobClient is null)
-            return StatusCode(503, new { error = "Hangfire no disponible." });
+        var campaign = await campaignRepo.GetByIdAsync(id, tenantCtx.TenantId, ct);
+        if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
 
-        // Reactivar: el job verificará si la campaña está activa
-        var jobId = jobClient.Enqueue<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>(
-            job => job.ExecuteAsync(id, CancellationToken.None));
+        campaign.IsActive = true;
+        await campaignRepo.UpdateAsync(campaign, ct);
 
-        return Ok(new { message = "Campaña reactivada.", hangfireJobId = jobId });
+        return Ok(new { message = "Campaña reactivada. El Worker la recogerá en el próximo tick." });
+    }
+
+    /// <summary>
+    /// Cancela una campaña de forma IRREVERSIBLE. A diferencia de Pause/Resume,
+    /// Cancel marca la campaña como terminada definitivamente y descarta todos
+    /// los contactos pendientes — el operativo no la podrá reanudar después.
+    ///
+    /// Comportamiento por estado del contacto:
+    /// - Pending/Queued/Deferred/Retry → Skipped (con DispatchError = "Campaña cancelada")
+    /// - Claimed → se respeta el envío en curso (no se interrumpe HTTP a UltraMsg)
+    /// - Sent/Skipped/Duplicate/Error → no se tocan
+    ///
+    /// NO cierra conversaciones abiertas: los clientes que ya recibieron el
+    /// mensaje siguen siendo gestionados por el agente conversacional.
+    /// </summary>
+    [HttpPost("{id:guid}/cancel")]
+    public async Task<IActionResult> CancelCampaign(Guid id, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var campaign = await campaignRepo.GetByIdAsync(id, tenantId, ct);
+        if (campaign is null)
+            return NotFound(new { error = "Campaña no encontrada." });
+
+        if (campaign.Status is CampaignStatus.Completed
+                            or CampaignStatus.Failed
+                            or CampaignStatus.Cancelled)
+        {
+            return BadRequest(new
+            {
+                error = $"No se puede cancelar una campaña en estado {campaign.Status}.",
+            });
+        }
+
+        // Marcar como Skipped los contactos pendientes (Pending, Queued, Deferred, Retry).
+        // Claimed NO se toca: hay un envío HTTP en curso y abortarlo a mitad
+        // genera inconsistencia. Cuando termine quedará Sent o Error y ya no
+        // procesará nada más porque IsActive=false.
+        var skippedCount = await db.CampaignContacts
+            .Where(cc => cc.CampaignId == id
+                      && (cc.DispatchStatus == DispatchStatus.Pending
+                       || cc.DispatchStatus == DispatchStatus.Queued
+                       || cc.DispatchStatus == DispatchStatus.Deferred
+                       || cc.DispatchStatus == DispatchStatus.Retry))
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(cc => cc.DispatchStatus, DispatchStatus.Skipped)
+                .SetProperty(cc => cc.DispatchError, "Campaña cancelada"),
+                ct);
+
+        campaign.Status = CampaignStatus.Cancelled;
+        campaign.IsActive = false;
+        if (campaign.CompletedAt is null)
+            campaign.CompletedAt = DateTime.UtcNow;
+        await campaignRepo.UpdateAsync(campaign, ct);
+
+        return Ok(new
+        {
+            message = $"Campaña cancelada. {skippedCount} contactos pendientes marcados como descartados.",
+            skippedCount,
+        });
+    }
+
+    /// <summary>
+    /// Lista paginada de contactos de una campaña con su estado de despacho.
+    /// Usado por la pantalla de detalle de contactos en el portal del tenant.
+    ///
+    /// Filtros:
+    /// - status: All | Sent | Pending | Failed | Discarded
+    ///   * Sent      → DispatchStatus = Sent
+    ///   * Pending   → IN (Pending, Queued, Claimed, Deferred, Retry)
+    ///   * Failed    → DispatchStatus = Error
+    ///   * Discarded → IN (Skipped, Duplicate)
+    /// - q: texto libre, busca en ClientName y PhoneNumber.
+    /// </summary>
+    [HttpGet("{id:guid}/contacts")]
+    public async Task<IActionResult> ListContacts(
+        Guid id,
+        [FromQuery] string? status = "All",
+        [FromQuery] string? q = null,
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 50,
+        CancellationToken ct = default)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var campaignExists = await db.Campaigns
+            .AnyAsync(c => c.Id == id && c.TenantId == tenantId, ct);
+        if (!campaignExists)
+            return NotFound(new { error = "Campaña no encontrada." });
+
+        var query = BuildContactsQuery(id, tenantId, status, q);
+        var total = await query.CountAsync(ct);
+
+        // Orden: enviados primero por SentAt desc, luego pendientes/errores por CreatedAt
+        // — útil para que el operativo vea los más recientes arriba.
+        var items = await query
+            .OrderByDescending(cc => cc.SentAt ?? cc.CreatedAt)
+            .Skip((Math.Max(1, page) - 1) * pageSize)
+            .Take(Math.Clamp(pageSize, 1, 500))
+            .Select(cc => new
+            {
+                cc.Id,
+                cc.PhoneNumber,
+                cc.ClientName,
+                cc.PolicyNumber,
+                cc.InsuranceCompany,
+                cc.PendingAmount,
+                cc.GeneratedMessage,
+                DispatchStatus = cc.DispatchStatus.ToString(),
+                cc.SentAt,
+                cc.ExternalMessageId,
+                cc.DispatchError,
+                cc.IsPhoneValid,
+            })
+            .ToListAsync(ct);
+
+        // Contadores por bucket para el contador de las tabs del frontend
+        var byBucket = await db.CampaignContacts
+            .Where(cc => cc.CampaignId == id)
+            .GroupBy(cc => cc.DispatchStatus)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        var sent      = byBucket.Where(b => b.Status == DispatchStatus.Sent).Sum(b => b.Count);
+        var pending   = byBucket.Where(b => b.Status == DispatchStatus.Pending
+                                         || b.Status == DispatchStatus.Queued
+                                         || b.Status == DispatchStatus.Claimed
+                                         || b.Status == DispatchStatus.Deferred
+                                         || b.Status == DispatchStatus.Retry).Sum(b => b.Count);
+        var failed    = byBucket.Where(b => b.Status == DispatchStatus.Error).Sum(b => b.Count);
+        var discarded = byBucket.Where(b => b.Status == DispatchStatus.Skipped
+                                         || b.Status == DispatchStatus.Duplicate).Sum(b => b.Count);
+
+        return Ok(new
+        {
+            total,
+            page,
+            pageSize,
+            items,
+            counts = new { all = sent + pending + failed + discarded, sent, pending, failed, discarded }
+        });
+    }
+
+    /// <summary>
+    /// Exporta el listado filtrado de contactos a Excel (.xlsx). Mismo
+    /// criterio de filtro que ListContacts pero SIN paginar — exporta el
+    /// universo completo del filtro actual.
+    /// </summary>
+    [HttpGet("{id:guid}/contacts/export")]
+    public async Task<IActionResult> ExportContacts(
+        Guid id,
+        [FromQuery] string? status = "All",
+        [FromQuery] string? q = null,
+        CancellationToken ct = default)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var campaign = await db.Campaigns
+            .Where(c => c.Id == id && c.TenantId == tenantId)
+            .Select(c => new { c.Id, c.Name })
+            .FirstOrDefaultAsync(ct);
+        if (campaign is null)
+            return NotFound(new { error = "Campaña no encontrada." });
+
+        var rows = await BuildContactsQuery(id, tenantId, status, q)
+            .OrderByDescending(cc => cc.SentAt ?? cc.CreatedAt)
+            .Select(cc => new
+            {
+                cc.PhoneNumber,
+                cc.ClientName,
+                cc.GeneratedMessage,
+                Status = cc.DispatchStatus.ToString(),
+                cc.SentAt,
+                cc.ExternalMessageId,
+                cc.DispatchError,
+            })
+            .ToListAsync(ct);
+
+        using var wb = new ClosedXML.Excel.XLWorkbook();
+        var ws = wb.Worksheets.Add("Contactos");
+        ws.Cell(1, 1).Value = "Cliente";
+        ws.Cell(1, 2).Value = "Teléfono";
+        ws.Cell(1, 3).Value = "Mensaje enviado";
+        ws.Cell(1, 4).Value = "Estado";
+        ws.Cell(1, 5).Value = "Enviado";
+        ws.Cell(1, 6).Value = "ID mensaje externo";
+        ws.Cell(1, 7).Value = "Error";
+        ws.Row(1).Style.Font.Bold = true;
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var r = rows[i];
+            var row = i + 2;
+            ws.Cell(row, 1).Value = r.ClientName ?? "";
+            ws.Cell(row, 2).Value = r.PhoneNumber;
+            ws.Cell(row, 3).Value = r.GeneratedMessage ?? "";
+            ws.Cell(row, 3).Style.Alignment.WrapText = true;
+            ws.Cell(row, 3).Style.Alignment.Vertical = ClosedXML.Excel.XLAlignmentVerticalValues.Top;
+            ws.Cell(row, 4).Value = r.Status;
+            // SentAt viene como UTC; convertimos a hora Panamá para Excel.
+            if (r.SentAt.HasValue)
+            {
+                ws.Cell(row, 5).Value = r.SentAt.Value.AddHours(-5);
+                ws.Cell(row, 5).Style.DateFormat.Format = "dd/mm/yyyy hh:mm";
+            }
+            ws.Cell(row, 6).Value = r.ExternalMessageId ?? "";
+            ws.Cell(row, 7).Value = r.DispatchError ?? "";
+        }
+
+        // AdjustToContents respeta wrap text de la columna 3; las otras se ajustan al texto.
+        ws.Columns(1, 2).AdjustToContents();
+        ws.Column(3).Width = 80;   // Mensaje — ancho fijo cómodo para lectura
+        ws.Columns(4, 7).AdjustToContents();
+
+        using var ms = new MemoryStream();
+        wb.SaveAs(ms);
+        var bytes = ms.ToArray();
+
+        var safeName = string.Join("_", campaign.Name.Split(Path.GetInvalidFileNameChars()));
+        var fileName = $"contactos_{safeName}_{DateTime.UtcNow.AddHours(-5):yyyyMMdd_HHmm}.xlsx";
+        return File(bytes,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            fileName);
+    }
+
+    private IQueryable<Domain.Entities.CampaignContact> BuildContactsQuery(
+        Guid campaignId, Guid tenantId, string? status, string? q)
+    {
+        var query = db.CampaignContacts
+            .Where(cc => cc.CampaignId == campaignId
+                      && cc.Campaign.TenantId == tenantId);
+
+        switch ((status ?? "All").Trim().ToLowerInvariant())
+        {
+            case "sent":
+                query = query.Where(cc => cc.DispatchStatus == DispatchStatus.Sent);
+                break;
+            case "pending":
+                query = query.Where(cc =>
+                    cc.DispatchStatus == DispatchStatus.Pending
+                 || cc.DispatchStatus == DispatchStatus.Queued
+                 || cc.DispatchStatus == DispatchStatus.Claimed
+                 || cc.DispatchStatus == DispatchStatus.Deferred
+                 || cc.DispatchStatus == DispatchStatus.Retry);
+                break;
+            case "failed":
+                query = query.Where(cc => cc.DispatchStatus == DispatchStatus.Error);
+                break;
+            case "discarded":
+                query = query.Where(cc =>
+                    cc.DispatchStatus == DispatchStatus.Skipped
+                 || cc.DispatchStatus == DispatchStatus.Duplicate);
+                break;
+            // "all" o cualquier otro → sin filtro
+        }
+
+        if (!string.IsNullOrWhiteSpace(q))
+        {
+            var qLower = q.Trim().ToLower();
+            query = query.Where(cc =>
+                (cc.ClientName != null && cc.ClientName.ToLower().Contains(qLower)) ||
+                cc.PhoneNumber.ToLower().Contains(qLower));
+        }
+
+        return query;
     }
 
     [HttpPost("parse")]
@@ -218,7 +518,7 @@ public class CampaignsController(
             ChannelType.WhatsApp,
             CampaignTrigger.FileUpload,
             contactRows,
-            User.Identity?.Name ?? "system",
+            CurrentUser,
             req.ScheduledAt
         ), ct);
 
@@ -242,7 +542,7 @@ public class CampaignsController(
             ChannelType.WhatsApp,
             CampaignTrigger.FileUpload,
             contacts,
-            User.Identity?.Name ?? "system",
+            CurrentUser,
             req.ScheduledAt
         ), ct);
 
@@ -364,8 +664,9 @@ public class CampaignsController(
             ChannelType.WhatsApp,
             CampaignTrigger.FileUpload,
             parsed.Contacts,
-            User.Identity?.Name ?? "system",
-            req.ScheduledAt
+            CurrentUser,
+            req.ScheduledAt,
+            req.CampaignTemplateId
         ), ct);
 
         return Ok(new
@@ -375,6 +676,49 @@ public class CampaignsController(
             totalRowsRead = parsed.TotalRowsRead,
             extraColumns = parsed.ExtraColumns,
             warnings = parsed.Warnings
+        });
+    }
+
+    /// <summary>
+    /// Lanza una campaña creada. Internamente delega al flujo v2 (CampaignWorker
+    /// en el Worker Service); el frontend conserva la URL <c>/launch</c> para no
+    /// requerir cambios en el cliente. Mantiene shape de respuesta compatible con
+    /// el contrato anterior (campaignId, status, pendingContacts, launchedAt).
+    /// </summary>
+    [HttpPost("{id:guid}/launch")]
+    public async Task<IActionResult> Launch(Guid id, CancellationToken ct)
+    {
+        var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
+                     ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+        string? launcherPhone = null;
+        if (Guid.TryParse(userIdStr, out var launcherId))
+        {
+            var launcher = await db.AppUsers.FindAsync([launcherId], ct);
+            launcherPhone = launcher?.NotifyPhone;
+        }
+
+        var result = await mediator.Send(new LaunchCampaignV2Command(
+            CampaignId: id,
+            TenantId: tenantCtx.TenantId,
+            LaunchedByUserId: CurrentUser,
+            LaunchedByUserPhone: launcherPhone,
+            WarmupDay: 0
+        ), ct);
+
+        if (!result.Success)
+        {
+            // 404 si la campaña no pertenece al tenant; 400 para el resto de fallos.
+            if (string.Equals(result.Status, "NotFound", StringComparison.Ordinal))
+                return NotFound(new { error = result.Error });
+            return BadRequest(new { error = result.Error });
+        }
+
+        return Ok(new
+        {
+            campaignId      = result.CampaignId,
+            status          = result.Status,
+            pendingContacts = result.QueuedCount + result.DeferredCount,
+            launchedAt      = result.LaunchedAt,
         });
     }
 
@@ -392,6 +736,10 @@ public class CampaignsController(
         for (var col = 1; col <= lastCol; col++)
             headers.Add(ws.Cell(1, col).GetString().Trim());
 
+        // Si no viene mapping explícito, detectar automáticamente por nombre de columna
+        if (mapping is null || mapping.Count == 0)
+            mapping = AutoDetectMapping(headers);
+
         var contacts = new List<ContactRow>();
         for (var row = 2; row <= lastRow; row++)
         {
@@ -408,12 +756,17 @@ public class CampaignsController(
             if (string.IsNullOrWhiteSpace(phone)) continue;
 
             var mappedSourceCols = mapping.Keys.ToHashSet();
+            // Todo lo que no fue mapeado a un campo conocido va a ContactDataJson
             var extra = rowData
                 .Where(kv => !mappedSourceCols.Contains(kv.Key) && !string.IsNullOrEmpty(kv.Value))
                 .ToDictionary(kv => kv.Key, kv => kv.Value);
 
             var pendingStr = GetMapped("pendingAmount");
-            decimal? pendingAmount = decimal.TryParse(pendingStr, out var pa) ? pa : null;
+            decimal? pendingAmount = decimal.TryParse(
+                pendingStr?.Replace(",", "."),
+                System.Globalization.NumberStyles.Any,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var pa) ? pa : null;
 
             contacts.Add(new ContactRow(
                 PhoneNumber: phone,
@@ -427,5 +780,84 @@ public class CampaignsController(
         }
 
         return contacts;
+    }
+
+    /// <summary>
+    /// Detecta automáticamente qué columna del Excel corresponde a cada campo interno.
+    /// Soporta nombres en español e inglés, con y sin tildes.
+    /// El campo detectado es el nombre de la columna en el Excel; el valor es el campo interno.
+    /// </summary>
+    private static Dictionary<string, string> AutoDetectMapping(List<string> headers)
+    {
+        var mapping = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        // Alias por campo interno — orden de prioridad: primero el más específico
+        var aliases = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["phone"] =
+            [
+                "celular", "telefono", "teléfono", "phone", "tel", "movil", "móvil",
+                "whatsapp", "numero", "número", "cel", "numerodecell", "numerodecelular",
+                "numerodecliente", "numerocliente"
+            ],
+            ["clientName"] =
+            [
+                "nombrecliente", "nombre_cliente", "nombre", "cliente", "name",
+                "clientname", "razonsocial", "razón social", "nombredel cliente",
+                "nombrecompleto", "nombresapellidos"
+            ],
+            ["email"] =
+            [
+                "email", "correo", "correoelectronico", "correo electronico",
+                "correo_electronico", "e-mail", "emailcliente"
+            ],
+            ["policyNumber"] =
+            [
+                "poliza", "póliza", "numeropoliza", "númeropoliza", "numerodepoliza",
+                "nopoliza", "policy", "policynumber", "numpoliza", "npoliza"
+            ],
+            ["insuranceCompany"] =
+            [
+                "aseguradora", "seguro", "compania", "compañia", "compañía",
+                "insurance", "insurancecompany", "asegurado", "aseguradoracompania"
+            ],
+            ["pendingAmount"] =
+            [
+                "monto", "montodeuda", "deuda", "saldo", "balance", "amount",
+                "pendingamount", "montoavencer", "montopendiente", "prima",
+                "totaldeuda", "totalapagar"
+            ],
+        };
+
+        foreach (var header in headers)
+        {
+            var normalized = header.ToLowerInvariant()
+                .Replace(" ", "").Replace("_", "").Replace("-", "")
+                .Replace("á","a").Replace("é","e").Replace("í","i")
+                .Replace("ó","o").Replace("ú","u").Replace("ñ","n");
+
+            foreach (var (field, aliasList) in aliases)
+            {
+                // Ya mapeamos este campo — no sobreescribir
+                if (mapping.ContainsValue(field)) continue;
+
+                var matched = aliasList.Any(alias =>
+                {
+                    var normAlias = alias.ToLowerInvariant()
+                        .Replace(" ", "").Replace("_", "").Replace("-", "")
+                        .Replace("á","a").Replace("é","e").Replace("í","i")
+                        .Replace("ó","o").Replace("ú","u").Replace("ñ","n");
+                    return normalized == normAlias || normalized.Contains(normAlias) || normAlias.Contains(normalized);
+                });
+
+                if (matched)
+                {
+                    mapping[header] = field;
+                    break;
+                }
+            }
+        }
+
+        return mapping;
     }
 }

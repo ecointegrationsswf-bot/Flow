@@ -233,6 +233,419 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         return Ok(new { tenant.Id, tenant.Name, tenant.Slug, tenant.Country, tenant.MonthlyBillingAmount, tenant.IsActive });
     }
 
+    // ───── Tenant Configuration (super admin gestiona todos los campos del tenant) ─────
+
+    /// <summary>
+    /// Devuelve la configuración completa de un tenant para el super admin —
+    /// incluye todos los campos que antes administraba el tenant cliente desde /settings.
+    /// API keys se devuelven enmascaradas (sólo últimos 4 chars).
+    /// </summary>
+    [HttpGet("tenants/{tenantId:guid}/config")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantConfig(Guid tenantId, CancellationToken ct)
+    {
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+
+        static string? Mask(string? s) => string.IsNullOrEmpty(s) ? null : "***" + s[Math.Max(0, s.Length - 4)..];
+
+        return Ok(new
+        {
+            t.Id, t.Name, t.Slug, t.Country, t.IsActive, t.MonthlyBillingAmount,
+            WhatsAppProvider = t.WhatsAppProvider.ToString(),
+            t.WhatsAppPhoneNumber,
+            BusinessHoursStart = t.BusinessHoursStart.ToString(@"hh\:mm"),
+            BusinessHoursEnd = t.BusinessHoursEnd.ToString(@"hh\:mm"),
+            t.TimeZone,
+            LlmProvider = t.LlmProvider.ToString(),
+            LlmApiKey = Mask(t.LlmApiKey),
+            t.LlmModel,
+            SendGridApiKey = Mask(t.SendGridApiKey),
+            t.SenderEmail,
+            t.CampaignMessageDelaySeconds,
+            t.BrainEnabled,
+            t.WebhookContractEnabled,
+            t.ReferenceDocumentsEnabled,
+            t.MessageBufferSeconds,
+            // Rate limit de envíos masivos (campañas + sweepers de follow-up)
+            t.CampaignMessagesPerMinute,
+            t.CampaignMaxPerHour,
+            t.CampaignMaxPerDay,
+            t.CampaignDispatchEnabled,
+        });
+    }
+
+    public record UpdateCampaignRateLimitsRequest(
+        int MessagesPerMinute,
+        int MaxPerHour,
+        int MaxPerDay,
+        bool DispatchEnabled);
+
+    /// <summary>
+    /// Configura los topes de envío masivo del tenant. Aplica a campañas iniciales
+    /// y al sweeper de follow-ups por igual — todo envío masivo respeta estos
+    /// límites para evitar bans de UltraMsg.
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/campaign-rate-limits")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantCampaignRateLimits(
+        Guid tenantId, [FromBody] UpdateCampaignRateLimitsRequest req, CancellationToken ct)
+    {
+        if (req.MessagesPerMinute < 1 || req.MessagesPerMinute > 60)
+            return BadRequest(new { error = "Mensajes por minuto debe estar entre 1 y 60." });
+        if (req.MaxPerHour < 1 || req.MaxPerHour > 5000)
+            return BadRequest(new { error = "Tope por hora debe estar entre 1 y 5000." });
+        if (req.MaxPerDay < req.MaxPerHour || req.MaxPerDay > 100000)
+            return BadRequest(new { error = "Tope diario debe ser >= tope por hora y <= 100000." });
+
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+
+        t.CampaignMessagesPerMinute = req.MessagesPerMinute;
+        t.CampaignMaxPerHour        = req.MaxPerHour;
+        t.CampaignMaxPerDay         = req.MaxPerDay;
+        t.CampaignDispatchEnabled   = req.DispatchEnabled;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new {
+            t.CampaignMessagesPerMinute, t.CampaignMaxPerHour,
+            t.CampaignMaxPerDay, t.CampaignDispatchEnabled
+        });
+    }
+
+    public record UpdateMessageBufferRequest(int Seconds);
+
+    /// <summary>
+    /// Configura el debounce de mensajes entrantes. 0 = deshabilitado (procesa cada mensaje al instante).
+    /// Rango recomendado: 3–10.
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/message-buffer")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantMessageBuffer(Guid tenantId, [FromBody] UpdateMessageBufferRequest req, CancellationToken ct)
+    {
+        if (req.Seconds < 0 || req.Seconds > 15)
+            return BadRequest(new { error = "Debe estar entre 0 y 15 segundos." });
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+        t.MessageBufferSeconds = req.Seconds;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { t.MessageBufferSeconds });
+    }
+
+    [HttpPut("tenants/{tenantId:guid}/timezone")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantTimezone(Guid tenantId, [FromBody] UpdateTimezoneRequest req, CancellationToken ct)
+    {
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(req.TimeZone))
+            return BadRequest(new { error = "TimeZone requerido." });
+        t.TimeZone = req.TimeZone;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { t.TimeZone });
+    }
+
+    [HttpPut("tenants/{tenantId:guid}/llm")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantLlmConfig(Guid tenantId, [FromBody] UpdateLlmConfigRequest req, CancellationToken ct)
+    {
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+        if (!Enum.TryParse<AgentFlow.Domain.Enums.LlmProviderType>(req.LlmProvider, true, out var provider))
+            return BadRequest(new { error = "Proveedor LLM inválido. Opciones: Anthropic, OpenAI, Gemini." });
+
+        t.LlmProvider = provider;
+        t.LlmModel = req.LlmModel;
+        // Sólo actualizar API key si viene una real (no la máscara "***xxxx").
+        if (!string.IsNullOrEmpty(req.LlmApiKey) && !req.LlmApiKey.StartsWith("***"))
+            t.LlmApiKey = req.LlmApiKey;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Configuración de LLM actualizada." });
+    }
+
+    [HttpPut("tenants/{tenantId:guid}/sendgrid")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantSendGridConfig(Guid tenantId, [FromBody] UpdateSendGridRequest req, CancellationToken ct)
+    {
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+
+        if (!string.IsNullOrEmpty(req.SendGridApiKey) && !req.SendGridApiKey.StartsWith("***"))
+            t.SendGridApiKey = req.SendGridApiKey;
+        if (req.SenderEmail is not null) t.SenderEmail = req.SenderEmail;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { message = "Configuración de SendGrid actualizada." });
+    }
+
+    [HttpPut("tenants/{tenantId:guid}/campaign-delay")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantCampaignDelay(Guid tenantId, [FromBody] UpdateCampaignDelayRequest req, CancellationToken ct)
+    {
+        if (req.DelaySeconds < 3 || req.DelaySeconds > 120)
+            return BadRequest(new { error = "El delay debe estar entre 3 y 120 segundos." });
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+        t.CampaignMessageDelaySeconds = req.DelaySeconds;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { t.CampaignMessageDelaySeconds });
+    }
+
+    public record UpdateTenantFlagRequest(bool Enabled);
+
+    [HttpPut("tenants/{tenantId:guid}/brain")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantBrainEnabled(Guid tenantId, [FromBody] UpdateTenantFlagRequest req, CancellationToken ct)
+    {
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+
+        if (req.Enabled)
+        {
+            var hasWelcome = await db.AgentRegistryEntries
+                .AnyAsync(r => r.TenantId == tenantId && r.IsWelcome && r.IsActive, ct);
+            if (!hasWelcome)
+                return BadRequest(new { error = "Debes registrar un Agente Welcome antes de activar el Cerebro." });
+        }
+
+        t.BrainEnabled = req.Enabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { t.BrainEnabled });
+    }
+
+    [HttpPut("tenants/{tenantId:guid}/webhook-contract")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantWebhookContract(Guid tenantId, [FromBody] UpdateTenantFlagRequest req, CancellationToken ct)
+    {
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+        t.WebhookContractEnabled = req.Enabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { t.WebhookContractEnabled });
+    }
+
+    [HttpPut("tenants/{tenantId:guid}/reference-documents")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantReferenceDocuments(Guid tenantId, [FromBody] UpdateTenantFlagRequest req, CancellationToken ct)
+    {
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+        t.ReferenceDocumentsEnabled = req.Enabled;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { t.ReferenceDocumentsEnabled });
+    }
+
+    [HttpGet("tenants/{tenantId:guid}/agents")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantAgents(Guid tenantId, CancellationToken ct)
+    {
+        var agents = await db.AgentDefinitions
+            .Where(a => a.TenantId == tenantId && a.IsActive)
+            .OrderBy(a => a.Name)
+            .Select(a => new { a.Id, a.Name })
+            .ToListAsync(ct);
+        return Ok(agents);
+    }
+
+    /// <summary>
+    /// Devuelve las asignaciones del tenant (prompts globales asignados + acciones
+    /// per-tenant con su flag de asignación). Usado por el modal "Asignaciones" del admin panel.
+    /// </summary>
+    [HttpGet("tenants/{tenantId:guid}/assignments")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantAssignments(Guid tenantId, CancellationToken ct)
+    {
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        // Catálogo completo visible en el tab: globales + todas las acciones legacy
+        // (de cualquier tenant). El admin puede asignar cualquiera a este tenant.
+        // Se incluye OriginTenantName para que el admin vea de dónde viene cada una.
+        var actions = await (
+            from a in db.ActionDefinitions
+            join t in db.Tenants on a.TenantId equals t.Id into gt
+            from t in gt.DefaultIfEmpty()
+            orderby a.TenantId == null ? 0 : 1, a.Name
+            select new
+            {
+                a.Id, a.Name, a.Description, a.IsActive, a.RequiresWebhook, a.SendsEmail, a.SendsSms,
+                IsGlobal = a.TenantId == null,
+                OriginTenantId = a.TenantId,
+                OriginTenantName = t != null ? t.Name : null
+            }).ToListAsync(ct);
+
+        // Filtrar assignedActionIds a solo los IDs que aún existen en el catálogo.
+        // Evita que el frontend inicialice checkboxes con GUIDs de acciones eliminadas
+        // y luego falle al guardar con 400.
+        var storedActionIds = tenant.AssignedActionIds ?? [];
+        var validActionIds = storedActionIds.Count > 0
+            ? await db.ActionDefinitions
+                .Where(a => storedActionIds.Contains(a.Id))
+                .Select(a => a.Id)
+                .ToListAsync(ct)
+            : new List<Guid>();
+
+        return Ok(new
+        {
+            assignedPromptIds = tenant.AssignedPromptIds,
+            assignedActionIds = validActionIds,
+            actions
+        });
+    }
+
+    public record AssignPromptsRequest(List<Guid> PromptIds);
+    public record AssignActionsRequest(List<Guid> ActionIds);
+
+    /// <summary>
+    /// Reemplaza la lista de PromptTemplates asignados al tenant. Si la lista
+    /// queda vacía el tenant vuelve a ver todos los prompts activos (retrocompat).
+    /// Si al desasignar quedan prompts en uso por maestros de campaña del tenant,
+    /// devuelve 409 con la lista de maestros bloqueantes.
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/assigned-prompts")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> SetAssignedPrompts(Guid tenantId, [FromBody] AssignPromptsRequest req, CancellationToken ct)
+    {
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        var ids = req.PromptIds?.Distinct().ToList() ?? [];
+
+        // Validar que los IDs correspondan a prompts que existen
+        if (ids.Count > 0)
+        {
+            var existingCount = await db.Set<PromptTemplate>()
+                .Where(p => ids.Contains(p.Id))
+                .CountAsync(ct);
+            if (existingCount != ids.Count)
+                return BadRequest(new { error = "Uno o más PromptTemplates no existen." });
+        }
+
+        // Detectar prompts que se están desasignando y que actualmente están
+        // en uso por algún maestro de campaña del tenant. Se valida en todos los casos
+        // (incluido "limpiar todo") porque el filtro del cliente es estricto.
+        var currentSet = tenant.AssignedPromptIds.ToHashSet();
+        var newSet = ids.ToHashSet();
+        var removedIds = currentSet.Where(id => !newSet.Contains(id)).ToList();
+        if (removedIds.Count > 0)
+        {
+            var conflicts = await FindPromptConflictsAsync(tenantId, removedIds, ct);
+            if (conflicts.Count > 0)
+            {
+                return Conflict(new
+                {
+                    error = "No es posible desasignar prompts en uso. El cliente debe removerlos primero en su maestro de campaña.",
+                    conflicts
+                });
+            }
+        }
+
+        tenant.AssignedPromptIds = ids;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { assignedPromptIds = tenant.AssignedPromptIds });
+    }
+
+    /// <summary>
+    /// Reemplaza la lista de ActionDefinitions asignadas al tenant. Si la lista
+    /// queda vacía el tenant vuelve a ver todas sus acciones activas (retrocompat).
+    /// Si al desasignar quedan acciones en uso por maestros de campaña del tenant,
+    /// devuelve 409 con la lista de maestros bloqueantes.
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/assigned-actions")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> SetAssignedActions(Guid tenantId, [FromBody] AssignActionsRequest req, CancellationToken ct)
+    {
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+
+        var rawIds = req.ActionIds?.Distinct().ToList() ?? [];
+
+        // Filtrar a solo IDs que realmente existen en el catálogo.
+        // Usar ids válidos en lugar de retornar 400 — evita bloqueos por acciones
+        // eliminadas que quedaron en AssignedActionIds del tenant.
+        var ids = rawIds.Count > 0
+            ? await db.ActionDefinitions
+                .Where(a => rawIds.Contains(a.Id))
+                .Select(a => a.Id)
+                .ToListAsync(ct)
+            : new List<Guid>();
+
+        var currentSet = tenant.AssignedActionIds.ToHashSet();
+        var newSet = ids.ToHashSet();
+        var removedIds = currentSet.Where(id => !newSet.Contains(id)).ToList();
+        if (removedIds.Count > 0)
+        {
+            // Solo verificar conflictos para acciones que aún existen en el catálogo.
+            // Los IDs que ya no existen en ActionDefinitions son referencias obsoletas
+            // (basura de acciones eliminadas) — se limpian silenciosamente sin 409.
+            var existingRemovedIds = await db.ActionDefinitions
+                .Where(a => removedIds.Contains(a.Id))
+                .Select(a => a.Id)
+                .ToListAsync(ct);
+
+            if (existingRemovedIds.Count > 0)
+            {
+                var conflicts = await FindActionConflictsAsync(tenantId, existingRemovedIds, ct);
+                if (conflicts.Count > 0)
+                {
+                    return Conflict(new
+                    {
+                        error = "No es posible desasignar acciones en uso. El cliente debe removerlas primero en su maestro de campaña.",
+                        conflicts
+                    });
+                }
+            }
+        }
+
+        tenant.AssignedActionIds = ids;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { assignedActionIds = tenant.AssignedActionIds });
+    }
+
+    /// <summary>
+    /// Busca maestros de campaña del tenant que referencien cualquiera de los promptIds dados.
+    /// EF no puede traducir Contains sobre List&lt;Guid&gt; en JSON; traemos los maestros (pocos
+    /// por tenant) y filtramos en memoria.
+    /// </summary>
+    private async Task<List<object>> FindPromptConflictsAsync(Guid tenantId, List<Guid> promptIds, CancellationToken ct)
+    {
+        var removed = promptIds.ToHashSet();
+        var templates = await db.CampaignTemplates
+            .Where(t => t.TenantId == tenantId)
+            .Select(t => new { t.Id, t.Name, t.PromptTemplateIds, t.IsActive })
+            .ToListAsync(ct);
+
+        var conflicts = new List<object>();
+        foreach (var t in templates)
+        {
+            var used = t.PromptTemplateIds.Where(id => removed.Contains(id)).ToList();
+            if (used.Count > 0)
+                conflicts.Add(new { templateId = t.Id, templateName = t.Name, usedIds = used, isActive = t.IsActive });
+        }
+        return conflicts;
+    }
+
+    private async Task<List<object>> FindActionConflictsAsync(Guid tenantId, List<Guid> actionIds, CancellationToken ct)
+    {
+        var removed = actionIds.ToHashSet();
+        var templates = await db.CampaignTemplates
+            .Where(t => t.TenantId == tenantId)
+            .Select(t => new { t.Id, t.Name, t.ActionIds, t.IsActive })
+            .ToListAsync(ct);
+
+        var conflicts = new List<object>();
+        foreach (var t in templates)
+        {
+            var used = t.ActionIds.Where(id => removed.Contains(id)).ToList();
+            if (used.Count > 0)
+                conflicts.Add(new { templateId = t.Id, templateName = t.Name, usedIds = used, isActive = t.IsActive });
+        }
+        return conflicts;
+    }
+
     [HttpGet("tenants/{tenantId:guid}/users")]
     [Authorize(Roles = "super_admin")]
     public async Task<IActionResult> GetTenantUsers(Guid tenantId, CancellationToken ct)
@@ -273,7 +686,11 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         await db.SaveChangesAsync(ct);
 
         var tenantName = await db.Tenants.Where(t => t.Id == tenantId).Select(t => t.Name).FirstOrDefaultAsync(ct) ?? "";
-        _ = emailService.SendWelcomeTenantEmailAsync(req.Email, req.FullName, req.Password, tenantName, ct);
+        var bccSuperAdmins = await db.SuperAdmins
+            .Where(a => a.IsActive)
+            .Select(a => a.Email)
+            .ToListAsync(ct);
+        _ = emailService.SendWelcomeTenantEmailAsync(req.Email, req.FullName, req.Password, tenantName, bccSuperAdmins, ct);
 
         return Ok(new { user.Id, user.FullName, user.Email, Role = user.Role.ToString(), user.IsActive });
     }
@@ -325,7 +742,12 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         db.SuperAdmins.Add(admin);
         await db.SaveChangesAsync(ct);
 
-        _ = emailService.SendWelcomeAdminEmailAsync(req.Email, req.FullName, req.Password, ct);
+        // BCC a otros super admins activos (excluye al recién creado).
+        var bccOthers = await db.SuperAdmins
+            .Where(a => a.IsActive && a.Id != admin.Id)
+            .Select(a => a.Email)
+            .ToListAsync(ct);
+        _ = emailService.SendWelcomeAdminEmailAsync(req.Email, req.FullName, req.Password, bccOthers, ct);
 
         return Ok(new { admin.Id, admin.FullName, admin.Email, admin.IsActive, admin.CreatedAt });
     }
@@ -717,15 +1139,30 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
     public record ActionDefinitionRequest(
         string Name, string? Description,
         bool RequiresWebhook, bool SendsEmail, bool SendsSms,
-        string? WebhookUrl = null, string? WebhookMethod = null);
+        string? WebhookUrl = null, string? WebhookMethod = null,
+        string? DefaultTriggerConfig = null,
+        string? DefaultWebhookContract = null,
+        Guid? TenantId = null,
+        bool IsProcess = false,
+        bool IsDelinquencyDownload = false);
 
+    /// <summary>
+    /// Lista acciones. Sin parámetros devuelve todo el catálogo (globales + legacy per-tenant).
+    /// scope=global filtra sólo globales; tenantId filtra una única acción legacy.
+    /// </summary>
     [HttpGet("actions")]
     [Authorize(Roles = "super_admin")]
-    public async Task<IActionResult> GetActions(CancellationToken ct)
+    public async Task<IActionResult> GetActions([FromQuery] Guid? tenantId, [FromQuery] string? scope, CancellationToken ct)
     {
-        var actions = await db.ActionDefinitions
+        var query = db.ActionDefinitions.AsQueryable();
+        if (scope == "global")
+            query = query.Where(a => a.TenantId == null);
+        else if (tenantId.HasValue)
+            query = query.Where(a => a.TenantId == tenantId.Value);
+
+        var actions = await query
             .OrderBy(a => a.Name)
-            .Select(a => new { a.Id, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.WebhookUrl, a.WebhookMethod, a.IsActive, a.CreatedAt })
+            .Select(a => new { a.Id, a.TenantId, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess, a.IsDelinquencyDownload, a.WebhookUrl, a.WebhookMethod, a.IsActive, a.CreatedAt, a.DefaultTriggerConfig, a.DefaultWebhookContract })
             .ToListAsync(ct);
         return Ok(actions);
     }
@@ -734,19 +1171,32 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
     [Authorize(Roles = "super_admin")]
     public async Task<IActionResult> CreateAction([FromBody] ActionDefinitionRequest req, CancellationToken ct)
     {
-        if (await db.ActionDefinitions.AnyAsync(a => a.Name == req.Name, ct))
-            return BadRequest(new { error = "Ya existe una accion con ese nombre." });
+        if (req.TenantId.HasValue && !await db.Tenants.AnyAsync(t => t.Id == req.TenantId.Value, ct))
+            return BadRequest(new { error = "Tenant no encontrado." });
+
+        // Unicidad de nombre: entre globales, o dentro del mismo tenant (si es legacy).
+        var duplicate = req.TenantId.HasValue
+            ? await db.ActionDefinitions.AnyAsync(a => a.TenantId == req.TenantId.Value && a.Name == req.Name, ct)
+            : await db.ActionDefinitions.AnyAsync(a => a.TenantId == null && a.Name == req.Name, ct);
+
+        if (duplicate)
+            return BadRequest(new { error = "Ya existe una accion con ese nombre en el catalogo." });
 
         var action = new ActionDefinition
         {
             Id = Guid.NewGuid(),
+            TenantId = req.TenantId,
             Name = req.Name,
             Description = req.Description,
             RequiresWebhook = req.RequiresWebhook,
             SendsEmail = req.SendsEmail,
             SendsSms = req.SendsSms,
+            IsProcess = req.IsProcess,
+            IsDelinquencyDownload = req.IsDelinquencyDownload,
             WebhookUrl = req.WebhookUrl,
             WebhookMethod = req.WebhookMethod,
+            DefaultTriggerConfig = req.DefaultTriggerConfig,
+            DefaultWebhookContract = req.DefaultWebhookContract,
         };
         db.ActionDefinitions.Add(action);
         await db.SaveChangesAsync(ct);
@@ -760,17 +1210,25 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         var action = await db.ActionDefinitions.FindAsync([id], ct);
         if (action is null) return NotFound();
 
-        // Check unique name
-        if (await db.ActionDefinitions.AnyAsync(a => a.Name == req.Name && a.Id != id, ct))
-            return BadRequest(new { error = "Ya existe una accion con ese nombre." });
+        // Unicidad: el scope se preserva (TenantId no se cambia al editar).
+        var duplicate = action.TenantId.HasValue
+            ? await db.ActionDefinitions.AnyAsync(a => a.TenantId == action.TenantId && a.Name == req.Name && a.Id != id, ct)
+            : await db.ActionDefinitions.AnyAsync(a => a.TenantId == null && a.Name == req.Name && a.Id != id, ct);
+
+        if (duplicate)
+            return BadRequest(new { error = "Ya existe una accion con ese nombre en el catalogo." });
 
         action.Name = req.Name;
         action.Description = req.Description;
         action.RequiresWebhook = req.RequiresWebhook;
         action.SendsEmail = req.SendsEmail;
         action.SendsSms = req.SendsSms;
+        action.IsProcess = req.IsProcess;
+        action.IsDelinquencyDownload = req.IsDelinquencyDownload;
         action.WebhookUrl = req.WebhookUrl;
         action.WebhookMethod = req.WebhookMethod;
+        action.DefaultTriggerConfig = req.DefaultTriggerConfig;
+        action.DefaultWebhookContract = req.DefaultWebhookContract;
         action.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
         return Ok(new { action.Id, action.Name });
@@ -797,6 +1255,148 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         db.ActionDefinitions.Remove(action);
         await db.SaveChangesAsync(ct);
         return NoContent();
+    }
+
+    /// <summary>
+    /// Lista las acciones asignadas a un tenant con su estado de configuración webhook.
+    /// Equivalente al endpoint /api/tenant-actions pero accesible por super-admin
+    /// para administrar el contract desde el modal de edición de tenant.
+    /// </summary>
+    [HttpGet("tenants/{tenantId:guid}/actions-config")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantActionsConfig(Guid tenantId, CancellationToken ct)
+    {
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedActionIds })
+            .FirstOrDefaultAsync(ct);
+        if (tenant is null) return NotFound();
+
+        var assignedIds = tenant.AssignedActionIds ?? [];
+        if (assignedIds.Count == 0) return Ok(Array.Empty<object>());
+
+        var actions = await db.ActionDefinitions
+            .Where(a => a.IsActive && a.RequiresWebhook && assignedIds.Contains(a.Id))
+            .OrderBy(a => a.Name)
+            .Select(a => new
+            {
+                a.Id, a.Name, a.Description,
+                a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess, a.IsDelinquencyDownload,
+                a.DefaultWebhookContract, a.DefaultTriggerConfig,
+                HasWebhookContract = a.DefaultWebhookContract != null
+            })
+            .ToListAsync(ct);
+
+        // Para acciones marcadas como descarga de morosidad, verificar si el tenant tiene
+        // un ActionDelinquencyConfig con DownloadWebhookUrl configurado.
+        // Esas acciones no usan el WebhookBuilder — su endpoint vive en Admin → Morosidad.
+        var actionIds = actions.Select(a => a.Id).ToList();
+        var delinquencyLookup = await db.ActionDelinquencyConfigs
+            .Where(c => c.TenantId == tenantId && actionIds.Contains(c.ActionDefinitionId))
+            .Select(c => new { c.ActionDefinitionId, HasUrl = c.DownloadWebhookUrl != null && c.DownloadWebhookUrl != "" })
+            .ToListAsync(ct);
+        var dlLookup = delinquencyLookup.ToDictionary(c => c.ActionDefinitionId, c => c.HasUrl);
+
+        var result = actions.Select(a => new
+        {
+            a.Id, a.Name, a.Description,
+            a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess,
+            a.DefaultWebhookContract, a.DefaultTriggerConfig,
+            HasWebhookContract    = a.DefaultWebhookContract != null,
+            IsDelinquencyAction   = a.IsDelinquencyDownload,
+            HasDelinquencyConfig  = dlLookup.TryGetValue(a.Id, out var has) && has
+        }).ToList();
+
+        return Ok(result);
+    }
+
+    public record AdminUpdateActionContractRequest(string? Contract);
+
+    /// <summary>
+    /// Prompts del proceso de etiquetado del tenant.
+    /// </summary>
+    [HttpGet("tenants/{tenantId:guid}/labeling-prompts")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetTenantLabelingPrompts(Guid tenantId, CancellationToken ct)
+    {
+        var t = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.LabelingAnalysisPrompt, t.LabelingResultSchemaPrompt })
+            .FirstOrDefaultAsync(ct);
+        if (t is null) return NotFound();
+        return Ok(new
+        {
+            analysisPrompt = t.LabelingAnalysisPrompt,
+            resultSchemaPrompt = t.LabelingResultSchemaPrompt
+        });
+    }
+
+    public record UpdateLabelingPromptsRequest(string? AnalysisPrompt, string? ResultSchemaPrompt);
+
+    [HttpPut("tenants/{tenantId:guid}/labeling-prompts")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantLabelingPrompts(
+        Guid tenantId, [FromBody] UpdateLabelingPromptsRequest req, CancellationToken ct)
+    {
+        var tenant = await db.Tenants.FindAsync([tenantId], ct);
+        if (tenant is null) return NotFound();
+        tenant.LabelingAnalysisPrompt = string.IsNullOrWhiteSpace(req.AnalysisPrompt) ? null : req.AnalysisPrompt;
+        tenant.LabelingResultSchemaPrompt = string.IsNullOrWhiteSpace(req.ResultSchemaPrompt) ? null : req.ResultSchemaPrompt;
+        await db.SaveChangesAsync(ct);
+        return Ok(new
+        {
+            analysisPrompt = tenant.LabelingAnalysisPrompt,
+            resultSchemaPrompt = tenant.LabelingResultSchemaPrompt
+        });
+    }
+
+    /// <summary>
+    /// Actualiza el DefaultWebhookContract de una acción asignada a un tenant.
+    /// Mismo comportamiento que /api/tenant-actions/{id}/webhook-contract pero
+    /// invocable desde el panel admin (modal de edición de tenant).
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/actions/{actionId:guid}/webhook-contract")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantActionContract(
+        Guid tenantId, Guid actionId,
+        [FromBody] AdminUpdateActionContractRequest req,
+        CancellationToken ct)
+    {
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.AssignedActionIds })
+            .FirstOrDefaultAsync(ct);
+        if (tenant is null) return NotFound();
+
+        var assignedIds = tenant.AssignedActionIds ?? [];
+        if (!assignedIds.Contains(actionId))
+            return NotFound(new { error = "Acción no asignada a este tenant." });
+
+        var action = await db.ActionDefinitions.FirstOrDefaultAsync(a => a.Id == actionId, ct);
+        if (action is null)
+            return NotFound(new { error = "Acción no encontrada." });
+
+        action.DefaultWebhookContract = string.IsNullOrWhiteSpace(req.Contract) ? null : req.Contract;
+
+        // Sincronizar DefaultTriggerConfig si el contract trae triggerConfig.
+        if (!string.IsNullOrWhiteSpace(req.Contract))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(req.Contract);
+                if (doc.RootElement.TryGetProperty("triggerConfig", out var tc)
+                    && tc.ValueKind == System.Text.Json.JsonValueKind.Object)
+                {
+                    action.DefaultTriggerConfig = tc.GetRawText();
+                }
+            }
+            catch { /* contract inválido — no sincronizar */ }
+        }
+
+        action.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { action.Id, action.DefaultWebhookContract, action.DefaultTriggerConfig });
     }
 
     // ───── Prompt Templates ─────
@@ -937,5 +1537,110 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
         );
 
         return new JwtSecurityTokenHandler().WriteToken(token);
+    }
+
+    // ───── Agent Registry (Cerebro) ─────
+
+    public record AgentRegistryRequest(
+        Guid TenantId, string Slug, string Name, string Capabilities,
+        Guid CampaignTemplateId, bool IsWelcome = false);
+
+    [HttpGet("agent-registry")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetAgentRegistry([FromQuery] Guid? tenantId, CancellationToken ct)
+    {
+        var query = db.AgentRegistryEntries.AsQueryable();
+        if (tenantId.HasValue)
+            query = query.Where(r => r.TenantId == tenantId.Value);
+
+        var entries = await query
+            .OrderBy(r => r.Name)
+            .Select(r => new
+            {
+                r.Id, r.TenantId, r.Slug, r.Name, r.Capabilities,
+                r.CampaignTemplateId,
+                CampaignTemplateName = db.CampaignTemplates.Where(ct2 => ct2.Id == r.CampaignTemplateId).Select(ct2 => ct2.Name).FirstOrDefault(),
+                r.IsWelcome, r.IsActive, r.CreatedAt
+            })
+            .ToListAsync(ct);
+        return Ok(entries);
+    }
+
+    [HttpPost("agent-registry")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> CreateAgentRegistryEntry([FromBody] AgentRegistryRequest req, CancellationToken ct)
+    {
+        if (!await db.Tenants.AnyAsync(t => t.Id == req.TenantId, ct))
+            return BadRequest(new { error = "Tenant no encontrado." });
+
+        if (await db.AgentRegistryEntries.AnyAsync(r => r.TenantId == req.TenantId && r.Slug == req.Slug, ct))
+            return BadRequest(new { error = "Ya existe un agente con ese slug para este tenant." });
+
+        if (!await db.CampaignTemplates.AnyAsync(t => t.Id == req.CampaignTemplateId, ct))
+            return BadRequest(new { error = "Maestro de campaña no encontrado." });
+
+        if (req.IsWelcome && await db.AgentRegistryEntries.AnyAsync(r => r.TenantId == req.TenantId && r.IsWelcome, ct))
+            return BadRequest(new { error = "Ya existe un agente welcome para este tenant. Desactive el actual primero." });
+
+        var entry = new AgentRegistryEntry
+        {
+            Id = Guid.NewGuid(),
+            TenantId = req.TenantId,
+            Slug = req.Slug,
+            Name = req.Name,
+            Capabilities = req.Capabilities,
+            CampaignTemplateId = req.CampaignTemplateId,
+            IsWelcome = req.IsWelcome,
+        };
+        db.AgentRegistryEntries.Add(entry);
+        await db.SaveChangesAsync(ct);
+        return Ok(new { entry.Id, entry.Slug, entry.Name });
+    }
+
+    [HttpPut("agent-registry/{id:guid}")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateAgentRegistryEntry(Guid id, [FromBody] AgentRegistryRequest req, CancellationToken ct)
+    {
+        var entry = await db.AgentRegistryEntries.FindAsync([id], ct);
+        if (entry is null) return NotFound();
+
+        if (await db.AgentRegistryEntries.AnyAsync(r => r.TenantId == entry.TenantId && r.Slug == req.Slug && r.Id != id, ct))
+            return BadRequest(new { error = "Ya existe un agente con ese slug para este tenant." });
+
+        if (req.IsWelcome && !entry.IsWelcome
+            && await db.AgentRegistryEntries.AnyAsync(r => r.TenantId == entry.TenantId && r.IsWelcome && r.Id != id, ct))
+            return BadRequest(new { error = "Ya existe un agente welcome para este tenant." });
+
+        entry.Slug = req.Slug;
+        entry.Name = req.Name;
+        entry.Capabilities = req.Capabilities;
+        entry.CampaignTemplateId = req.CampaignTemplateId;
+        entry.IsWelcome = req.IsWelcome;
+        entry.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { entry.Id, entry.Slug, entry.Name });
+    }
+
+    [HttpPut("agent-registry/{id:guid}/toggle")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> ToggleAgentRegistryEntry(Guid id, CancellationToken ct)
+    {
+        var entry = await db.AgentRegistryEntries.FindAsync([id], ct);
+        if (entry is null) return NotFound();
+        entry.IsActive = !entry.IsActive;
+        entry.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { entry.Id, entry.IsActive });
+    }
+
+    [HttpDelete("agent-registry/{id:guid}")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> DeleteAgentRegistryEntry(Guid id, CancellationToken ct)
+    {
+        var entry = await db.AgentRegistryEntries.FindAsync([id], ct);
+        if (entry is null) return NotFound();
+        db.AgentRegistryEntries.Remove(entry);
+        await db.SaveChangesAsync(ct);
+        return NoContent();
     }
 }
