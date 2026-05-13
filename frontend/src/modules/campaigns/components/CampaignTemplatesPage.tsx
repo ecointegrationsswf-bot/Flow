@@ -1,10 +1,12 @@
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ClipboardList, Plus, Pencil, Trash2, Clock, Tag, Copy, Search, X } from 'lucide-react'
+import { ClipboardList, Plus, Pencil, Trash2, Clock, Tag, Copy, Search, X, AlertTriangle } from 'lucide-react'
 import {
   useCampaignTemplates,
   useDeleteCampaignTemplate,
+  useDeactivateCampaignTemplate,
   useDuplicateCampaignTemplate,
+  type DeleteTemplateBlockedConflict,
 } from '@/shared/hooks/useCampaignTemplates'
 import { usePermissions } from '@/shared/hooks/usePermissions'
 import { confirmDialog } from '@/shared/components/dialog'
@@ -15,6 +17,7 @@ export function CampaignTemplatesPage() {
   const navigate = useNavigate()
   const { data: templates, isLoading, isError, refetch } = useCampaignTemplates()
   const deleteMut = useDeleteCampaignTemplate()
+  const deactivateMut = useDeactivateCampaignTemplate()
   const duplicateMut = useDuplicateCampaignTemplate()
 
   // Filtros
@@ -25,10 +28,37 @@ export function CampaignTemplatesPage() {
   const [duplicateModal, setDuplicateModal] = useState<{ id: string; name: string } | null>(null)
   const [newName, setNewName] = useState('')
 
+  // Modal mostrada cuando el backend bloquea el delete con 409 porque hay
+  // campañas vinculadas. Ofrece al usuario inactivar el maestro como alternativa.
+  const [blockedDelete, setBlockedDelete] = useState<{
+    id: string
+    info: DeleteTemplateBlockedConflict
+  } | null>(null)
+
   const handleDelete = async (id: string) => {
     const ok = await confirmDialog({ title: 'Eliminar maestro', description: '¿Seguro que quieres eliminar este maestro de campaña?', confirmLabel: 'Eliminar', variant: 'danger' })
     if (!ok) return
-    await deleteMut.mutateAsync(id)
+    try {
+      await deleteMut.mutateAsync(id)
+    } catch (err: unknown) {
+      const e = err as { response?: { status?: number; data?: DeleteTemplateBlockedConflict } }
+      if (e.response?.status === 409 && e.response?.data?.suggestion === 'deactivate') {
+        setBlockedDelete({ id, info: e.response.data })
+      } else {
+        // Otros errores: dejamos que el flujo de React Query / interceptors los muestre.
+        throw err
+      }
+    }
+  }
+
+  const handleDeactivateFromBlocked = async () => {
+    if (!blockedDelete) return
+    try {
+      await deactivateMut.mutateAsync(blockedDelete.id)
+      setBlockedDelete(null)
+    } catch {
+      // mantener la modal abierta; el error global lo maneja React Query
+    }
   }
 
   const openDuplicate = (id: string, name: string) => {
@@ -197,6 +227,73 @@ export function CampaignTemplatesPage() {
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal — bloqueo de delete por campañas vinculadas */}
+      {blockedDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-lg overflow-hidden rounded-xl bg-white shadow-xl">
+            <div className="flex items-start gap-3 border-b border-gray-100 p-5">
+              <div className="rounded-full bg-amber-100 p-2">
+                <AlertTriangle className="h-5 w-5 text-amber-700" />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-base font-semibold text-gray-900">
+                  No se puede eliminar este maestro
+                </h2>
+                <p className="mt-1 text-sm text-gray-600">
+                  El maestro <strong>{blockedDelete.info.templateName}</strong> está vinculado a{' '}
+                  <strong>{blockedDelete.info.totalCampaigns}</strong> campaña{blockedDelete.info.totalCampaigns === 1 ? '' : 's'}.
+                  Eliminarlo dejaría esas campañas sin configuración válida.
+                </p>
+              </div>
+            </div>
+
+            {blockedDelete.info.campaigns.length > 0 && (
+              <div className="border-b border-gray-100 px-5 py-3">
+                <p className="mb-2 text-xs font-medium uppercase text-gray-500">
+                  Campañas que lo usan
+                  {blockedDelete.info.totalCampaigns > blockedDelete.info.campaigns.length &&
+                    ` (mostrando ${blockedDelete.info.campaigns.length} de ${blockedDelete.info.totalCampaigns})`}
+                </p>
+                <ul className="max-h-40 space-y-1 overflow-auto text-sm text-gray-700">
+                  {blockedDelete.info.campaigns.map((c) => (
+                    <li key={c.id} className="flex items-center justify-between gap-2 truncate">
+                      <span className="truncate" title={c.name}>{c.name}</span>
+                      <span className="shrink-0 rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600">
+                        {c.status}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="bg-blue-50 px-5 py-3 text-sm text-blue-900">
+              <p>
+                <strong>Alternativa:</strong> inactivar el maestro. Las campañas que ya lo usan
+                siguen funcionando con su configuración actual, pero ya no estará disponible
+                para nuevas campañas.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 px-5 py-4">
+              <button
+                onClick={() => setBlockedDelete(null)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={handleDeactivateFromBlocked}
+                disabled={deactivateMut.isPending}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50 transition-colors"
+              >
+                {deactivateMut.isPending ? 'Inactivando...' : 'Inactivar maestro'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

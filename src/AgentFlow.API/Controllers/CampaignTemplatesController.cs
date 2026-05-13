@@ -48,6 +48,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             {
                 t.Id, t.Name, t.AgentDefinitionId,
                 AgentName = db.AgentDefinitions.Where(a => a.Id == t.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
+                // Necesario en el frontend para evitar que el dropdown deje seleccionar
+                // maestros cuyo agente esté inactivo.
+                AgentIsActive = db.AgentDefinitions.Where(a => a.Id == t.AgentDefinitionId).Select(a => (bool?)a.IsActive).FirstOrDefault(),
                 t.FollowUpHours, t.FollowUpMessagesJson,
                 t.AutoCloseHours, t.AutoCloseMessage,
                 t.LabelIds,
@@ -349,9 +352,51 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
 
         if (template is null) return NotFound();
 
+        // Bloqueamos el delete si hay campañas vinculadas. Permitimos al cliente
+        // ver el listado de las primeras 10 y proponer la alternativa: inactivar.
+        var totalLinked = await db.Campaigns.CountAsync(c => c.CampaignTemplateId == id, ct);
+        if (totalLinked > 0)
+        {
+            var sample = await db.Campaigns
+                .Where(c => c.CampaignTemplateId == id)
+                .OrderByDescending(c => c.CreatedAt)
+                .Select(c => new { c.Id, c.Name, status = c.Status.ToString(), c.CreatedAt })
+                .Take(10)
+                .ToListAsync(ct);
+            return Conflict(new
+            {
+                error = $"No se puede eliminar el maestro: está vinculado a {totalLinked} campaña{(totalLinked == 1 ? "" : "s")}.",
+                totalCampaigns = totalLinked,
+                campaigns = sample,
+                suggestion = "deactivate",
+                templateName = template.Name,
+            });
+        }
+
         db.CampaignTemplates.Remove(template);
         await db.SaveChangesAsync(ct);
         return Ok(new { message = "Maestro eliminado." });
+    }
+
+    /// <summary>
+    /// Inactiva un maestro sin borrarlo. Lo deja IsActive=false y limpia el flag
+    /// IsPrimaryForAgent para que no se siga eligiendo como primario. Las
+    /// campañas existentes vinculadas siguen funcionando con la config actual.
+    /// </summary>
+    [HttpPost("{id:guid}/deactivate")]
+    public async Task<IActionResult> Deactivate(Guid id, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var template = await db.CampaignTemplates
+            .FirstOrDefaultAsync(t => t.Id == id && t.TenantId == tenantId, ct);
+        if (template is null) return NotFound();
+
+        template.IsActive = false;
+        template.IsPrimaryForAgent = false;
+        template.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { ok = true, message = "Maestro inactivado.", template.Id });
     }
 
     /// <summary>

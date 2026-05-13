@@ -162,9 +162,11 @@ export function MorosidadConfigTab({ actionId }: Props) {
                 className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:outline-none"
               >
                 <option value="">— Seleccionar —</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>{t.name}</option>
-                ))}
+                {templates
+                  .filter((t) => t.isActive && t.agentIsActive !== false)
+                  .map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
               </select>
               <p className="text-xs text-gray-500">El agente IA se hereda del maestro de campaña.</p>
             </div>

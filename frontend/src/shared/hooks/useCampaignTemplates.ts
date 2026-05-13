@@ -24,6 +24,8 @@ export interface CampaignTemplate {
   name: string
   agentDefinitionId: string
   agentName: string | null
+  /** true si el agente asociado está activo. null = no se pudo resolver. */
+  agentIsActive: boolean | null
   followUpHours: number[]
   /** JSON array de mensajes de seguimiento, paralelo a followUpHours (Fase 2). NULL = sin seguimientos automáticos. */
   followUpMessagesJson: string | null
@@ -175,6 +177,33 @@ export function useDeleteCampaignTemplate() {
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
   })
+}
+
+/**
+ * Alternativa al delete cuando hay campañas vinculadas: deja IsActive=false
+ * y limpia IsPrimaryForAgent sin borrar el registro.
+ */
+export function useDeactivateCampaignTemplate() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await api.post(`/campaign-templates/${id}/deactivate`)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
+  })
+}
+
+/**
+ * Detalles del 409 al borrar un maestro vinculado a campañas. La UI lo usa
+ * para mostrar la modal y ofrecer inactivar.
+ */
+export interface DeleteTemplateBlockedConflict {
+  error: string
+  totalCampaigns: number
+  campaigns: { id: string; name: string; status: string; createdAt: string }[]
+  suggestion: 'deactivate'
+  templateName: string
 }
 
 export function useDuplicateCampaignTemplate() {
