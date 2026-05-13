@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { AlertTriangle, Clock, RefreshCcw, CheckCircle2, XCircle, Users, ChevronLeft, ChevronRight } from 'lucide-react'
+import { AlertTriangle, Clock, RefreshCcw, CheckCircle2, XCircle, Users, ChevronLeft, ChevronRight, Eye } from 'lucide-react'
 import {
   useInboxSummary,
   useInboxItems,
@@ -7,6 +7,7 @@ import {
   useTenantsLite,
   type InboxItem,
 } from '../hooks/useInboxMonitor'
+import { InboxDetailModal } from './InboxDetailModal'
 
 // Etiquetas en español — el código interno sigue siendo el inglés (Pending,
 // Replied, etc.) porque está en la BD; solo cambia el texto que se muestra.
@@ -74,6 +75,7 @@ export function InboxMonitorPage() {
   const [fromLocal, setFromLocal]       = useState(() => nowPanamaForInput(-24))
   const [toLocal, setToLocal]           = useState(() => nowPanamaForInput(0))
   const [page, setPage]                 = useState(0)
+  const [detailId, setDetailId]         = useState<string | null>(null)
 
   const summary = useInboxSummary(24)
   const tenants = useTenantsLite()
@@ -229,7 +231,12 @@ export function InboxMonitorPage() {
               </thead>
               <tbody className="divide-y divide-gray-100 bg-white">
                 {items.data.items.map((it) => (
-                  <Row key={it.id} item={it} onRetry={() => retry.mutate(it.id)} />
+                  <Row
+                    key={it.id}
+                    item={it}
+                    onRetry={() => retry.mutate(it.id)}
+                    onView={() => setDetailId(it.id)}
+                  />
                 ))}
                 {items.data.items.length === 0 && (
                   <tr>
@@ -268,11 +275,13 @@ export function InboxMonitorPage() {
           </>
         )}
       </section>
+
+      <InboxDetailModal itemId={detailId} onClose={() => setDetailId(null)} />
     </div>
   )
 }
 
-function Row({ item, onRetry }: { item: InboxItem; onRetry: () => void }) {
+function Row({ item, onRetry, onView }: { item: InboxItem; onRetry: () => void; onView: () => void }) {
   const canRetry = item.status === 'Failed' || item.status === 'Escalated' || item.status === 'Claimed'
   return (
     <tr>
@@ -287,15 +296,25 @@ function Row({ item, onRetry }: { item: InboxItem; onRetry: () => void }) {
         {item.lastError ?? '—'}
       </td>
       <Td>
-        {canRetry && (
+        <div className="flex items-center gap-1.5">
           <button
-            onClick={onRetry}
-            className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+            onClick={onView}
+            title="Ver detalle y conversación"
+            className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
           >
-            <RefreshCcw className="h-3 w-3" />
-            Reintentar
+            <Eye className="h-3 w-3" />
+            Ver
           </button>
-        )}
+          {canRetry && (
+            <button
+              onClick={onRetry}
+              className="inline-flex items-center gap-1 rounded-md bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 hover:bg-blue-100"
+            >
+              <RefreshCcw className="h-3 w-3" />
+              Reintentar
+            </button>
+          )}
+        </div>
       </Td>
     </tr>
   )

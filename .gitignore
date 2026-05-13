@@ -3,6 +3,7 @@ bin/
 obj/
 dist/
 node_modules/
+publish/
 
 # IDE
 .vs/
