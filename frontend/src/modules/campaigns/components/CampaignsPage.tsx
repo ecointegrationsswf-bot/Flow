@@ -268,19 +268,21 @@ export function CampaignsPage() {
             </span>
           </div>
 
-          {/* Tabla */}
-          <div className="overflow-hidden rounded-lg bg-white shadow-sm">
-            <table className="min-w-full divide-y divide-gray-200">
+          {/* Tabla — overflow-x-auto en el wrapper para scroll horizontal en
+              pantallas pequeñas; min-w-[960px] en la tabla para que los botones
+              de Acciones nunca queden cortados. */}
+          <div className="overflow-x-auto rounded-lg bg-white shadow-sm">
+            <table className="min-w-[960px] w-full divide-y divide-gray-200">
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Nombre</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Tipo</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Canal</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Progreso</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Estado</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Fecha</th>
-                  <th className="px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Creada por</th>
-                  <th className="px-2 py-3 text-right text-xs font-medium uppercase text-gray-500">Acciones</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Tipo</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Canal</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Progreso</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Estado</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Fecha</th>
+                  <th className="whitespace-nowrap px-4 py-3 text-left text-xs font-medium uppercase text-gray-500">Creada por</th>
+                  <th className="whitespace-nowrap px-2 py-3 text-right text-xs font-medium uppercase text-gray-500">Acciones</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -305,17 +307,25 @@ export function CampaignsPage() {
 
                     return (
                       <tr key={c.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3">
-                          <p className="text-xs font-normal text-gray-900">{c.name}</p>
-                          {c.sourceFileName && <p className="text-xs text-gray-500">{c.sourceFileName}</p>}
+                        {/* Nombre: ancho máximo + truncate. El title nativo del browser
+                            muestra el tooltip con el texto completo al pasar el mouse. */}
+                        <td className="max-w-[260px] px-4 py-3">
+                          <p className="truncate text-xs font-normal text-gray-900" title={c.name}>
+                            {c.name}
+                          </p>
+                          {c.sourceFileName && (
+                            <p className="truncate text-xs text-gray-500" title={c.sourceFileName}>
+                              {c.sourceFileName}
+                            </p>
+                          )}
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="whitespace-nowrap px-4 py-3">
                           <span className="text-xs text-gray-600">{triggerLabels[c.trigger] ?? c.trigger}</span>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="whitespace-nowrap px-4 py-3">
                           <Badge variant="General">{c.channel}</Badge>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="whitespace-nowrap px-4 py-3">
                           <div className="flex items-center gap-2">
                             <div className="h-2 w-24 overflow-hidden rounded-full bg-gray-200">
                               <div
@@ -326,19 +336,19 @@ export function CampaignsPage() {
                             <span className="text-xs text-gray-500">{c.processedContacts}/{c.totalContacts}</span>
                           </div>
                         </td>
-                        <td className="px-4 py-3">
+                        <td className="whitespace-nowrap px-4 py-3">
                           <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${stCfg.className}`}>
                             {isRunning && <Loader2 className="h-3 w-3 animate-spin" />}
                             {stCfg.label}
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-500">
+                        <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-500">
                           {tt.date(c.createdAt)}
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-600">
+                        <td className="whitespace-nowrap px-4 py-3 text-xs text-gray-600">
                           {c.createdByUserId || '—'}
                         </td>
-                        <td className="px-2 py-3 text-right">
+                        <td className="whitespace-nowrap px-2 py-3 text-right">
                           <div className="inline-flex items-center gap-1">
                             {/* Ver contactos — siempre disponible */}
                             <Link
