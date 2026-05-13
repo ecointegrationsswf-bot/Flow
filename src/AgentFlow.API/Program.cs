@@ -60,6 +60,13 @@ builder.Services.AddScoped<AgentFlow.Infrastructure.Messaging.MessageBufferFlush
 // al flujo directo (mensajes procesados uno por uno sin agrupar).
 builder.Services.AddSingleton<AgentFlow.Infrastructure.Messaging.InProcessMessageDebouncer>();
 
+// Cola durable de mensajes entrantes (Día 1 — doble escritura). Sobrevive
+// reciclados de AppPool y permite que el Worker on-prem sea la fuente
+// autoritativa de procesamiento. El debouncer in-memory queda como
+// acelerador del hot-path.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInboundMessageQueue,
+    AgentFlow.Infrastructure.Messaging.SqlInboundMessageQueue>();
+
 // ── Anthropic Claude ───────────────────────────────────
 // El sistema usa la API key del tenant (tabla Tenants.LlmApiKey).
 // Si hay una key global en appsettings la usamos como fallback; si no, se usa siempre la del tenant.
@@ -204,7 +211,21 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.DelinquencyDownloadExecutor>();
 
-builder.Services.AddHostedService<AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
+// NOTA: ScheduledWebhookWorker corre en AgentFlow.Worker on-premise (Windows Service).
+// Si se registra también acá se ejecuta dos veces — los locks optimistas evitan
+// duplicar la ejecución del MISMO job, pero generan contención sobre la tabla
+// ScheduledWebhookJobs y duplican carga de CPU/BD. Para mantener una sola fuente
+// de procesamiento, solo se registra acá si se setea Worker:EnableInApi=true en
+// appsettings (escenario: deploys que NO tengan Worker on-prem corriendo).
+if (cfg.GetValue("Worker:EnableInApi", false))
+{
+    Console.WriteLine("[Startup] ScheduledWebhookWorker activo dentro del API (Worker:EnableInApi=true).");
+    builder.Services.AddHostedService<AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
+}
+else
+{
+    Console.WriteLine("[Startup] ScheduledWebhookWorker delegado al Worker on-prem (set Worker:EnableInApi=true para correrlo aquí).");
+}
 
 // ── Módulo Morosidad ─────────────────────────────────────────────────────
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDelinquencyProcessor,
@@ -807,6 +828,46 @@ try
             BEGIN ALTER TABLE CampaignContacts ADD FollowUpsSentJson nvarchar(200) NULL DEFAULT '[]'; END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Fase 2 columns: {ex.Message}"); }
+
+    // ── InboundMessageQueueItems — cola durable de mensajes entrantes (Día 1) ──
+    // Patrón self-healing igual que el resto del schema: idempotente con IF NOT EXISTS.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'InboundMessageQueueItems')
+            BEGIN
+                CREATE TABLE InboundMessageQueueItems (
+                    Id                  uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    TenantId            uniqueidentifier NOT NULL,
+                    FromPhone           varchar(30) NOT NULL,
+                    Channel             varchar(20) NOT NULL DEFAULT 'WhatsApp',
+                    WhatsAppLineId      uniqueidentifier NULL,
+                    ClientName          nvarchar(200) NULL,
+                    ExternalMessageId   varchar(100) NULL,
+                    MediaUrl            nvarchar(MAX) NULL,
+                    MediaType           varchar(30) NULL,
+                    MessagesJson        nvarchar(MAX) NOT NULL DEFAULT '[]',
+                    FirstReceivedAt     datetime2 NOT NULL,
+                    LastReceivedAt      datetime2 NOT NULL,
+                    BufferSeconds       int NOT NULL DEFAULT 12,
+                    Status              varchar(20) NOT NULL DEFAULT 'Pending',
+                    ClaimedAt           datetime2 NULL,
+                    ClaimedBy           varchar(80) NULL,
+                    StartedAt           datetime2 NULL,
+                    CompletedAt         datetime2 NULL,
+                    AttemptCount        int NOT NULL DEFAULT 0,
+                    LastError           nvarchar(MAX) NULL,
+                    LastErrorStep       varchar(50) NULL,
+                    OutboundMessageId   uniqueidentifier NULL,
+                    EscalatedToUserId   uniqueidentifier NULL,
+                    EscalatedAt         datetime2 NULL
+                );
+                CREATE INDEX IX_IMQ_Status_LastAt ON InboundMessageQueueItems (Status, LastReceivedAt);
+                CREATE INDEX IX_IMQ_Tenant_Phone_Status ON InboundMessageQueueItems (TenantId, FromPhone, Status);
+                CREATE INDEX IX_IMQ_FirstReceived ON InboundMessageQueueItems (FirstReceivedAt);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] InboundMessageQueueItems: {ex.Message}"); }
 
     // ── Fase 3: columnas de etiquetado IA (self-healing) ──
     // Solo persistimos en Conversations el resultado de la clasificación.

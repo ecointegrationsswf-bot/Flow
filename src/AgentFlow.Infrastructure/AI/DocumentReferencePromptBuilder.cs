@@ -25,6 +25,16 @@ public class DocumentReferencePromptBuilder(
     // límite — duplicado aquí para evitar costos cuando el tenant tiene muchos.
     private const int TenantDocsCap = 5;
 
+    // Timeout duro por documento individual. Si Azure Blob no responde en este
+    // tiempo, omitimos ese PDF y seguimos con los demás. Garantiza que un blob
+    // colgado nunca trabe el turno completo del agente.
+    private static readonly TimeSpan PerDocumentDownloadTimeout = TimeSpan.FromSeconds(10);
+
+    // Timeout global para descargar TODOS los PDFs del turno. Si se excede,
+    // devolvemos lo que hayamos descargado y dejamos que el agente responda
+    // con contexto parcial — mejor parcial que nada.
+    private static readonly TimeSpan GlobalDownloadTimeout = TimeSpan.FromSeconds(25);
+
     /// <summary>
     /// Carga TODOS los documentos del tenant ordenados con prioridad al maestro
     /// activo (sus PDFs primero) y luego el resto por fecha de carga descendente.
@@ -83,26 +93,66 @@ public class DocumentReferencePromptBuilder(
         var docs = await GetOrderedTenantDocsAsync(prioritizeTemplateId, tenantId, ct);
         if (docs.Count == 0) return [];
 
+        // CTS global — si la suma de descargas excede GlobalDownloadTimeout
+        // cortamos en seco y devolvemos lo que tengamos. Eso le permite al
+        // agente responder con el contexto parcial en vez de quedarse en blanco.
+        using var globalCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        globalCts.CancelAfter(GlobalDownloadTimeout);
+
         var result = new List<ReferenceDocumentPayload>(docs.Count);
+        int failed = 0;
+        var swTotal = System.Diagnostics.Stopwatch.StartNew();
+
         foreach (var d in docs)
         {
+            if (globalCts.IsCancellationRequested)
+            {
+                log.LogWarning(
+                    "Descarga de docs cortada por timeout global ({Elapsed}ms, descargados={Done}, pendientes={Pending}) tenant={TenantId}",
+                    swTotal.ElapsedMilliseconds, result.Count, docs.Count - result.Count - failed, tenantId);
+                break;
+            }
+
+            using var perDocCts = CancellationTokenSource.CreateLinkedTokenSource(globalCts.Token);
+            perDocCts.CancelAfter(PerDocumentDownloadTimeout);
+            var swDoc = System.Diagnostics.Stopwatch.StartNew();
             try
             {
                 var blobPath = ExtractBlobPath(d.BlobUrl);
-                var (stream, _) = await blobStorage.DownloadAsync(blobPath, ct);
+                var (stream, _) = await blobStorage.DownloadAsync(blobPath, perDocCts.Token);
                 using var ms = new MemoryStream();
-                await stream.CopyToAsync(ms, ct);
+                await stream.CopyToAsync(ms, perDocCts.Token);
                 var base64 = Convert.ToBase64String(ms.ToArray());
                 result.Add(new ReferenceDocumentPayload(
                     d.Id, d.FileName, d.Description, base64,
                     string.IsNullOrWhiteSpace(d.ContentType) ? "application/pdf" : d.ContentType));
             }
+            catch (OperationCanceledException) when (perDocCts.IsCancellationRequested && !ct.IsCancellationRequested)
+            {
+                failed++;
+                log.LogWarning(
+                    "Documento {DocId} ({FileName}) timeout {Timeout}ms — se omite del turno. tenant={TenantId}",
+                    d.Id, d.FileName, (int)PerDocumentDownloadTimeout.TotalMilliseconds, tenantId);
+            }
             catch (Exception ex)
             {
-                log.LogError(ex, "Falló descarga de documento de referencia {DocId} ({FileName}) del tenant {TenantId}",
-                    d.Id, d.FileName, tenantId);
+                failed++;
+                log.LogError(ex,
+                    "Falló descarga de documento de referencia {DocId} ({FileName}) en {Elapsed}ms tenant={TenantId}",
+                    d.Id, d.FileName, swDoc.ElapsedMilliseconds, tenantId);
             }
         }
+
+        // Si esperabamos documentos pero NINGUNO se descargó, dejamos un log
+        // explícito. El agente recibe lista vacía y verá únicamente el bloque
+        // textual con la nota "DOC_UNAVAILABLE" agregada por BuildTextBlockAsync.
+        if (result.Count == 0 && docs.Count > 0)
+        {
+            log.LogWarning(
+                "Todos los documentos de referencia fallaron ({N} fallidos) tenant={TenantId}. " +
+                "El agente responderá sin contexto documental.", failed, tenantId);
+        }
+
         return result;
     }
 

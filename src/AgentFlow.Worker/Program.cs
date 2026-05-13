@@ -141,6 +141,39 @@ builder.Services.AddScoped<IContextDispatcher,
 builder.Services.AddScoped<IDuplicateChecker,
     AgentFlow.Infrastructure.Campaigns.V2.DuplicateChecker>();
 
+// Cola durable de mensajes entrantes — el Worker es quien reclama y procesa
+// las filas Pending. El API solo upserta. Necesario para que el dispatcher
+// y el watchdog (Día 2/3) operen sobre el mismo backend.
+builder.Services.AddScoped<IInboundMessageQueue,
+    AgentFlow.Infrastructure.Messaging.SqlInboundMessageQueue>();
+
+// ── Servicios requeridos por ProcessIncomingMessageHandler ──────────────
+// El InboundMessageDispatcher invoca el handler vía MediatR, igual que el
+// debouncer del API. El handler tiene un grafo de DI grande — aquí debemos
+// registrar TODO lo que tenía API/Program.cs y no estaba ya en el Worker.
+// Detectado por test E2E: faltaba IAgentRunner y al construir el handler
+// fallaba con InvalidOperationException.
+builder.Services.AddScoped<IAgentRunner, AnthropicAgentRunner>();
+builder.Services.AddScoped<IAgentRepository,
+    AgentFlow.Infrastructure.Persistence.Repositories.AgentRepository>();
+builder.Services.AddScoped<ITranscriptionService, WhisperTranscriptionService>();
+builder.Services.AddScoped<IDocumentReferencePromptBuilder,
+    AgentFlow.Infrastructure.AI.DocumentReferencePromptBuilder>();
+
+// Cerebro — usado cuando Tenant.BrainEnabled = true.
+builder.Services.AddScoped<IAgentRegistry,
+    AgentFlow.Infrastructure.Brain.AgentRegistryService>();
+builder.Services.AddScoped<IClassifierService,
+    AgentFlow.Infrastructure.Brain.ClassifierService>();
+builder.Services.AddScoped<IValidationService,
+    AgentFlow.Infrastructure.Brain.ValidationService>();
+builder.Services.AddScoped<IBrainService,
+    AgentFlow.Infrastructure.Brain.BrainService>();
+builder.Services.AddScoped<ITransferChatService,
+    AgentFlow.Infrastructure.Campaigns.TransferChatService>();
+builder.Services.AddScoped<ISendEmailResumeService,
+    AgentFlow.Infrastructure.Campaigns.SendEmailResumeService>();
+
 // ── Scheduled Jobs (CORE del worker) ─────────────────────
 builder.Services.AddScoped<IScheduledJobRepository,
     AgentFlow.Infrastructure.Persistence.Repositories.ScheduledJobRepository>();
@@ -215,6 +248,17 @@ builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInitialMessageGenerator,
     AgentFlow.Infrastructure.AI.InitialMessageGenerator>();
 builder.Services.AddHostedService<
     AgentFlow.Worker.Campaigns.Orchestration.CampaignWorker>();
+
+// ── Inbox Dispatcher (Día 3 — procesamiento autoritativo) ───────────────
+// Reclama items Pending vencidos y los procesa vía ProcessIncomingMessageCommand.
+// Reemplaza al InProcessMessageDebouncer del API como fuente de verdad.
+// El debouncer queda como acelerador del hot-path (opcional, controlado por flag).
+builder.Services.AddHostedService<AgentFlow.Worker.Inbox.InboundMessageDispatcher>();
+
+// ── Inbox Watchdog (Día 2 — "ningún cliente sin respuesta") ──────────────
+// Detecta mensajes entrantes que llevan más de 2 min sin respuesta y envía
+// un canned + escala la conversación a humano. Es la garantía dura del SLA.
+builder.Services.AddHostedService<AgentFlow.Worker.Inbox.InboundMessageWatchdog>();
 
 // ── Run ──────────────────────────────────────────────────
 var host = builder.Build();

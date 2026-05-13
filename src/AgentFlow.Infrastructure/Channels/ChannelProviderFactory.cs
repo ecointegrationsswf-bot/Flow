@@ -56,7 +56,11 @@ public class ChannelProviderFactory(AgentFlowDbContext db) : IChannelProviderFac
         if (!normalizedId.StartsWith("instance", StringComparison.OrdinalIgnoreCase))
             normalizedId = $"instance{normalizedId}";
 
-        var httpClient = new HttpClient();
+        // Timeout duro de 15s — el default de HttpClient es 100s y eso es
+        // demasiado: si UltraMsg se cuelga, el flujo del agente espera 100s y
+        // dispara el debouncer/dispatcher como fallido. 15s es generoso para
+        // un POST de texto sin media (típicamente < 1s).
+        var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
         var options = new UltraMsgOptions(normalizedId, apiToken);
 
         return new UltraMsgProvider(httpClient, options);

@@ -301,7 +301,36 @@ public class ProcessIncomingMessageHandler(
         }
         else if (dispatch.IsExistingSession && dispatch.ExistingConversationId.HasValue)
         {
-            conversation = (await conversations.GetByIdAsync(dispatch.ExistingConversationId.Value, ct))!;
+            // Defense: la sesión Redis puede apuntar a una Conversation que ya
+            // no existe en BD (mantenimiento, restore parcial, DELETE manual).
+            // Sin esta validación, GetByIdAsync retorna null y el ! del operador
+            // null-forgiveness deja pasar el null, reventando con NRE en la
+            // siguiente línea. Si está null, caemos al else (crear nueva Conv).
+            var loaded = await conversations.GetByIdAsync(dispatch.ExistingConversationId.Value, ct);
+            if (loaded is null)
+            {
+                logger.LogWarning(
+                    "Sesión Redis apunta a Conversation {ConvId} que no existe en BD — creo una nueva. tenant={Tenant} phone={Phone}",
+                    dispatch.ExistingConversationId.Value, cmd.TenantId, cmd.FromPhone);
+                conversation = new Conversation
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = cmd.TenantId,
+                    ClientPhone = cmd.FromPhone,
+                    ClientName = cmd.ClientName,
+                    Channel = cmd.Channel,
+                    ActiveAgentId = dispatch.SelectedAgentId,
+                    CampaignId = dispatch.CampaignId,
+                    Status = ConversationStatus.Active,
+                    StartedAt = DateTime.UtcNow,
+                    LastActivityAt = DateTime.UtcNow,
+                };
+                await conversations.CreateAsync(conversation, ct);
+            }
+            else
+            {
+                conversation = loaded;
+            }
             if (conversation.Status == ConversationStatus.Closed ||
                 conversation.Status == ConversationStatus.Unresponsive ||
                 conversation.Status == ConversationStatus.WaitingClient)

@@ -29,6 +29,7 @@ public class AgentFlowDbContext(DbContextOptions<AgentFlowDbContext> options) : 
     public DbSet<ScheduledWebhookJobExecution> ScheduledWebhookJobExecutions => Set<ScheduledWebhookJobExecution>();
     public DbSet<ScheduledWebhookJobExecutionItem> ScheduledWebhookJobExecutionItems => Set<ScheduledWebhookJobExecutionItem>();
     public DbSet<WebhookDispatchLog> WebhookDispatchLogs => Set<WebhookDispatchLog>();
+    public DbSet<InboundMessageQueueItem> InboundMessageQueueItems => Set<InboundMessageQueueItem>();
 
     // ── Módulo Morosidad ───────────────────────────────────────────────────────
     public DbSet<LogicalFieldCatalog> LogicalFieldCatalog => Set<LogicalFieldCatalog>();
