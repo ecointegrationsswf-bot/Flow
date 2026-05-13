@@ -24,6 +24,7 @@ import { useLabels } from '@/shared/hooks/useLabels'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
 import { CampaignTemplateDocumentsSection } from './CampaignTemplateDocumentsSection'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import { useToast, ToastContainer } from '@/shared/components/Toast'
 import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
 import {
   useCampaignTemplate,
@@ -68,6 +69,7 @@ export function CampaignTemplateFormPage() {
   const { id } = useParams<{ id: string }>()
   const isEdit = !!id
   const navigate = useNavigate()
+  const { toasts, remove, toast } = useToast()
 
   const { data: existing, isLoading: loadingTemplate, isError: templateError } = useCampaignTemplate(id)
   const { data: agents } = useAgents()
@@ -416,6 +418,14 @@ export function CampaignTemplateFormPage() {
 
   const onSubmit = (data: FormData) => {
     if (!validateActionConfigs()) return
+
+    // El SystemPrompt es OBLIGATORIO — el CampaignTemplate es la única fuente
+    // del prompt del agente. Sin esto, las campañas que usen este maestro
+    // responden con canned + escalación humana, no con el agente IA.
+    if (!localSystemPrompt.trim()) {
+      toast.error('El SystemPrompt es obligatorio. Sin él, el agente no podrá responder a los clientes de esta campaña.')
+      return
+    }
 
     // Solo serializar followUpMessagesJson si hay al menos un mensaje no vacío;
     // si todos están vacíos, lo dejamos en null para no inyectar seguimientos al executor.
@@ -1319,6 +1329,7 @@ export function CampaignTemplateFormPage() {
         confirmLabel="Sí, cambiar primario"
         variant="default"
       />
+      <ToastContainer toasts={toasts} onRemove={remove} />
     </div>
   )
 }

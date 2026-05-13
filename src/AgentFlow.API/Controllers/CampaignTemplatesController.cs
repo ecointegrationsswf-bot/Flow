@@ -106,6 +106,17 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
 
         var tenantId = tenantCtx.TenantId;
 
+        // Validación crítica del SystemPrompt: el CampaignTemplate es la ÚNICA
+        // fuente del prompt en el sistema. Sin prompt, el agente responde con
+        // el canned + escalación a humano, y la campaña queda inservible. El
+        // AgentDefinition NO tiene prompt — solo el template.
+        if (string.IsNullOrWhiteSpace(req.SystemPrompt))
+            return BadRequest(new
+            {
+                error = "El maestro debe tener un SystemPrompt — es la única fuente del prompt del agente. Escribilo antes de guardar.",
+                field = "systemPrompt",
+            });
+
         // Validación + swap del maestro primario (no-Brain). Si el agente ya
         // tiene un maestro primario y el admin no confirmó el swap, retorna 409.
         var swap = await ResolvePrimarySwapAsync(
@@ -158,6 +169,14 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     {
         if (req.ActionConfigs != null && req.ActionConfigs.Length > 50000)
             return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
+
+        // Misma validación que Create: SystemPrompt obligatorio.
+        if (string.IsNullOrWhiteSpace(req.SystemPrompt))
+            return BadRequest(new
+            {
+                error = "El maestro debe tener un SystemPrompt — es la única fuente del prompt del agente. Escribilo antes de guardar.",
+                field = "systemPrompt",
+            });
 
         var tenantId = tenantCtx.TenantId;
         var template = await db.CampaignTemplates
