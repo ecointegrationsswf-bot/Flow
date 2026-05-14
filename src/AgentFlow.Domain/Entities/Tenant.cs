@@ -39,6 +39,13 @@ public class Tenant
     public string? SenderEmail { get; set; }
 
     /// <summary>
+    /// URL pública del logo del corredor — se inserta en los correos enviados
+    /// a clientes (header del template). Si es NULL, el template muestra solo
+    /// el texto del nombre del tenant.
+    /// </summary>
+    public string? LogoUrl { get; set; }
+
+    /// <summary>
     /// OBSOLETO — usar <see cref="CampaignMessagesPerMinute"/>. Solo lo lee el
     /// CampaignLauncher legacy del flujo n8n (ya no en producción). Los flujos
     /// activos (CampaignDispatcherService v2 + FollowUpSweepExecutor) ignoran

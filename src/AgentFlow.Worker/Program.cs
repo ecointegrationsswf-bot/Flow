@@ -98,6 +98,10 @@ builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.IEmailService,
 Console.WriteLine($"[Worker] Email vía API: {cfg["EmailApi:BaseUrl"] ?? "(no configurado)"}.");
 builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
 
+// EmailTemplateRenderer — render de plantillas custom de maestros usado por
+// SendEmailResumeService cuando hay EmailBodyHtml configurado.
+builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.EmailTemplateRenderer>();
+
 // ── HTTP + Cache ─────────────────────────────────────────
 builder.Services.AddHttpClient();
 builder.Services.AddMemoryCache();

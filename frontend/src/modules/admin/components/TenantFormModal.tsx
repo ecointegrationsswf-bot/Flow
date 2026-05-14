@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { X, Loader2, Building2, FileText, Zap, Check, Search, CircleDot, Globe, CheckCircle2, Settings, Webhook, Tag } from 'lucide-react'
+import { X, Loader2, Building2, FileText, Zap, Check, Search, CircleDot, Globe, CheckCircle2, Settings, Webhook, Tag, Upload, Image as ImageIcon } from 'lucide-react'
 import {
   useCreateTenant,
   useUpdateTenant,
+  useUploadTenantLogo,
+  useRemoveTenantLogo,
   type AdminTenant,
 } from '@/modules/admin/hooks/useAdminTenants'
 import { useAdminPrompts } from '@/modules/admin/hooks/useAdminPrompts'
@@ -49,6 +51,33 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
   const isEdit = !!tenant
   const createTenant = useCreateTenant()
   const updateTenant = useUpdateTenant()
+  const uploadLogoMut = useUploadTenantLogo()
+  const removeLogoMut = useRemoveTenantLogo()
+  const [logoUrl, setLogoUrl] = useState<string | null>(tenant?.logoUrl ?? null)
+  const [logoError, setLogoError] = useState<string | null>(null)
+  const logoInputRef = useRef<HTMLInputElement>(null)
+  const handleUploadLogo = async (file: File) => {
+    if (!tenant) return
+    setLogoError(null)
+    try {
+      const res = await uploadLogoMut.mutateAsync({ tenantId: tenant.id, file })
+      setLogoUrl(res.logoUrl)
+    } catch (e) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'No se pudo subir el logo.'
+      setLogoError(msg)
+    }
+  }
+  const handleRemoveLogo = async () => {
+    if (!tenant) return
+    setLogoError(null)
+    try {
+      await removeLogoMut.mutateAsync(tenant.id)
+      setLogoUrl(null)
+    } catch (e) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'No se pudo quitar el logo.'
+      setLogoError(msg)
+    }
+  }
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<Tab>('general')
   const [search, setSearch] = useState('')
@@ -393,6 +422,68 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
                   )}
                 </div>
               </div>
+
+              {/* Logo del corredor — solo en modo edición porque necesitamos
+                  el ID del tenant para subir a blob storage. */}
+              {isEdit && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                  <label className="mb-2 block text-sm font-medium text-gray-700">
+                    Logo del corredor
+                  </label>
+                  <p className="mb-3 text-[11px] text-gray-500">
+                    Se inserta en el header de los correos enviados a clientes.
+                    PNG / JPG / WEBP / SVG · máx. 5 MB.
+                  </p>
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-20 w-32 items-center justify-center rounded-md border border-dashed border-gray-300 bg-white p-2 overflow-hidden">
+                      {logoUrl ? (
+                        <img src={logoUrl} alt="Logo" className="max-h-full max-w-full object-contain" />
+                      ) : (
+                        <ImageIcon className="h-7 w-7 text-gray-300" />
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <input
+                        ref={logoInputRef}
+                        type="file"
+                        accept=".png,.jpg,.jpeg,.webp,.svg,image/*"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0]
+                          if (f) void handleUploadLogo(f)
+                          e.target.value = ''
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => logoInputRef.current?.click()}
+                        disabled={uploadLogoMut.isPending}
+                        className="inline-flex items-center gap-1.5 rounded-md bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        {uploadLogoMut.isPending
+                          ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Subiendo…</>
+                          : <><Upload className="h-3.5 w-3.5" /> {logoUrl ? 'Cambiar logo' : 'Subir logo'}</>}
+                      </button>
+                      {logoUrl && (
+                        <button
+                          type="button"
+                          onClick={handleRemoveLogo}
+                          disabled={removeLogoMut.isPending}
+                          className="text-[11px] text-red-600 hover:text-red-700 hover:underline disabled:opacity-50"
+                        >
+                          {removeLogoMut.isPending ? 'Quitando…' : 'Quitar logo'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  {logoError && (
+                    <p className="mt-2 text-[11px] text-red-600">{logoError}</p>
+                  )}
+                  {logoUrl && (
+                    <p className="mt-2 text-[10px] font-mono text-gray-400 break-all">{logoUrl}</p>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-3">

@@ -24,6 +24,8 @@ export interface CampaignTemplate {
   name: string
   agentDefinitionId: string
   agentName: string | null
+  /** true si el agente asociado está activo. null = no se pudo resolver. */
+  agentIsActive: boolean | null
   followUpHours: number[]
   /** JSON array de mensajes de seguimiento, paralelo a followUpHours (Fase 2). NULL = sin seguimientos automáticos. */
   followUpMessagesJson: string | null
@@ -48,6 +50,18 @@ export interface CampaignTemplate {
   attentionStartTime: string
   attentionEndTime: string
   outOfContextPolicy: string
+  /** Plantilla de correo personalizable — null si el maestro no la tiene configurada. */
+  emailSubject: string | null
+  emailBodyHtml: string | null
+  emailBodyText: string | null
+  emailTemplateUpdatedAt: string | null
+  /** Umbral para cambiar a layout corporativo. Default 10. */
+  umbralCorporativo: number
+  /** JSON con el mapeo de columnas del archivo a los slots del email
+   *  (label, titleColumn, subtitleColumn, categoryColumn, amountColumn, detailColumns[]). */
+  itemsConfig: string | null
+  /** Datos de muestra (archivo modelo parseado) — array JSON. */
+  sampleDataJson: string | null
   isActive: boolean
   createdAt: string
   updatedAt: string
@@ -78,6 +92,12 @@ export interface CampaignTemplatePayload {
   attentionStartTime?: string
   attentionEndTime?: string
   outOfContextPolicy?: string
+  emailSubject?: string | null
+  emailBodyHtml?: string | null
+  emailBodyText?: string | null
+  umbralCorporativo?: number
+  itemsConfig?: string | null
+  sampleDataJson?: string | null
 }
 
 export interface ActionConfig {
@@ -177,6 +197,33 @@ export function useDeleteCampaignTemplate() {
   })
 }
 
+/**
+ * Alternativa al delete cuando hay campañas vinculadas: deja IsActive=false
+ * y limpia IsPrimaryForAgent sin borrar el registro.
+ */
+export function useDeactivateCampaignTemplate() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await api.post(`/campaign-templates/${id}/deactivate`)
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
+  })
+}
+
+/**
+ * Detalles del 409 al borrar un maestro vinculado a campañas. La UI lo usa
+ * para mostrar la modal y ofrecer inactivar.
+ */
+export interface DeleteTemplateBlockedConflict {
+  error: string
+  totalCampaigns: number
+  campaigns: { id: string; name: string; status: string; createdAt: string }[]
+  suggestion: 'deactivate'
+  templateName: string
+}
+
 export function useDuplicateCampaignTemplate() {
   const qc = useQueryClient()
   return useMutation({
@@ -185,6 +232,71 @@ export function useDuplicateCampaignTemplate() {
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
+  })
+}
+
+export interface EmailPreviewResult {
+  subject: string
+  htmlBody: string
+  textBody: string | null
+}
+
+export interface EmailRenderInput {
+  subject?: string
+  htmlBody?: string
+  textBody?: string
+  itemsConfig?: string | null
+  umbralCorporativo?: number
+  /** Datos del archivo modelo del maestro (array JSON). Si está, los previews
+   *  se renderizan con esos datos en vez del sample hardcoded. */
+  sampleDataJson?: string | null
+}
+
+export interface ParseEmailSampleResult {
+  columns: string[]
+  sampleRow: Record<string, unknown> | null
+  sampleDataJson: string
+  totalContacts: number
+  totalRowsRead: number
+  extraColumns: string[]
+  warnings: string[]
+}
+
+/** Sube un archivo modelo (Excel/CSV en formato fijo) y devuelve las columnas
+ *  detectadas + la primera fila como sample. El frontend usa esto para llenar
+ *  los dropdowns del mapeo y persistir el sample en el maestro. */
+export function useParseEmailSample() {
+  return useMutation({
+    mutationFn: async (file: File): Promise<ParseEmailSampleResult> => {
+      const fd = new FormData()
+      fd.append('file', file)
+      const { data } = await api.post<ParseEmailSampleResult>(
+        '/campaign-templates/email/parse-sample',
+        fd,
+        { headers: { 'Content-Type': 'multipart/form-data' } },
+      )
+      return data
+    },
+  })
+}
+
+/** Renderiza la plantilla con datos de ejemplo. No envía nada. */
+export function usePreviewEmailTemplate() {
+  return useMutation({
+    mutationFn: async (payload: EmailRenderInput) => {
+      const { data } = await api.post<EmailPreviewResult>('/campaign-templates/email/preview', payload)
+      return data
+    },
+  })
+}
+
+/** Envía un correo de prueba con la plantilla y datos de ejemplo al destinatario indicado. */
+export function useTestSendEmailTemplate() {
+  return useMutation({
+    mutationFn: async (payload: EmailRenderInput & { toEmail: string }) => {
+      const { data } = await api.post<{ ok: boolean; sentTo: string }>('/campaign-templates/email/test-send', payload)
+      return data
+    },
   })
 }
 

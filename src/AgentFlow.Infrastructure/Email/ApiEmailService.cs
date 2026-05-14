@@ -52,6 +52,18 @@ public class ApiEmailService(
                 messages = messages.Select(m => new { who = m.Who, text = m.Text }).ToList()
             }, ct);
 
+    public async Task<string?> SendCustomHtmlAsync(string toEmail, string? ccEmail,
+        string subject, string htmlBody, string? textBody,
+        CancellationToken ct = default)
+    {
+        // El Worker → API: no propagamos el id desde el endpoint interno (todavía).
+        // Cuando el Worker corre on-prem es el API el que persiste Message;
+        // el Worker mismo no necesita el id.
+        await PostAsync("/api/internal/email/custom-html",
+            new { toEmail, ccEmail, subject, htmlBody, textBody }, ct);
+        return null;
+    }
+
     public Task SendLabelingSummaryAsync(string toEmail, string fullName, string excelUrl,
         IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
         IEnumerable<string>? bccEmails = null, CancellationToken ct = default)

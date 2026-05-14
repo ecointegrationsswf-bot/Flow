@@ -6,10 +6,14 @@ import {
 } from 'lucide-react'
 import {
   useCampaignContacts, useCampaignById, useExportCampaignContacts,
+  useCampaignContactMessages,
   type ContactStatusFilter, type CampaignContactRow,
+  type CampaignContactMessage,
 } from '@/shared/hooks/useCampaigns'
 import { useToast, ToastContainer } from '@/shared/components/Toast'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
+import { MessageBubble } from '@/modules/monitor/components/MessageBubble'
+import type { Message, MessageDirection, MessageStatus, ChannelType } from '@/shared/types'
 
 const PAGE_SIZE = 50
 
@@ -291,55 +295,161 @@ export function CampaignContactsPage() {
         </div>
       )}
 
-      {/* Modal — Mensaje enviado al contacto */}
-      {messageContact && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setMessageContact(null)}
-        >
-          <div
-            className="w-full max-w-2xl overflow-hidden rounded-lg bg-white shadow-xl"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
-              <div className="flex items-center gap-2">
-                <MessageSquare className="h-4 w-4 text-blue-600" />
-                <h3 className="text-sm font-semibold text-gray-900">
-                  Mensaje enviado
-                </h3>
-              </div>
-              <button
-                onClick={() => setMessageContact(null)}
-                className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                title="Cerrar"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-            <div className="px-5 py-4 text-sm">
-              <div className="mb-3 flex items-baseline justify-between gap-3 text-xs text-gray-500">
-                <span><strong className="text-gray-900">{messageContact.clientName ?? '—'}</strong> · <span className="font-mono">{messageContact.phoneNumber}</span></span>
-                {messageContact.sentAt && (
-                  <span>{tt.dateTime(messageContact.sentAt)}</span>
-                )}
-              </div>
-              <pre className="max-h-[60vh] overflow-y-auto whitespace-pre-wrap rounded-md border border-gray-200 bg-gray-50 px-4 py-3 font-sans text-sm text-gray-800">
-                {messageContact.generatedMessage}
-              </pre>
-            </div>
-            <div className="flex justify-end gap-2 border-t border-gray-200 bg-gray-50 px-5 py-3">
-              <button
-                onClick={() => setMessageContact(null)}
-                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-              >
-                Cerrar
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Modal — Mensaje + correos enviados al contacto */}
+      {messageContact && id && (
+        <ContactMessagesModal
+          campaignId={id}
+          contact={messageContact}
+          onClose={() => setMessageContact(null)}
+        />
       )}
 
       <ToastContainer toasts={toasts} onRemove={remove} />
+    </div>
+  )
+}
+
+/**
+ * Modal que muestra TODO lo que se le envió al contacto:
+ * 1. El mensaje inicial generado por la IA (cc.generatedMessage)
+ * 2. Los correos enviados (via SendEmailResumeService — Channel=Email)
+ * 3. Cualquier otro mensaje de la conversación
+ *
+ * Usa MessageBubble del Monitor para que los emails se vean como tarjetas
+ * (con asunto, destinatario, body colapsable) y los WhatsApp como burbujas.
+ */
+function ContactMessagesModal({
+  campaignId, contact, onClose,
+}: {
+  campaignId: string
+  contact: CampaignContactRow
+  onClose: () => void
+}) {
+  const tt = useTenantTime()
+  const { data, isLoading } = useCampaignContactMessages(campaignId, contact.id)
+
+  // Convertimos los CampaignContactMessage del backend al tipo Message del
+  // dominio (lo que MessageBubble espera). Solo cambian un par de campos.
+  const toMessage = (m: CampaignContactMessage): Message => ({
+    id: m.id,
+    conversationId: '', // no lo necesita MessageBubble
+    direction: m.direction as MessageDirection,
+    status: m.status as MessageStatus,
+    content: m.content,
+    externalMessageId: m.externalMessageId ?? undefined,
+    isFromAgent: m.isFromAgent,
+    agentName: m.agentName ?? undefined,
+    detectedIntent: m.detectedIntent ?? undefined,
+    sentAt: m.sentAt,
+    channel: (m.channel as ChannelType | null) ?? null,
+    subject: m.subject,
+    recipient: m.recipient,
+  })
+
+  const messages = data?.items ?? []
+  const emails = messages.filter(m => m.channel === 'Email')
+  const others = messages.filter(m => m.channel !== 'Email')
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex h-[90vh] w-full max-w-3xl flex-col overflow-hidden rounded-lg bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3 shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <MessageSquare className="h-4 w-4 text-blue-600 shrink-0" />
+            <div className="min-w-0">
+              <h3 className="text-sm font-semibold text-gray-900 truncate">
+                {contact.clientName ?? 'Contacto'}
+              </h3>
+              <p className="text-[11px] text-gray-500 font-mono truncate">
+                {contact.phoneNumber}
+                {contact.sentAt && <span className="ml-2 text-gray-400">· enviado {tt.dateTime(contact.sentAt)}</span>}
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="ml-2 rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+            title="Cerrar"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="flex-1 overflow-y-auto bg-gray-50 px-5 py-4">
+          {/* Mensaje inicial generado (siempre si está presente) */}
+          {contact.generatedMessage && (
+            <div className="mb-4">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                Mensaje inicial
+              </div>
+              <pre className="whitespace-pre-wrap rounded-md border border-gray-200 bg-white px-4 py-3 font-sans text-sm text-gray-800 shadow-sm">
+                {contact.generatedMessage}
+              </pre>
+            </div>
+          )}
+
+          {/* Loading state */}
+          {isLoading && (
+            <div className="flex items-center justify-center gap-2 text-xs text-gray-500 py-4">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Cargando mensajes…
+            </div>
+          )}
+
+          {/* Emails enviados */}
+          {emails.length > 0 && (
+            <div className="mb-4">
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                Correos enviados ({emails.length})
+              </div>
+              <div className="space-y-2">
+                {emails.map((m) => (
+                  <MessageBubble key={m.id} message={toMessage(m)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Otros mensajes (WhatsApp / SMS) de la conversación, si hay más
+              además del initial. El initial ya se mostró arriba, pero la
+              conversación puede tener replies del cliente o del agente. */}
+          {others.length > 0 && (
+            <div>
+              <div className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
+                Conversación completa
+              </div>
+              <div className="space-y-1">
+                {others.map((m) => (
+                  <MessageBubble key={m.id} message={toMessage(m)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {!isLoading && messages.length === 0 && !contact.generatedMessage && (
+            <p className="text-center text-xs text-gray-400 py-8">
+              No hay mensajes para este contacto todavía.
+            </p>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex justify-end gap-2 border-t border-gray-200 bg-gray-50 px-5 py-3 shrink-0">
+          <button
+            onClick={onClose}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          >
+            Cerrar
+          </button>
+        </div>
+      </div>
     </div>
   )
 }

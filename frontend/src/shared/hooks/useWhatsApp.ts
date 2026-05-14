@@ -11,11 +11,30 @@ interface WhatsAppStatus {
 export function useWhatsAppStatus(enabled = true) {
   return useQuery({
     queryKey: ['whatsapp-status'],
-    queryFn: () => api.get<WhatsAppStatus>('/whatsapp/status').then((r) => r.data),
+    queryFn: async () => {
+      try {
+        const { data } = await api.get<WhatsAppStatus>('/whatsapp/status')
+        return data
+      } catch (err) {
+        // Si el tenant no tiene línea WhatsApp configurada el API devuelve 400.
+        // Eso no es un "error" para mostrar al usuario — significa "este tenant
+        // no usa WhatsApp". Devolvemos status='disabled' y se trata como un
+        // estado válido (el polling se ralentiza, no spamea la consola).
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const status = (err as any)?.response?.status
+        if (status && status >= 400 && status < 500) {
+          return { status: 'disabled', phone: '', instanceId: '', provider: '' }
+        }
+        throw err
+      }
+    },
+    retry: false,
     refetchInterval: (query) => {
-      // Polling más rápido cuando espera QR scan, más lento cuando está conectado
       const status = query.state.data?.status
       if (status === 'qr' || status === 'loading') return 5_000
+      // Si el tenant no tiene WhatsApp configurado, polling lento (5 min)
+      // para detectar configuración posterior sin spammear cada 10s.
+      if (status === 'disabled') return 5 * 60_000
       return 10_000
     },
     enabled,

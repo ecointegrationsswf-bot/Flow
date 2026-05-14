@@ -217,7 +217,10 @@ export function CampaignUploadPage() {
   const previewMutation = usePreviewFixedFormat()
   const createMutation = useUploadFixedFormat()
 
-  const activeTemplates = templates?.filter((t) => t.isActive) ?? []
+  // Solo dejamos seleccionar maestros activos cuyo agente TAMBIÉN esté activo.
+  // Un maestro inactivo o con agente inactivo no debe poder usarse en nuevas
+  // campañas — las existentes que ya lo usan siguen corriendo con su config.
+  const activeTemplates = templates?.filter((t) => t.isActive && t.agentIsActive !== false) ?? []
   const selectedTemplate = activeTemplates.find((t) => t.id === selectedTemplateId)
 
   const handleStep1Submit = () => {

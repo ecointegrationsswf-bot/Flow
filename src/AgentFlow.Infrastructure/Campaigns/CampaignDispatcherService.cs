@@ -1,6 +1,7 @@
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Email;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -34,6 +35,8 @@ public class CampaignDispatcherService(
     IScheduledJobRepository scheduledJobs,
     IInitialMessageGenerator? messageGenerator,
     IBusinessHoursClock businessHours,
+    IEmailService emailService,
+    EmailTemplateRenderer emailRenderer,
     ILogger<CampaignDispatcherService> logger)
 {
     // ── Mínimos de seguridad — tope inferior aunque la config diga lo contrario ──
@@ -112,12 +115,68 @@ public class CampaignDispatcherService(
         }
         logger.LogDebug("Campaña {CampaignId}: {Reason}", campaignId, hoursCheck.Reason);
 
-        // ── 3. Obtener provider del tenant ───────────────
-        var provider = await providerFactory.GetProviderAsync(tenant.Id, ct);
-        if (provider is null)
+        // ── 3. Cargar el agente y resolver canales a usar ────────────────
+        // El canal a usar viene del AGENTE, no del Campaign.Channel. Si el
+        // agente tiene varios canales habilitados, enviamos por TODOS ellos
+        // (cada contacto recibe N mensajes, uno por canal).
+        var agent = await db.AgentDefinitions
+            .Where(a => a.Id == campaign.AgentDefinitionId)
+            .Select(a => new { a.Id, a.Name, a.EnabledChannels, a.IsActive })
+            .FirstOrDefaultAsync(ct);
+
+        if (agent is null || !agent.IsActive)
         {
-            logger.LogWarning("Campaña {CampaignId}: tenant sin línea WhatsApp activa.", campaignId);
-            return new DispatchResult(0, 0, "Sin línea WhatsApp activa", DispatchStopReason.NoProvider);
+            logger.LogWarning("Campaña {CampaignId}: agente inválido o inactivo.", campaignId);
+            return new DispatchResult(0, 0, "Agente inválido o inactivo", DispatchStopReason.Error);
+        }
+
+        var enabledChannels = agent.EnabledChannels ?? [];
+        if (enabledChannels.Count == 0)
+        {
+            logger.LogWarning("Campaña {CampaignId}: el agente '{Agent}' no tiene canales habilitados.",
+                campaignId, agent.Name);
+            return new DispatchResult(0, 0,
+                $"El agente '{agent.Name}' no tiene canales habilitados.",
+                DispatchStopReason.NoProvider);
+        }
+
+        // Pre-cargar provider WhatsApp SOLO si el agente lo usa. Si no, no
+        // exigimos línea — la campaña puede ser email-only sin WhatsApp configurado.
+        IChannelProvider? waProvider = null;
+        if (enabledChannels.Contains(ChannelType.WhatsApp))
+        {
+            waProvider = await providerFactory.GetProviderAsync(tenant.Id, ct);
+            if (waProvider is null)
+            {
+                // Si el agente SOLO tiene WhatsApp y no hay línea, no podemos enviar.
+                if (enabledChannels.Count == 1)
+                {
+                    logger.LogWarning("Campaña {CampaignId}: agente solo soporta WhatsApp pero tenant sin línea activa.", campaignId);
+                    return new DispatchResult(0, 0, "Sin línea WhatsApp activa", DispatchStopReason.NoProvider);
+                }
+                // Si tiene varios canales y falta WhatsApp, seguimos con los otros pero avisamos.
+                logger.LogWarning("Campaña {CampaignId}: WhatsApp habilitado en el agente pero tenant sin línea. Se omite WhatsApp en los envíos.", campaignId);
+            }
+        }
+
+        // Si el agente envía email, validar que el maestro tenga template.
+        if (enabledChannels.Contains(ChannelType.Email))
+        {
+            var hasTemplate = !string.IsNullOrWhiteSpace(campaign.CampaignTemplate?.EmailBodyHtml);
+            if (!hasTemplate)
+            {
+                if (enabledChannels.Count == 1 || waProvider is null)
+                {
+                    logger.LogWarning(
+                        "Campaña {CampaignId}: agente con canal Email pero el maestro no tiene EmailBodyHtml. " +
+                        "Configurá la plantilla en el tab Correo del maestro y relanzá.",
+                        campaignId);
+                    return new DispatchResult(0, 0,
+                        "El maestro no tiene plantilla de correo configurada.",
+                        DispatchStopReason.NoProvider);
+                }
+                logger.LogWarning("Campaña {CampaignId}: Email habilitado pero sin plantilla. Se omite email en los envíos.", campaignId);
+            }
         }
 
         // Configuración del tenant (rate limit, topes) con safe-floor sobre el delay.
@@ -143,6 +202,18 @@ public class CampaignDispatcherService(
                 campaignId, sentToday, maxPerDay);
             return new DispatchResult(0, sentToday, "Límite diario alcanzado", DispatchStopReason.DailyLimitReached);
         }
+
+        // ── 4.5 Rescate de contactos en Retry (legacy / pre-refactor) ────
+        // Versiones anteriores del dispatcher dejaban contactos en Retry sin
+        // ScheduledFor — quedaban en limbo porque la query de candidatos solo
+        // mira Queued. Acá los movemos de vuelta a Queued para que el batch
+        // los considere. Idempotente — no afecta a contactos ya procesados.
+        await db.CampaignContacts
+            .Where(cc => cc.CampaignId == campaignId
+                      && cc.DispatchStatus == DispatchStatus.Retry)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.DispatchStatus, DispatchStatus.Queued)
+                .SetProperty(c => c.ScheduledFor, (DateTime?)null), ct);
 
         // ── 5. Claim atómico Queued → Claimed (anti double-send entre Workers concurrentes) ─
         // Estrategia: ExecuteUpdate filtrado por DispatchStatus=Queued. Si dos workers ven
@@ -270,72 +341,137 @@ public class CampaignDispatcherService(
 
             try
             {
-                // Preferimos Claude (paridad con n8n: usa el prompt del CampaignTemplate).
-                // Si falla o no está configurado el LLM, caemos al template básico.
-                string? message = null;
-                if (messageGenerator is not null)
-                {
-                    try { message = await messageGenerator.GenerateAsync(campaign, contact, ct); }
-                    catch (Exception ex)
-                    {
-                        logger.LogWarning(ex, "Campaña {CampaignId}: generación con Claude falló para {Phone}, uso template.",
-                            campaignId, contact.PhoneNumber);
-                    }
-                }
-                message ??= BuildInitialMessage(contact, campaign);
                 var sendNow = DateTime.UtcNow;
 
-                var result = await provider.SendMessageAsync(
-                    new SendMessageRequest(contact.PhoneNumber, message), ct);
+                // ── Envío por TODOS los canales habilitados del agente ────
+                // Cada contacto recibe un mensaje por cada canal del agente
+                // (si tiene los datos de contacto adecuados — phone/email).
+                int channelSuccesses = 0;
+                int channelFailures = 0;
+                string? lastError = null;
+                DispatchAttemptResult? primaryDispatch = null;
 
-                if (result.Success)
+                foreach (var channel in enabledChannels)
+                {
+                    DispatchAttemptResult? attempt = null;
+
+                    if (channel == ChannelType.Email)
+                    {
+                        // Validar template (puede no estar si el agente tiene ambos
+                        // canales y solo configuraron template para uno).
+                        if (string.IsNullOrWhiteSpace(campaign.CampaignTemplate?.EmailBodyHtml))
+                            continue;
+                        if (string.IsNullOrWhiteSpace(contact.Email))
+                        {
+                            logger.LogDebug("Campaña {CampaignId}: contacto {Phone} sin email — se omite canal Email.",
+                                campaignId, contact.PhoneNumber);
+                            continue;
+                        }
+                        attempt = await SendEmailToContactAsync(campaign, contact, ct);
+                    }
+                    else if (channel == ChannelType.WhatsApp)
+                    {
+                        if (waProvider is null) continue; // sin línea, ya logueado arriba
+                        if (string.IsNullOrWhiteSpace(contact.PhoneNumber)) continue;
+
+                        string? message = null;
+                        if (messageGenerator is not null)
+                        {
+                            try { message = await messageGenerator.GenerateAsync(campaign, contact, ct); }
+                            catch (Exception exGen)
+                            {
+                                logger.LogWarning(exGen, "Campaña {CampaignId}: generación con Claude falló para {Phone}, uso template.",
+                                    campaignId, contact.PhoneNumber);
+                            }
+                        }
+                        message ??= BuildInitialMessage(contact, campaign);
+                        var waResult = await waProvider.SendMessageAsync(
+                            new SendMessageRequest(contact.PhoneNumber, message), ct);
+                        attempt = new DispatchAttemptResult(
+                            Success: waResult.Success,
+                            ExternalId: waResult.ExternalMessageId,
+                            Error: waResult.Error,
+                            SentContent: message,
+                            Subject: null,
+                            Recipient: contact.PhoneNumber);
+                    }
+                    else
+                    {
+                        // SMS u otro canal no soportado aún — saltamos.
+                        logger.LogDebug("Campaña {CampaignId}: canal {Channel} no implementado en dispatcher — se omite.",
+                            campaignId, channel);
+                        continue;
+                    }
+
+                    if (attempt is null) continue;
+
+                    if (attempt.Success)
+                    {
+                        channelSuccesses++;
+                        primaryDispatch ??= attempt;  // primer éxito = "principal" para legacy fields
+                        // Persistir Message para este canal específico.
+                        try { await PersistOutboundConversationAsync(campaign, contact, channel, attempt, sendNow, ct); }
+                        catch (Exception ex) { logger.LogError(ex, "Persistir mensaje {Channel} falló para {Recipient}", channel, attempt.Recipient); }
+                        logger.LogDebug("Campaña {CampaignId}: enviado a {Recipient} via {Channel}",
+                            campaignId, attempt.Recipient, channel);
+                    }
+                    else
+                    {
+                        channelFailures++;
+                        lastError = attempt.Error ?? lastError;
+                        logger.LogWarning("Campaña {CampaignId}: falló envío {Channel} a {Recipient}: {Error}",
+                            campaignId, channel, attempt.Recipient, attempt.Error);
+                    }
+                }
+
+                // ── Resolver estado del contacto según el agregado ─────────
+                if (channelSuccesses > 0)
                 {
                     contact.DispatchStatus = DispatchStatus.Sent;
                     contact.SentAt = sendNow;
-                    contact.LastContactAt = sendNow;       // mantenido para compatibilidad legacy
-                    contact.ExternalMessageId = result.ExternalMessageId;
-                    contact.GeneratedMessage = message;
+                    contact.LastContactAt = sendNow;
+                    contact.ExternalMessageId = primaryDispatch?.ExternalId;
+                    contact.GeneratedMessage = primaryDispatch?.SentContent;
                     contact.DispatchAttempts++;
                     contact.DispatchError = null;
                     sent++;
                     consecutiveErrors = 0;
-                    logger.LogDebug("Campaña {CampaignId}: enviado a {Phone} (#{Count})",
-                        campaignId, contact.PhoneNumber, sent);
-
-                    // Persistir Conversation + Message del envío inicial — sin esto el monitor
-                    // no muestra la campaña hasta que el cliente responde (replicaba la lógica
-                    // del N8nCallbackController.cs).
-                    try { await PersistOutboundConversationAsync(campaign, contact, message, result.ExternalMessageId, sendNow, ct); }
-                    catch (Exception ex) { logger.LogError(ex, "Persistir conversación inicial falló para {Phone}", contact.PhoneNumber); }
-
-                    // Los follow-ups los maneja el sweeper global
-                    // (FollowUpSweepExecutor / cron FOLLOW_UP_SWEEP cada 5 min).
-                    // El sweeper lee CampaignContact.SentAt + FollowUpsSentJson
-                    // para saber qué índice toca enviar, sin necesidad de un job
-                    // por contacto. Antes acá programábamos N×M jobs; ahora 0.
                 }
-                else
+                else if (channelFailures > 0)
                 {
                     contact.DispatchAttempts++;
-                    contact.DispatchError = Truncate(result.Error, 2000);
+                    contact.DispatchError = Truncate(lastError, 2000);
                     contact.LastContactAt = sendNow;
                     failed++;
                     consecutiveErrors++;
-                    logger.LogWarning("Campaña {CampaignId}: error enviando a {Phone}: {Error}",
-                        campaignId, contact.PhoneNumber, result.Error);
-
-                    // Si superó el max attempts → Error definitivo. Si no → Retry.
-                    contact.DispatchStatus = contact.DispatchAttempts >= 3
-                        ? DispatchStatus.Error
-                        : DispatchStatus.Retry;
+                    if (contact.DispatchAttempts >= 3)
+                    {
+                        contact.DispatchStatus = DispatchStatus.Error;
+                    }
+                    else
+                    {
+                        // Volvemos a Queued con un retraso para que el próximo
+                        // tick reintente. Retry sin ScheduledFor quedaba en
+                        // limbo (la query de candidatos solo mira Queued).
+                        contact.DispatchStatus = DispatchStatus.Queued;
+                        contact.ScheduledFor = DateTime.UtcNow.AddMinutes(1);
+                    }
                     contact.ClaimedAt = null;
-
                     if (consecutiveErrors >= ConsecutiveErrorThreshold)
                     {
                         logger.LogWarning("Campaña {CampaignId}: {Threshold}+ errores consecutivos. Frenando lote.",
                             campaignId, ConsecutiveErrorThreshold);
                         break;
                     }
+                }
+                else
+                {
+                    // Ningún canal aplicó (contacto sin email/phone/etc).
+                    contact.DispatchStatus = DispatchStatus.Skipped;
+                    contact.DispatchError = "Contacto sin datos para los canales habilitados (email/teléfono).";
+                    contact.ClaimedAt = null;
+                    logger.LogInformation("Campaña {CampaignId}: contacto {Phone} omitido — sin datos para los canales del agente.",
+                        campaignId, contact.PhoneNumber);
                 }
             }
             catch (Exception ex)
@@ -428,16 +564,167 @@ public class CampaignDispatcherService(
     /// Sin esto, el monitor solo ve el contacto cuando el cliente responde.
     /// Replica la lógica de N8nCallbackController para mantener paridad con el flujo legacy.
     /// </summary>
+    /// <summary>
+    /// Resultado de un intento de envío unificado (WhatsApp o Email). El dispatcher
+    /// usa esta forma común para no duplicar la lógica de persistencia/manejo
+    /// de errores por canal.
+    /// </summary>
+    private sealed record DispatchAttemptResult(
+        bool Success,
+        string? ExternalId,
+        string? Error,
+        string SentContent,    // texto plano del mensaje o body del email (para mostrar en monitor)
+        string? Subject,       // solo Email
+        string? Recipient);    // dirección de email o phone
+
+    /// <summary>
+    /// Envía un correo al contacto renderizando la plantilla del maestro
+    /// (EmailBodyHtml/Subject) con los datos de la fila (CampaignContact).
+    /// </summary>
+    private async Task<DispatchAttemptResult> SendEmailToContactAsync(
+        Campaign campaign,
+        CampaignContact contact,
+        CancellationToken ct)
+    {
+        var template = campaign.CampaignTemplate!;
+        var toEmail = contact.Email ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(toEmail))
+        {
+            return new DispatchAttemptResult(
+                Success: false,
+                ExternalId: null,
+                Error: "El contacto no tiene email registrado.",
+                SentContent: string.Empty,
+                Subject: null,
+                Recipient: null);
+        }
+
+        // Nombre del agente (para AgentName del Message).
+        var agentName = await db.AgentDefinitions
+            .Where(a => a.Id == campaign.AgentDefinitionId)
+            .Select(a => (string?)(a.AvatarName ?? a.Name))
+            .FirstOrDefaultAsync(ct);
+
+        var tenantInfo = await db.Tenants
+            .Where(t => t.Id == campaign.TenantId)
+            .Select(t => new { t.Name, t.LogoUrl })
+            .FirstOrDefaultAsync(ct);
+        var tenantName    = tenantInfo?.Name;
+        var tenantLogoUrl = tenantInfo?.LogoUrl;
+
+        var renderCtx = new EmailRenderContext
+        {
+            ClienteNombre      = contact.ClientName ?? contact.PhoneNumber,
+            ClienteTelefono    = contact.PhoneNumber,
+            ClienteEmail       = contact.Email,
+            ClientePoliza      = contact.PolicyNumber,
+            ClienteAseguradora = contact.InsuranceCompany,
+            ClienteSaldo       = contact.PendingAmount?.ToString("C2"),
+            ClienteDatosJson   = contact.ContactDataJson,
+
+            // En envío inicial NO hay conversación todavía — variables conversacion.*
+            // quedan vacías. La plantilla Scriban debe tolerarlo (ya lo hace).
+            ConversacionResumen      = string.Empty,
+            ConversacionMensajesHtml = string.Empty,
+            ConversacionEstado       = "Vigente",
+
+            CampanaNombre = campaign.Name,
+            AgenteNombre  = agentName,
+            TenantNombre  = tenantName,
+            TenantLogoUrl = tenantLogoUrl,
+
+            Fecha = DateTime.UtcNow.ToString("dd/MM/yyyy"),
+            Hora  = DateTime.UtcNow.ToString("HH:mm"),
+
+            ItemsConfigJson   = template.ItemsConfig,
+            UmbralCorporativo = template.UmbralCorporativo,
+        };
+
+        var subjectTemplate = !string.IsNullOrWhiteSpace(template.EmailSubject)
+            ? template.EmailSubject
+            : $"Mensaje de {tenantName ?? campaign.Name}";
+
+        var rendered = emailRenderer.Render(
+            subjectTemplate, template.EmailBodyHtml, template.EmailBodyText, renderCtx);
+
+        try
+        {
+            var externalId = await emailService.SendCustomHtmlAsync(
+                toEmail, ccEmail: null,
+                rendered.Subject, rendered.HtmlBody, rendered.TextBody,
+                ct);
+            return new DispatchAttemptResult(
+                Success: true,
+                ExternalId: externalId,
+                Error: null,
+                SentContent: rendered.HtmlBody,
+                Subject: rendered.Subject,
+                Recipient: $"to={toEmail}");
+        }
+        catch (Exception ex)
+        {
+            return new DispatchAttemptResult(
+                Success: false,
+                ExternalId: null,
+                Error: ex.Message,
+                SentContent: rendered.HtmlBody,
+                Subject: rendered.Subject,
+                Recipient: $"to={toEmail}");
+        }
+    }
+
+    /// <summary>
+    /// Crea (si no existe) UNA Conversation por contacto+campaña y agrega el
+    /// Message de este envío. Es idempotente: si la conversación ya existe (de
+    /// un envío previo por otro canal en la misma iteración), reutiliza esa
+    /// y solo agrega el mensaje. Channel del Message viene del parámetro
+    /// explícito — el Channel de la Conversation se setea con el "primario"
+    /// del agente (WhatsApp tiene prioridad si está en la lista).
+    /// </summary>
     private async Task PersistOutboundConversationAsync(
         Campaign campaign,
         CampaignContact contact,
-        string content,
-        string? externalMessageId,
+        ChannelType messageChannel,
+        DispatchAttemptResult dispatch,
         DateTime sentAtUtc,
         CancellationToken ct)
     {
         var tenantId = campaign.TenantId;
         var phone    = contact.PhoneNumber;
+
+        // ¿Ya hay una conversación activa abierta por este mismo dispatch?
+        // (cuando enviamos por 2 canales en la misma iteración, el segundo
+        // canal debe agregar Message a la misma Conversation que el primero
+        // creó.)
+        var existing = await db.Conversations
+            .Where(c => c.TenantId == tenantId
+                     && c.ClientPhone == phone
+                     && c.CampaignId == campaign.Id
+                     && c.Status != ConversationStatus.Closed)
+            .OrderByDescending(c => c.StartedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (existing is not null)
+        {
+            existing.LastActivityAt = sentAtUtc;
+            db.Set<Message>().Add(new Message
+            {
+                Id                = Guid.NewGuid(),
+                ConversationId    = existing.Id,
+                Direction         = MessageDirection.Outbound,
+                Status            = MessageStatus.Sent,
+                Content           = dispatch.SentContent,
+                ExternalMessageId = dispatch.ExternalId,
+                Channel           = messageChannel,
+                Subject           = dispatch.Subject,
+                Recipient         = dispatch.Recipient,
+                IsFromAgent       = true,
+                AgentName         = campaign.CampaignTemplate?.Name ?? campaign.Name,
+                SentAt            = sentAtUtc,
+            });
+            await db.SaveChangesAsync(ct);
+            return;
+        }
 
         // 1. Cerrar conversaciones activas previas del mismo número (excepto las
         //    que están siendo atendidas por un humano). Mantiene el invariante de
@@ -466,7 +753,10 @@ public class CampaignDispatcherService(
             });
         }
 
-        // 2. Crear la conversación nueva.
+        // 2. Crear la conversación nueva. Channel se setea con el canal del
+        // mensaje que la abrió (no con campaign.Channel — que era el modelo
+        // viejo donde la campaña tenía un único canal). Esto permite que el
+        // Monitor filtre correctamente por canal.
         var conversation = new Conversation
         {
             Id             = Guid.NewGuid(),
@@ -474,7 +764,7 @@ public class CampaignDispatcherService(
             ClientPhone    = phone,
             ClientName     = contact.ClientName,
             PolicyNumber   = contact.PolicyNumber,
-            Channel        = campaign.Channel,
+            Channel        = messageChannel,
             ActiveAgentId  = campaign.AgentDefinitionId,
             CampaignId     = campaign.Id,
             Status         = ConversationStatus.WaitingClient,
@@ -483,15 +773,20 @@ public class CampaignDispatcherService(
         };
         db.Conversations.Add(conversation);
 
-        // 3. Persistir el mensaje saliente.
+        // 3. Persistir el mensaje saliente — Channel del Message viene del
+        // canal específico que se acaba de enviar (puede diferir del
+        // Conversation.Channel cuando el agente tiene varios habilitados).
         db.Set<Message>().Add(new Message
         {
             Id                = Guid.NewGuid(),
             ConversationId    = conversation.Id,
             Direction         = MessageDirection.Outbound,
             Status            = MessageStatus.Sent,
-            Content           = content,
-            ExternalMessageId = externalMessageId,
+            Content           = dispatch.SentContent,
+            ExternalMessageId = dispatch.ExternalId,
+            Channel           = messageChannel,
+            Subject           = dispatch.Subject,
+            Recipient         = dispatch.Recipient,
             IsFromAgent       = true,
             AgentName         = campaign.CampaignTemplate?.Name ?? campaign.Name,
             SentAt            = sentAtUtc,

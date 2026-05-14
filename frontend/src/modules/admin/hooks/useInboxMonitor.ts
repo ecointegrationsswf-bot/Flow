@@ -103,6 +103,85 @@ export function useTenantsLite() {
   })
 }
 
+export type InboxItemDetail = {
+  item: {
+    id: string
+    tenantId: string
+    fromPhone: string
+    channel: string
+    whatsAppLineId: string | null
+    clientName: string | null
+    externalMessageId: string | null
+    messagesJson: string
+    firstReceivedAt: string
+    lastReceivedAt: string
+    bufferSeconds: number
+    status: string
+    claimedAt: string | null
+    claimedBy: string | null
+    startedAt: string | null
+    completedAt: string | null
+    attemptCount: number
+    lastError: string | null
+    lastErrorStep: string | null
+    outboundMessageId: string | null
+    escalatedAt: string | null
+    escalatedToUserId: string | null
+  }
+  tenantName: string | null
+  burst: Array<{
+    Content: string
+    ExternalId: string | null
+    MediaUrl: string | null
+    MediaType: string | null
+    ReceivedAt: string
+  }>
+  conversation: {
+    id: string
+    clientPhone: string
+    clientName: string | null
+    channel: string
+    status: string
+    isHumanHandled: boolean
+    handledByUserId: string | null
+    gestionResult: string
+    startedAt: string
+    lastActivityAt: string
+    closedAt: string | null
+    activeAgentId: string | null
+  } | null
+  messages: Array<{
+    id: string
+    direction: 'Inbound' | 'Outbound'
+    status: string
+    content: string
+    externalMessageId: string | null
+    isFromAgent: boolean
+    agentName: string | null
+    detectedIntent: string | null
+    sentAt: string
+  }>
+  gestionEvents: Array<{
+    id: string
+    origin: string
+    result: string
+    notes: string | null
+    occurredAt: string
+  }>
+}
+
+/** Detalle completo para la modal — sin auto-refresh. */
+export function useInboxItemDetail(id: string | null) {
+  return useQuery<InboxItemDetail>({
+    queryKey: ['inbox-item-detail', id],
+    queryFn: async () => {
+      const { data } = await adminClient.get<InboxItemDetail>(`/admin/inbox/${id}/detail`)
+      return data
+    },
+    enabled: !!id,
+  })
+}
+
 export function useRetryInboxItem() {
   const qc = useQueryClient()
   return useMutation({

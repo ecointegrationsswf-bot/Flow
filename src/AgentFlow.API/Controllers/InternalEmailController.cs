@@ -31,6 +31,7 @@ public class InternalEmailController(IEmailService email) : ControllerBase
         string ToEmail, string FullName, string ExcelUrl,
         List<CampaignSummary> Campaigns, List<string>? BccEmails);
     public record CampaignSummary(string CampaignName, Dictionary<string, int> CountsByLabel, int Unlabeled);
+    public record CustomHtmlBody(string ToEmail, string? CcEmail, string Subject, string HtmlBody, string? TextBody);
 
     [HttpPost("welcome-admin")]
     public async Task<IActionResult> WelcomeAdmin([FromBody] WelcomeAdminBody b, CancellationToken ct)
@@ -65,6 +66,13 @@ public class InternalEmailController(IEmailService email) : ControllerBase
     {
         var msgs = b.Messages.Select(m => (m.Who, m.Text)).ToList();
         await email.SendConversationResumeAsync(b.ToEmail, b.CcEmail, b.ClientName, b.ClientPhone, b.PolicyNumber, msgs, ct);
+        return Ok();
+    }
+
+    [HttpPost("custom-html")]
+    public async Task<IActionResult> CustomHtml([FromBody] CustomHtmlBody b, CancellationToken ct)
+    {
+        await email.SendCustomHtmlAsync(b.ToEmail, b.CcEmail, b.Subject, b.HtmlBody, b.TextBody, ct);
         return Ok();
     }
 

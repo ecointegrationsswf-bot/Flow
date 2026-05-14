@@ -23,7 +23,10 @@ import { useAgents } from '@/shared/hooks/useAgents'
 import { useLabels } from '@/shared/hooks/useLabels'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
 import { CampaignTemplateDocumentsSection } from './CampaignTemplateDocumentsSection'
+import { EmailTemplateTab, parseItemsConfig, DEFAULT_ITEMS_CONFIG, type ItemsConfigShape } from './EmailTemplateTab'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import { useToast, ToastContainer } from '@/shared/components/Toast'
+import { MessageDialog, type MessageDialogKind } from '@/shared/components/MessageDialog'
 import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
 import {
   useCampaignTemplate,
@@ -68,9 +71,10 @@ export function CampaignTemplateFormPage() {
   const { id } = useParams<{ id: string }>()
   const isEdit = !!id
   const navigate = useNavigate()
+  const { toasts, remove, toast } = useToast()
 
   const { data: existing, isLoading: loadingTemplate, isError: templateError } = useCampaignTemplate(id)
-  const { data: agents } = useAgents()
+  const { data: agents, isLoading: loadingAgents } = useAgents()
   const { data: labels, isLoading: loadingLabels } = useLabels()
   const { data: availableActions, isLoading: loadingActions } = useAvailableActions()
   const { data: availablePrompts, isLoading: loadingPrompts } = useAvailablePrompts()
@@ -123,8 +127,16 @@ export function CampaignTemplateFormPage() {
   const [outOfContextPolicy, setOutOfContextPolicy] = useState(existing?.outOfContextPolicy ?? 'Contain')
   // Webhook Contract Builder — modal state (Fase 5)
   const [webhookBuilderActionId, setWebhookBuilderActionId] = useState<string | null>(null)
-  // Tab activa — General / Etiquetas / Acciones / Prompt / Documentos
-  const [activeTab, setActiveTab] = useState<'general' | 'labels' | 'actions' | 'prompt' | 'documents'>('general')
+  // Tab activa — General / Etiquetas / Acciones / Prompt / Documentos / Correo
+  const [activeTab, setActiveTab] = useState<'general' | 'labels' | 'actions' | 'prompt' | 'documents' | 'email'>('general')
+  // Plantilla de correo (Fase 6) — solo se persiste si hay acción con sendsEmail vinculada.
+  const [localEmailSubject, setLocalEmailSubject] = useState<string>(existing?.emailSubject ?? '')
+  const [localEmailBodyHtml, setLocalEmailBodyHtml] = useState<string>(existing?.emailBodyHtml ?? '')
+  // Fase A — mapeo del dataset + umbral corporativo
+  const [localItemsConfig, setLocalItemsConfig] = useState<ItemsConfigShape>(() => parseItemsConfig(existing?.itemsConfig ?? null))
+  const [localUmbralCorporativo, setLocalUmbralCorporativo] = useState<number>(existing?.umbralCorporativo ?? 10)
+  // Datos del archivo modelo (JSON crudo) — null si no se subió nada.
+  const [localSampleDataJson, setLocalSampleDataJson] = useState<string | null>(existing?.sampleDataJson ?? null)
 
   // Sync all state when existing template loads (edit mode)
   useEffect(() => {
@@ -160,6 +172,11 @@ export function CampaignTemplateFormPage() {
     setAttentionEnd(existing.attentionEndTime ?? '17:00')
     if (existing.outOfContextPolicy) setOutOfContextPolicy(existing.outOfContextPolicy)
     if (existing.systemPrompt) setLocalSystemPrompt(existing.systemPrompt)
+    setLocalEmailSubject(existing.emailSubject ?? '')
+    setLocalEmailBodyHtml(existing.emailBodyHtml ?? '')
+    setLocalItemsConfig(parseItemsConfig(existing.itemsConfig ?? null))
+    setLocalUmbralCorporativo(existing.umbralCorporativo ?? 10)
+    setLocalSampleDataJson(existing.sampleDataJson ?? null)
   }, [existing?.id])
 
   // Cuando hay un prompt seleccionado, trae el texto original del template global
@@ -182,6 +199,9 @@ export function CampaignTemplateFormPage() {
     return () => clearTimeout(t)
   }, [promptSaveMessage])
 
+  // Reactiva al agente seleccionado para mostrar/ocultar el tab "Correo".
+  // Lo declaramos antes del useForm porque watch() depende del control,
+  // pero queremos que esté arriba de cualquier early-return.
   const { register, handleSubmit, watch, formState: { errors } } = useForm<FormData>({
     resolver: zodResolver(schema),
     values: isEdit && existing
@@ -199,6 +219,20 @@ export function CampaignTemplateFormPage() {
           sendFrom: null, sendUntil: null,
         },
   })
+
+  // Tab "Correo" se habilita si el agente seleccionado tiene 'Email' en sus canales.
+  // El criterio antes era "acción con sendsEmail" pero resultaba muy generico
+  // (acciones como SEND_EMAIL_RESUME se enlazan a maestros que en realidad no
+  // mandan correo). El canal del agente refleja la intención del usuario.
+  const watchedAgentId = watch('agentDefinitionId')
+  const selectedAgent = agents?.find(a => a.id === watchedAgentId)
+  const hasEmailChannel = (selectedAgent?.enabledChannels ?? []).includes('Email')
+
+  // Si el usuario quita el canal Email del agente mientras está parado en el tab
+  // Correo, devolvemos al tab General. Debe estar antes del early-return.
+  useEffect(() => {
+    if (!hasEmailChannel && activeTab === 'email') setActiveTab('general')
+  }, [hasEmailChannel, activeTab])
 
   const addFollowUp = () => {
     const h = parseInt(newHour)
@@ -375,6 +409,14 @@ export function CampaignTemplateFormPage() {
   const [swapConflict, setSwapConflict] = useState<PrimaryTemplateSwapConflict | null>(null)
   const [pendingPayload, setPendingPayload] = useState<Record<string, unknown> | null>(null)
 
+  // Modal para mostrar resultado del save (success/error) — más visible que un toast.
+  const [messageDialog, setMessageDialog] = useState<{
+    kind: MessageDialogKind
+    title: string
+    description?: string
+    detail?: string
+  } | null>(null)
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const extractSwapConflict = (err: any): PrimaryTemplateSwapConflict | null => {
     const data = err?.response?.data
@@ -394,28 +436,61 @@ export function CampaignTemplateFormPage() {
         setSwapConflict(conflict)
         setPendingPayload(payload)
       } else {
-        // Otro error: lo dejamos burbujear (react-query lo expone vía isError).
-        // Si en algún momento queremos toast aquí, este es el lugar.
+        // Cualquier otro error: mostrarlo en modal visible, NO toast escondido.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const anyErr = err as any
+        const status = anyErr?.response?.status
+        const apiMsg = anyErr?.response?.data?.error || anyErr?.response?.data?.title || anyErr?.message
+        const detailJson = anyErr?.response?.data
+          ? JSON.stringify(anyErr.response.data, null, 2)
+          : (anyErr?.stack as string | undefined)
         console.error('[CampaignTemplate save error]', err)
+        setMessageDialog({
+          kind: 'error',
+          title: 'No se pudo guardar el maestro',
+          description: apiMsg
+            ? `${status ? `HTTP ${status} — ` : ''}${apiMsg}`
+            : `${status ? `HTTP ${status} — ` : ''}Error inesperado al guardar. Verificá los datos e intentá de nuevo.`,
+          detail: detailJson,
+        })
       }
+    }
+    const onSaveOk = () => {
+      // Mostramos modal de éxito en vez de navegar silencioso, así el usuario
+      // ve la confirmación. Al cerrar se redirige al listado.
+      setMessageDialog({
+        kind: 'success',
+        title: isEdit ? 'Maestro actualizado' : 'Maestro creado',
+        description: isEdit
+          ? 'Los cambios se guardaron correctamente.'
+          : 'El maestro fue creado y ya está disponible para campañas.',
+      })
     }
     if (isEdit && id) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       updateMut.mutate(
         { id, confirmSwap, ...(payload as any) },
-        { onSuccess: () => navigate('/campaign-templates'), onError: onConflict }
+        { onSuccess: onSaveOk, onError: onConflict }
       )
     } else {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       createMut.mutate(
         { confirmSwap, ...(payload as any) },
-        { onSuccess: () => navigate('/campaign-templates'), onError: onConflict }
+        { onSuccess: onSaveOk, onError: onConflict }
       )
     }
   }
 
   const onSubmit = (data: FormData) => {
     if (!validateActionConfigs()) return
+
+    // El SystemPrompt es OBLIGATORIO — el CampaignTemplate es la única fuente
+    // del prompt del agente. Sin esto, las campañas que usen este maestro
+    // responden con canned + escalación humana, no con el agente IA.
+    if (!localSystemPrompt.trim()) {
+      toast.error('El SystemPrompt es obligatorio. Sin él, el agente no podrá responder a los clientes de esta campaña.')
+      return
+    }
 
     // Solo serializar followUpMessagesJson si hay al menos un mensaje no vacío;
     // si todos están vacíos, lo dejamos en null para no inyectar seguimientos al executor.
@@ -444,6 +519,18 @@ export function CampaignTemplateFormPage() {
       inactivityCloseHours: 72,
       maxTokens: 1024,
       outOfContextPolicy,
+      // Plantilla de correo (Fase 6). Si el agente no tiene canal Email habilitado
+      // mandamos null para limpiar configuración previa que ya no aplica.
+      emailSubject: hasEmailChannel && localEmailSubject.trim() ? localEmailSubject : null,
+      emailBodyHtml: hasEmailChannel && localEmailBodyHtml.trim() ? localEmailBodyHtml : null,
+      emailBodyText: null,
+      // Fase A — solo se persisten si hay canal email habilitado. Si no, defaults
+      // razonables (10 + null) para no contaminar maestros sin email.
+      umbralCorporativo: hasEmailChannel ? Math.max(1, localUmbralCorporativo) : 10,
+      itemsConfig: hasEmailChannel && JSON.stringify(localItemsConfig) !== JSON.stringify(DEFAULT_ITEMS_CONFIG)
+        ? JSON.stringify(localItemsConfig)
+        : null,
+      sampleDataJson: hasEmailChannel ? localSampleDataJson : null,
     }
     submitTemplate(payload, /*confirmSwap*/ false)
   }
@@ -460,7 +547,12 @@ export function CampaignTemplateFormPage() {
     setPendingPayload(null)
   }
 
-  if (isEdit && loadingTemplate) return <div className="py-12 text-center text-gray-400">Cargando...</div>
+  // No renderizar el form hasta tener: (a) el template existente si es edit,
+  // y (b) la lista de agentes — sin esa lista el <select> de Agente IA
+  // muestra "-- Seleccionar --" en vez del agente vinculado porque la option
+  // correspondiente al value todavía no existe en el DOM.
+  if ((isEdit && loadingTemplate) || loadingAgents)
+    return <div className="py-12 text-center text-gray-400">Cargando...</div>
   if (isEdit && templateError) return (
     <div className="py-12 text-center">
       <p className="text-red-500 mb-4">Error al cargar la campaña maestro.</p>
@@ -481,11 +573,15 @@ export function CampaignTemplateFormPage() {
   // Tab "Acciones" oculto a usuarios — la asignación de acciones a maestros
   // se hace desde Admin → Editar Cliente → "Acciones asignadas". Acá solo
   // confundía porque el cliente final no debería tocar webhooks.
+
   const tabs = [
     { key: 'general' as const, label: 'General', icon: Globe, hasError: hasGeneralErrors },
     { key: 'labels' as const, label: 'Etiquetas', icon: Tag, badge: selectedLabelIds.length },
     { key: 'prompt' as const, label: 'Prompt', icon: FileText, badge: selectedPromptIds.length },
     { key: 'documents' as const, label: 'Documentos', icon: Paperclip },
+    ...(hasEmailChannel
+      ? [{ key: 'email' as const, label: 'Correo', icon: Mail, badge: localEmailBodyHtml ? 1 : 0 }]
+      : []),
   ]
 
   return (
@@ -1213,6 +1309,22 @@ export function CampaignTemplateFormPage() {
                 </div>
               )
             )}
+
+            {/* ─── TAB: Correo (plantilla HTML personalizable) ─── */}
+            {activeTab === 'email' && hasEmailChannel && (
+              <EmailTemplateTab
+                subject={localEmailSubject}
+                htmlBody={localEmailBodyHtml}
+                itemsConfig={localItemsConfig}
+                umbralCorporativo={localUmbralCorporativo}
+                sampleDataJson={localSampleDataJson}
+                onSubjectChange={setLocalEmailSubject}
+                onHtmlChange={setLocalEmailBodyHtml}
+                onItemsConfigChange={setLocalItemsConfig}
+                onUmbralChange={setLocalUmbralCorporativo}
+                onSampleDataChange={setLocalSampleDataJson}
+              />
+            )}
           </div>
         </div>
         )}
@@ -1318,6 +1430,21 @@ export function CampaignTemplateFormPage() {
         }
         confirmLabel="Sí, cambiar primario"
         variant="default"
+      />
+      <ToastContainer toasts={toasts} onRemove={remove} />
+
+      <MessageDialog
+        open={!!messageDialog}
+        onClose={() => {
+          const wasSuccess = messageDialog?.kind === 'success'
+          setMessageDialog(null)
+          // Al confirmar el modal de éxito, volvemos al listado.
+          if (wasSuccess) navigate('/campaign-templates')
+        }}
+        kind={messageDialog?.kind ?? 'info'}
+        title={messageDialog?.title ?? ''}
+        description={messageDialog?.description}
+        detail={messageDialog?.detail}
       />
     </div>
   )

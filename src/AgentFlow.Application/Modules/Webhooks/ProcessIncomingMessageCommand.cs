@@ -151,6 +151,32 @@ public class ProcessIncomingMessageHandler(
 
         var existingConv = await conversations.GetLatestByPhoneAsync(cmd.TenantId, cmd.FromPhone, ct);
 
+        // ── OVERRIDE: respetar la campaña activa de la conversación ──
+        // El AgentRegistry mapea slug→template global del tenant (ej: "cobros" → "Copia
+        // de Cobros Pasesa"). Pero si la conversación viene de una campaña con OTRO
+        // template (ej: "Cobros Prueba II"), el mensaje INICIAL salió con ese template
+        // y la RESPUESTA debe seguir usando el mismo — si no, el cliente ve dos
+        // identidades distintas (ej: "Sofía/SOMOS Seguros" al inicio y "PASESA" al
+        // responder). Aquí priorizamos la campaña activa sobre el registry global.
+        if (existingConv?.CampaignId is not null
+            && existingConv.Status != ConversationStatus.Closed)
+        {
+            var campaign = await conversations.GetCampaignAsync(existingConv.CampaignId.Value, ct);
+            var isCampaignLive = campaign is not null
+                && campaign.IsActive
+                && campaign.Status != Domain.Enums.CampaignStatus.Completed
+                && campaign.Status != Domain.Enums.CampaignStatus.Cancelled
+                && campaign.Status != Domain.Enums.CampaignStatus.Failed;
+            if (isCampaignLive && campaign!.CampaignTemplateId.HasValue)
+            {
+                logger.LogInformation(
+                    "Brain: conversación {ConvId} pertenece a campaña activa {CampaignId} — respetando su template {TemplateId} en lugar del slug '{Slug}' del AgentRegistry.",
+                    existingConv.Id, campaign.Id, campaign.CampaignTemplateId, decision.AgentSlug);
+                brainCampaignTemplateId = campaign.CampaignTemplateId;
+                agentId = campaign.AgentDefinitionId;
+            }
+        }
+
         var dispatch = new DispatchResult(
             ExistingConversationId: existingConv?.Id,
             SelectedAgentId: agentId,

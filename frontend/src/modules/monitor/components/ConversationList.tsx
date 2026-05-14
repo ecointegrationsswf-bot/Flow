@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Search, CalendarRange, X } from 'lucide-react'
+import { Search, CalendarRange, X, MessageSquare, Mail, Smartphone } from 'lucide-react'
 import { differenceInMinutes } from 'date-fns'
 import type { ConversationSummary, ConversationStatus } from '@/shared/types'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
@@ -47,6 +47,9 @@ export function ConversationList({
   const [search, setSearch] = useState('')
   const [filterAgent, setFilterAgent] = useState('')
   const [filterStatus, setFilterStatus] = useState<ConversationStatus | ''>('')
+  // Filtro por canal — útil cuando el tenant maneja campañas WhatsApp + Email
+  // simultáneamente. 'all' muestra todo (default).
+  const [filterChannel, setFilterChannel] = useState<'all' | 'WhatsApp' | 'Email' | 'Sms'>('all')
 
   const agentNames = useMemo(() => {
     const names = new Set<string>()
@@ -69,6 +72,27 @@ export function ConversationList({
     return Array.from(byPhone.values())
   }, [conversations])
 
+  // Conteos por canal — semántica distinta según el canal:
+  //   • WhatsApp/SMS: cuentan CONVERSACIONES únicas (un diálogo persistente por cliente).
+  //   • Email: cuenta CORREOS ENVIADOS en el rango de fechas del filtro, no
+  //     conversaciones únicas. Esto refleja "envíos por día" — si mañana
+  //     reenvías a los mismos 2 contactos, el badge sumará 2 más, no se queda en 2.
+  //     Para esto sumamos outboundEmailCount sobre TODAS las conversaciones del
+  //     rango (no las dedupeadas), porque ese contador ya viene calculado del
+  //     backend con la misma ventana de fecha civil PA que el filtro principal.
+  const channelCounts = useMemo(() => {
+    const counts = { WhatsApp: 0, Email: 0, Sms: 0, all: deduplicated.length }
+    for (const c of deduplicated) {
+      if (c.channel === 'WhatsApp') counts.WhatsApp++
+      else if (c.channel === 'Sms') counts.Sms++
+    }
+    // Email: suma envíos en el rango sobre la lista NO deduplicada.
+    for (const c of conversations) {
+      if (c.channel === 'Email') counts.Email += c.outboundEmailCount ?? 0
+    }
+    return counts
+  }, [deduplicated, conversations])
+
   const filtered = deduplicated.filter((c) => {
     if (search) {
       const q = search.toLowerCase()
@@ -81,6 +105,7 @@ export function ConversationList({
       if (agentLabel !== filterAgent) return false
     }
     if (filterStatus && c.status !== filterStatus) return false
+    if (filterChannel !== 'all' && c.channel !== filterChannel) return false
     return true
   })
 
@@ -139,6 +164,41 @@ export function ConversationList({
         </select>
       </div>
 
+      {/* Channel filter tabs — el tenant puede tener campañas WhatsApp + Email
+          simultáneamente. Esto le permite ver solo lo que le interesa sin
+          confundir vistas de un canal con el otro. */}
+      <div className="flex gap-1 px-4 pb-2">
+        <ChannelTab
+          label="Todos"
+          count={channelCounts.all}
+          active={filterChannel === 'all'}
+          onClick={() => setFilterChannel('all')}
+        />
+        <ChannelTab
+          label="WhatsApp"
+          icon={<MessageSquare className="h-3 w-3" />}
+          count={channelCounts.WhatsApp}
+          active={filterChannel === 'WhatsApp'}
+          onClick={() => setFilterChannel('WhatsApp')}
+        />
+        <ChannelTab
+          label="Email"
+          icon={<Mail className="h-3 w-3" />}
+          count={channelCounts.Email}
+          active={filterChannel === 'Email'}
+          onClick={() => setFilterChannel('Email')}
+        />
+        {channelCounts.Sms > 0 && (
+          <ChannelTab
+            label="SMS"
+            icon={<Smartphone className="h-3 w-3" />}
+            count={channelCounts.Sms}
+            active={filterChannel === 'Sms'}
+            onClick={() => setFilterChannel('Sms')}
+          />
+        )}
+      </div>
+
       {/* Filters */}
       <div className="flex gap-2 px-4 pb-3">
         <select
@@ -175,6 +235,13 @@ export function ConversationList({
           const isSelected = selectedId === c.id
           const minutesSince = differenceInMinutes(new Date(), new Date(c.lastActivityAt))
           const isStale = minutesSince > 8 && c.status === 'WaitingClient'
+          // Para canal Email mostramos el asunto del último correo saliente —
+          // el lastMessagePreview suele ser HTML truncado (poco legible). El
+          // backend ya nos manda el Subject limpio en lastEmailSubject.
+          const isEmail = c.channel === 'Email'
+          const previewText = isEmail
+            ? (c.lastEmailSubject || c.lastMessagePreview || '—')
+            : (c.lastMessagePreview || '—')
           return (
             <button
               key={c.id}
@@ -210,10 +277,19 @@ export function ConversationList({
                     </span>
                   </div>
                   <div className="mt-0.5 flex items-center justify-between gap-2">
-                    <p className="truncate text-xs text-gray-500">
-                      {c.lastMessagePreview ?? '—'}
+                    <p className="truncate text-xs text-gray-500 flex items-center gap-1">
+                      {isEmail && <Mail className="h-3 w-3 shrink-0 text-blue-500" />}
+                      <span className="truncate">{previewText}</span>
                     </p>
                     <div className="flex shrink-0 items-center gap-1">
+                      {isEmail && (c.outboundEmailCount ?? 0) > 0 && (
+                        <span
+                          className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                          title={`${c.outboundEmailCount} correo(s) enviado(s) en el rango`}
+                        >
+                          {c.outboundEmailCount}
+                        </span>
+                      )}
                       {c.isHumanHandled && (
                         <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">H</span>
                       )}
@@ -226,5 +302,38 @@ export function ConversationList({
         })}
       </div>
     </aside>
+  )
+}
+
+/** Tab pill para el filtro por canal del Monitor. */
+function ChannelTab({
+  label, icon, count, active, onClick,
+}: {
+  label: string
+  icon?: React.ReactNode
+  count: number
+  active: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-medium transition-colors ${
+        active
+          ? 'bg-blue-600 text-white shadow-sm'
+          : 'bg-[#f6f6f6] text-gray-600 hover:bg-gray-200'
+      }`}
+    >
+      {icon}
+      <span>{label}</span>
+      <span
+        className={`ml-0.5 rounded-full px-1.5 text-[10px] font-semibold ${
+          active ? 'bg-white/25 text-white' : 'bg-white text-gray-500'
+        }`}
+      >
+        {count}
+      </span>
+    </button>
   )
 }

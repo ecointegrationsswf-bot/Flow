@@ -34,7 +34,14 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         await SendAsync(toEmail, fullName, subject, html, ct);
     }
 
-    protected virtual async Task SendAsync(
+    /// <summary>
+    /// Despacha el correo y devuelve el ID externo del provider si está
+    /// disponible (Resend devuelve un "id" en el JSON de respuesta; SendGrid
+    /// devuelve X-Message-Id en headers, pero acá lo dejamos null porque no
+    /// se usa hoy). Llamarse desde SendCustomHtmlAsync para persistirlo en
+    /// Message.ExternalMessageId y poder correlacionar webhooks de delivery.
+    /// </summary>
+    protected virtual async Task<string?> SendAsync(
         string toEmail, string toName, string subject, string htmlContent,
         CancellationToken ct,
         IEnumerable<string>? bccEmails = null,
@@ -81,6 +88,15 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
             throw new InvalidOperationException(
                 $"SendGrid rechazó el envío a {toEmail}: HTTP {(int)response.StatusCode}. {preview}");
         }
+
+        // SendGrid expone X-Message-Id en headers — útil para webhooks/event API.
+        if (response.Headers != null
+            && response.Headers.TryGetValues("X-Message-Id", out var xmid))
+        {
+            var id = xmid.FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(id)) return id;
+        }
+        return null;
     }
 
     private string BuildAdminTemplate(string fullName, string email, string password)
@@ -437,6 +453,21 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         </body>
         </html>
         """;
+    }
+
+    /// <summary>
+    /// Envía un correo con HTML libre (ya renderizado con variables resueltas).
+    /// El parámetro textBody no se usa con SendGrid (acepta solo HTML); se incluye
+    /// en la interfaz para los providers SMTP que sí lo aprovechan.
+    /// </summary>
+    public async Task<string?> SendCustomHtmlAsync(
+        string toEmail, string? ccEmail,
+        string subject, string htmlBody, string? textBody,
+        CancellationToken ct = default)
+    {
+        _ = textBody; // SendGrid envía solo HTML — textBody solo aplica a SMTP
+        // toName vacío: no tenemos un nombre real del destinatario en este caller.
+        return await SendAsync(toEmail, "", subject, htmlBody, ct, bccEmails: null, ccEmail: ccEmail);
     }
 
     public async Task SendLabelingSummaryAsync(

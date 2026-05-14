@@ -1,5 +1,6 @@
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Email;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -28,15 +29,197 @@ public record CampaignTemplateRequest(
     string OutOfContextPolicy = "Contain",
     // Fase 2 — Campaign Automation Worker
     string? FollowUpMessagesJson = null,
-    string? AutoCloseMessage = null
+    string? AutoCloseMessage = null,
+    // Plantilla de correo personalizable (Fase 4 — tab "Correo")
+    string? EmailSubject = null,
+    string? EmailBodyHtml = null,
+    string? EmailBodyText = null,
+    // Layout adaptativo del correo (Fase A)
+    int UmbralCorporativo = 10,
+    string? ItemsConfig = null,
+    // Archivo modelo parseado — primera fila con TODOS los campos del JSON
+    // que vendrá en runtime. Lo usa el frontend para poblar dropdowns y el
+    // backend para renderizar previews con datos reales.
+    string? SampleDataJson = null
     // Fase 3 — el etiquetado IA ya NO se configura aquí. Vive en /admin/scheduled-jobs.
 );
+
+public record EmailPreviewRequest(string? Subject, string? HtmlBody, string? TextBody, string? ItemsConfig = null, int UmbralCorporativo = 10, string? SampleDataJson = null);
+public record EmailTestSendRequest(string ToEmail, string? Subject, string? HtmlBody, string? TextBody, string? ItemsConfig = null, int UmbralCorporativo = 10, string? SampleDataJson = null);
 
 [ApiController]
 [Route("api/campaign-templates")]
 [Authorize]
-public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbContext db) : ControllerBase
+public class CampaignTemplatesController(
+    ITenantContext tenantCtx,
+    AgentFlowDbContext db,
+    EmailTemplateRenderer emailRenderer,
+    IEmailService emailService,
+    AgentFlow.Application.Modules.Campaigns.IFixedFormatCampaignService fixedFormatService) : ControllerBase
 {
+    /// <summary>
+    /// Datos de ejemplo para renderizar previews del template del correo.
+    /// Match con los slots del EmailRenderContext — el usuario los ve en el frontend
+    /// como "datos de ejemplo" antes de mandar el correo de prueba.
+    /// </summary>
+    /// <summary>
+    /// Construye un EmailRenderContext de muestra. Si <paramref name="sampleDataJson"/>
+    /// trae el JSON real del archivo modelo del maestro, lo usa como
+    /// <c>ClienteDatosJson</c> (de modo que el preview refleja los campos
+    /// reales que el cliente recibirá). Si no, cae a un sample hardcoded
+    /// para seguros (María Lucía con 2 pólizas).
+    /// </summary>
+    private static EmailRenderContext SampleRenderContext(
+        string? itemsConfigJson = null, int umbral = 10, string? sampleDataJson = null)
+    {
+        // Defaults hardcoded — se usan cuando el maestro no tiene archivo modelo.
+        const string FALLBACK_JSON =
+            "[" +
+            "{\"numero\":\"AUT-2024-08471\",\"aseguradora\":\"ASSA\",\"ramo\":\"Auto\",\"saldo\":\"B/. 487.50\",\"marca\":\"Toyota Corolla 2022\",\"placa\":\"1234ABC\",\"vencimiento\":\"30 mayo 2026\",\"cuotas_pendientes\":\"2\"}," +
+            "{\"numero\":\"VID-2023-12390\",\"aseguradora\":\"Sura\",\"ramo\":\"Vida\",\"saldo\":\"B/. 215.00\",\"beneficiarios\":\"2\",\"vencimiento\":\"15 junio 2026\",\"cuotas_pendientes\":\"1\"}" +
+            "]";
+        var datos = !string.IsNullOrWhiteSpace(sampleDataJson) ? sampleDataJson : FALLBACK_JSON;
+
+        return new EmailRenderContext
+        {
+            ClienteNombre      = "María Lucía Martínez",
+            ClienteTelefono    = "+507 6234-5678",
+            ClienteEmail       = "maria.martinez@example.com",
+            ClientePoliza      = "AUT-2024-08471",
+            ClienteAseguradora = "ASSA Compañía de Seguros",
+            ClienteSaldo       = "B/. 702.50",
+            ClienteDatosJson   = datos,
+            ConversacionResumen = "Cliente confirmó compromiso de pago por SINPE para el viernes 23 de mayo.",
+            ConversacionMensajesHtml = "<p><b>Cliente:</b> Hola, ¿cuánto debo?</p><p><b>Agente:</b> Tu saldo total es B/. 702.50 en 2 pólizas.</p>",
+            ConversacionEstado = "Compromiso de pago",
+            CampanaNombre = "Cobros Mayo 2026",
+            AgenteNombre  = "Ana",
+            TenantNombre  = "Mi Corredor",
+            Fecha = DateTime.UtcNow.ToString("dd/MM/yyyy"),
+            Hora  = DateTime.UtcNow.ToString("HH:mm"),
+            ItemsConfigJson = itemsConfigJson,
+            UmbralCorporativo = umbral,
+        };
+    }
+
+    /// <summary>
+    /// Parsea un archivo modelo (Excel/CSV en formato fijo) y devuelve:
+    ///   - <c>columns</c>: lista de columnas detectadas (4 fijas + extras)
+    ///   - <c>sampleRow</c>: primer registro completo como objeto JSON
+    ///   - <c>sampleDataJson</c>: array JSON con TODOS los registros del primer
+    ///     contacto (formato idéntico al ContactDataJson que produce el
+    ///     dispatcher al lanzar la campaña). Sirve para persistir en el maestro
+    ///     y usarlo en previews.
+    /// El usuario sube acá su archivo modelo desde el tab Correo del maestro,
+    /// y los dropdowns de mapeo se alimentan con las columnas reales.
+    /// </summary>
+    [HttpPost("email/parse-sample")]
+    [RequestSizeLimit(10 * 1024 * 1024)]
+    public IActionResult ParseEmailSample(IFormFile file)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { error = "Archivo vacío." });
+
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (ext is not ".xlsx" and not ".xls" and not ".csv")
+            return BadRequest(new { error = "Formato no soportado. Use Excel (.xlsx/.xls) o CSV." });
+
+        AgentFlow.Application.Modules.Campaigns.FixedFormatParseResult parsed;
+        using (var stream = file.OpenReadStream())
+            parsed = fixedFormatService.Parse(stream, file.FileName);
+
+        if (parsed.Contacts.Count == 0)
+            return BadRequest(new
+            {
+                error = "No se pudo extraer ningún contacto del archivo.",
+                warnings = parsed.Warnings,
+            });
+
+        var firstContact = parsed.Contacts[0];
+        var sampleDataJson = firstContact.ContactDataJson;
+
+        // Extraer las columnas del primer registro (claves del primer objeto del array).
+        var columns = new List<string>();
+        object? firstRow = null;
+        if (!string.IsNullOrWhiteSpace(sampleDataJson))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(sampleDataJson);
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array
+                    && doc.RootElement.GetArrayLength() > 0)
+                {
+                    var first = doc.RootElement[0];
+                    if (first.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        foreach (var p in first.EnumerateObject())
+                            columns.Add(p.Name);
+                        firstRow = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, object?>>(first.GetRawText());
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ParseEmailSample] No se pudo parsear sample json: {ex.Message}");
+            }
+        }
+
+        return Ok(new
+        {
+            columns,
+            sampleRow = firstRow,
+            sampleDataJson,
+            totalContacts = parsed.Contacts.Count,
+            totalRowsRead = parsed.TotalRowsRead,
+            extraColumns = parsed.ExtraColumns,
+            warnings = parsed.Warnings,
+        });
+    }
+
+    /// <summary>
+    /// Renderiza la plantilla con datos de ejemplo. No envía nada — devuelve el
+    /// asunto y HTML resueltos para que el frontend los muestre en un modal preview.
+    /// </summary>
+    [HttpPost("email/preview")]
+    public IActionResult EmailPreview([FromBody] EmailPreviewRequest req)
+    {
+        var ctx = SampleRenderContext(req.ItemsConfig, req.UmbralCorporativo, req.SampleDataJson);
+        var rendered = emailRenderer.Render(req.Subject, req.HtmlBody, req.TextBody, ctx);
+        return Ok(new { subject = rendered.Subject, htmlBody = rendered.HtmlBody, textBody = rendered.TextBody });
+    }
+
+    /// <summary>
+    /// Envía un correo de prueba al email indicado con datos de ejemplo.
+    /// Útil para que el admin valide en su bandeja real cómo se ve en Gmail/Outlook
+    /// antes de lanzar la campaña.
+    /// </summary>
+    [HttpPost("email/test-send")]
+    public async Task<IActionResult> EmailTestSend([FromBody] EmailTestSendRequest req, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(req.ToEmail))
+            return BadRequest(new { error = "Falta el email destinatario." });
+
+        var ctx = SampleRenderContext(req.ItemsConfig, req.UmbralCorporativo, req.SampleDataJson);
+        var rendered = emailRenderer.Render(req.Subject, req.HtmlBody, req.TextBody, ctx);
+
+        var subject = string.IsNullOrWhiteSpace(rendered.Subject)
+            ? "[Prueba] Plantilla de correo"
+            : $"[Prueba] {rendered.Subject}";
+
+        try
+        {
+            await emailService.SendCustomHtmlAsync(
+                req.ToEmail.Trim(), ccEmail: null,
+                subject, rendered.HtmlBody, rendered.TextBody,
+                ct);
+            return Ok(new { ok = true, sentTo = req.ToEmail.Trim() });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = $"No se pudo enviar: {ex.Message}" });
+        }
+    }
+
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)
     {
@@ -48,6 +231,9 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             {
                 t.Id, t.Name, t.AgentDefinitionId,
                 AgentName = db.AgentDefinitions.Where(a => a.Id == t.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
+                // Necesario en el frontend para evitar que el dropdown deje seleccionar
+                // maestros cuyo agente esté inactivo.
+                AgentIsActive = db.AgentDefinitions.Where(a => a.Id == t.AgentDefinitionId).Select(a => (bool?)a.IsActive).FirstOrDefault(),
                 t.FollowUpHours, t.FollowUpMessagesJson,
                 t.AutoCloseHours, t.AutoCloseMessage,
                 t.LabelIds,
@@ -57,6 +243,8 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 t.MaxRetries, t.RetryIntervalHours, t.InactivityCloseHours,
                 t.CloseConditionKeyword, t.MaxTokens,
                 t.AttentionDays, t.AttentionStartTime, t.AttentionEndTime,
+                t.EmailSubject, t.EmailBodyHtml, t.EmailBodyText, t.EmailTemplateUpdatedAt,
+                t.UmbralCorporativo, t.ItemsConfig, t.SampleDataJson,
                 t.IsActive, t.CreatedAt, t.UpdatedAt
             })
             .ToListAsync(ct);
@@ -84,6 +272,8 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
                 x.CloseConditionKeyword, x.MaxTokens,
                 x.AttentionDays, x.AttentionStartTime, x.AttentionEndTime,
                 OutOfContextPolicy = x.OutOfContextPolicy.ToString(),
+                x.EmailSubject, x.EmailBodyHtml, x.EmailBodyText, x.EmailTemplateUpdatedAt,
+                x.UmbralCorporativo, x.ItemsConfig, x.SampleDataJson,
                 x.IsActive, x.CreatedAt, x.UpdatedAt
             })
             .FirstOrDefaultAsync(ct);
@@ -102,6 +292,17 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
 
         var tenantId = tenantCtx.TenantId;
+
+        // Validación crítica del SystemPrompt: el CampaignTemplate es la ÚNICA
+        // fuente del prompt en el sistema. Sin prompt, el agente responde con
+        // el canned + escalación a humano, y la campaña queda inservible. El
+        // AgentDefinition NO tiene prompt — solo el template.
+        if (string.IsNullOrWhiteSpace(req.SystemPrompt))
+            return BadRequest(new
+            {
+                error = "El maestro debe tener un SystemPrompt — es la única fuente del prompt del agente. Escribilo antes de guardar.",
+                field = "systemPrompt",
+            });
 
         // Validación + swap del maestro primario (no-Brain). Si el agente ya
         // tiene un maestro primario y el admin no confirmó el swap, retorna 409.
@@ -139,6 +340,13 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             AttentionEndTime = req.AttentionEndTime,
             OutOfContextPolicy = Enum.TryParse<AgentFlow.Domain.Enums.OutOfContextPolicy>(req.OutOfContextPolicy, out var policy)
                 ? policy : AgentFlow.Domain.Enums.OutOfContextPolicy.Contain,
+            EmailSubject = string.IsNullOrWhiteSpace(req.EmailSubject) ? null : req.EmailSubject,
+            EmailBodyHtml = string.IsNullOrWhiteSpace(req.EmailBodyHtml) ? null : req.EmailBodyHtml,
+            EmailBodyText = string.IsNullOrWhiteSpace(req.EmailBodyText) ? null : req.EmailBodyText,
+            EmailTemplateUpdatedAt = !string.IsNullOrWhiteSpace(req.EmailBodyHtml) ? DateTime.UtcNow : null,
+            UmbralCorporativo = req.UmbralCorporativo > 0 ? req.UmbralCorporativo : 10,
+            ItemsConfig = string.IsNullOrWhiteSpace(req.ItemsConfig) ? null : req.ItemsConfig,
+            SampleDataJson = string.IsNullOrWhiteSpace(req.SampleDataJson) ? null : req.SampleDataJson,
         };
 
         db.CampaignTemplates.Add(template);
@@ -155,6 +363,14 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
     {
         if (req.ActionConfigs != null && req.ActionConfigs.Length > 50000)
             return BadRequest(new { error = "ActionConfigs excede el tamaño máximo permitido." });
+
+        // Misma validación que Create: SystemPrompt obligatorio.
+        if (string.IsNullOrWhiteSpace(req.SystemPrompt))
+            return BadRequest(new
+            {
+                error = "El maestro debe tener un SystemPrompt — es la única fuente del prompt del agente. Escribilo antes de guardar.",
+                field = "systemPrompt",
+            });
 
         var tenantId = tenantCtx.TenantId;
         var template = await db.CampaignTemplates
@@ -196,6 +412,20 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
         template.AttentionEndTime = req.AttentionEndTime;
         template.OutOfContextPolicy = Enum.TryParse<AgentFlow.Domain.Enums.OutOfContextPolicy>(req.OutOfContextPolicy, out var pol)
             ? pol : AgentFlow.Domain.Enums.OutOfContextPolicy.Contain;
+
+        // Email template: si cambió cualquiera de los 3 campos, actualizar timestamp.
+        var emailChanged =
+            (template.EmailSubject ?? string.Empty)  != (req.EmailSubject ?? string.Empty) ||
+            (template.EmailBodyHtml ?? string.Empty) != (req.EmailBodyHtml ?? string.Empty) ||
+            (template.EmailBodyText ?? string.Empty) != (req.EmailBodyText ?? string.Empty);
+        template.EmailSubject  = string.IsNullOrWhiteSpace(req.EmailSubject)  ? null : req.EmailSubject;
+        template.EmailBodyHtml = string.IsNullOrWhiteSpace(req.EmailBodyHtml) ? null : req.EmailBodyHtml;
+        template.EmailBodyText = string.IsNullOrWhiteSpace(req.EmailBodyText) ? null : req.EmailBodyText;
+        if (emailChanged) template.EmailTemplateUpdatedAt = DateTime.UtcNow;
+        template.UmbralCorporativo = req.UmbralCorporativo > 0 ? req.UmbralCorporativo : 10;
+        template.ItemsConfig = string.IsNullOrWhiteSpace(req.ItemsConfig) ? null : req.ItemsConfig;
+        template.SampleDataJson = string.IsNullOrWhiteSpace(req.SampleDataJson) ? null : req.SampleDataJson;
+
         template.UpdatedAt = DateTime.UtcNow;
 
         // HasConversion en List<int> no tiene ValueComparer — marcar explícitamente como modificado
@@ -330,6 +560,13 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
             AttentionDays = [.. original.AttentionDays],
             AttentionStartTime = original.AttentionStartTime,
             AttentionEndTime = original.AttentionEndTime,
+            EmailSubject  = original.EmailSubject,
+            EmailBodyHtml = original.EmailBodyHtml,
+            EmailBodyText = original.EmailBodyText,
+            EmailTemplateUpdatedAt = original.EmailTemplateUpdatedAt,
+            UmbralCorporativo = original.UmbralCorporativo,
+            ItemsConfig = original.ItemsConfig,
+            SampleDataJson = original.SampleDataJson,
             IsActive = true,
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
@@ -349,9 +586,51 @@ public class CampaignTemplatesController(ITenantContext tenantCtx, AgentFlowDbCo
 
         if (template is null) return NotFound();
 
+        // Bloqueamos el delete si hay campañas vinculadas. Permitimos al cliente
+        // ver el listado de las primeras 10 y proponer la alternativa: inactivar.
+        var totalLinked = await db.Campaigns.CountAsync(c => c.CampaignTemplateId == id, ct);
+        if (totalLinked > 0)
+        {
+            var sample = await db.Campaigns
+                .Where(c => c.CampaignTemplateId == id)
+                .OrderByDescending(c => c.CreatedAt)
+                .Select(c => new { c.Id, c.Name, status = c.Status.ToString(), c.CreatedAt })
+                .Take(10)
+                .ToListAsync(ct);
+            return Conflict(new
+            {
+                error = $"No se puede eliminar el maestro: está vinculado a {totalLinked} campaña{(totalLinked == 1 ? "" : "s")}.",
+                totalCampaigns = totalLinked,
+                campaigns = sample,
+                suggestion = "deactivate",
+                templateName = template.Name,
+            });
+        }
+
         db.CampaignTemplates.Remove(template);
         await db.SaveChangesAsync(ct);
         return Ok(new { message = "Maestro eliminado." });
+    }
+
+    /// <summary>
+    /// Inactiva un maestro sin borrarlo. Lo deja IsActive=false y limpia el flag
+    /// IsPrimaryForAgent para que no se siga eligiendo como primario. Las
+    /// campañas existentes vinculadas siguen funcionando con la config actual.
+    /// </summary>
+    [HttpPost("{id:guid}/deactivate")]
+    public async Task<IActionResult> Deactivate(Guid id, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var template = await db.CampaignTemplates
+            .FirstOrDefaultAsync(t => t.Id == id && t.TenantId == tenantId, ct);
+        if (template is null) return NotFound();
+
+        template.IsActive = false;
+        template.IsPrimaryForAgent = false;
+        template.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { ok = true, message = "Maestro inactivado.", template.Id });
     }
 
     /// <summary>

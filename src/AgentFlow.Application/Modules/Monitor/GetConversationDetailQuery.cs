@@ -27,7 +27,13 @@ public record MessageDetail(
     DateTime SentAt,
     string? ExternalMessageId,
     string? AgentName,
-    string? DetectedIntent
+    string? DetectedIntent,
+    // Phase 1 outbound tracking — diferenciamos mensajes por canal en el monitor.
+    // Si Channel es null, el mensaje usa el canal de la Conversation.
+    string? Channel,
+    string? Subject,
+    string? Recipient,
+    string Status
 );
 
 public class GetConversationDetailHandler(IConversationRepository repo)
@@ -69,7 +75,11 @@ public class GetConversationDetailHandler(IConversationRepository repo)
                     m.SentAt,
                     m.ExternalMessageId,
                     m.AgentName,
-                    m.DetectedIntent
+                    m.DetectedIntent,
+                    m.Channel?.ToString(),
+                    m.Subject,
+                    m.Recipient,
+                    m.Status.ToString()
                 )),
             campaignName
         );

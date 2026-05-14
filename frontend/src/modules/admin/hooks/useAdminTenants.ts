@@ -13,6 +13,7 @@ export interface AdminTenant {
   createdAt: string
   whatsAppProvider: string
   whatsAppPhoneNumber: string
+  logoUrl: string | null
   userCount: number
 }
 
@@ -135,5 +136,35 @@ export function useChangeTenantUserPassword() {
       )
       return data
     },
+  })
+}
+
+/** Sube el logo del corredor (PNG/JPG/WEBP/SVG, max 5MB) y devuelve la URL pública. */
+export function useUploadTenantLogo() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ tenantId, file }: { tenantId: string; file: File }) => {
+      const fd = new FormData()
+      fd.append('file', file)
+      const { data } = await adminClient.post<{ logoUrl: string }>(
+        `/admin/tenants/${tenantId}/logo`, fd,
+        { headers: { 'Content-Type': 'multipart/form-data' } },
+      )
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'tenants'] }),
+  })
+}
+
+export function useRemoveTenantLogo() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (tenantId: string) => {
+      const { data } = await adminClient.delete<{ logoUrl: string | null }>(
+        `/admin/tenants/${tenantId}/logo`,
+      )
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['admin', 'tenants'] }),
   })
 }
