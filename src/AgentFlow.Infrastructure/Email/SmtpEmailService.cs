@@ -40,7 +40,7 @@ public class SmtpEmailService(IConfiguration config, ILogger<SmtpEmailService> l
     private string SmtpFromName => config["Smtp:FromName"] ?? "TalkIA";
     private bool SmtpUseSsl => !bool.TryParse(config["Smtp:UseSsl"], out var v) || v;
 
-    protected override async Task SendAsync(
+    protected override async Task<string?> SendAsync(
         string toEmail, string toName, string subject, string htmlContent,
         CancellationToken ct,
         IEnumerable<string>? bccEmails = null,
@@ -93,6 +93,9 @@ public class SmtpEmailService(IConfiguration config, ILogger<SmtpEmailService> l
             await client.SendMailAsync(msg, ct);
             log.LogInformation("[SMTP] Enviado a {Email} via {Host}:{Port} (subject={Subject}).",
                 toEmail, SmtpHost, SmtpPort, subject);
+            // SMTP no devuelve un ID externo correlacionable — el Message-Id del
+            // sobre lo conoce solo el receptor. Dejamos null.
+            return null;
         }
         catch (SmtpException ex)
         {

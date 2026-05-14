@@ -15,16 +15,20 @@ using Microsoft.EntityFrameworkCore;
 
 namespace AgentFlow.API.Controllers;
 
-public record CampaignUploadRequest(string Name, Guid AgentId, DateTime? ScheduledAt);
+public record CampaignUploadRequest(string Name, Guid AgentId, DateTime? ScheduledAt, string? Channel = null);
 public record LaunchV2Request(int WarmupDay = 0);
-public record UploadFixedFormatRequest([Required] string Name, [Required] Guid AgentId, DateTime? ScheduledAt, Guid? CampaignTemplateId = null);
+public record UploadFixedFormatRequest([Required] string Name, [Required] Guid AgentId, DateTime? ScheduledAt, Guid? CampaignTemplateId = null, string? Channel = null);
 
 public record CreateCampaignFromFileRequest(
     string Name,
     Guid AgentId,
     DateTime? ScheduledAt,
     string TempFilePath,
-    Dictionary<string, string> ColumnMapping
+    Dictionary<string, string> ColumnMapping,
+    // Canal de envío. Si no se especifica, se auto-detecta del agente:
+    //   - Si el agente tiene 1 canal habilitado → se usa ese
+    //   - Si tiene varios → debe venir explícito en la request (sino 400)
+    string? Channel = null
 );
 
 [ApiController]
@@ -335,6 +339,64 @@ public class CampaignsController(
     }
 
     /// <summary>
+    /// Devuelve los mensajes asociados a un contacto de campaña — útil para el
+    /// modal "ojo" de la lista, donde queremos mostrar el mensaje inicial, los
+    /// emails enviados, y eventualmente toda la conversación con el cliente.
+    ///
+    /// La asociación es Campaign.Id + ClientPhone == contact.PhoneNumber.
+    /// Devolvemos todos los Messages de la Conversation matcheada,
+    /// independientemente del canal (WhatsApp, Email, SMS).
+    /// </summary>
+    [HttpGet("{id:guid}/contacts/{contactId:guid}/messages")]
+    public async Task<IActionResult> GetContactMessages(
+        Guid id, Guid contactId, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var contact = await db.CampaignContacts
+            .Where(cc => cc.Id == contactId && cc.CampaignId == id)
+            .Select(cc => new { cc.PhoneNumber })
+            .FirstOrDefaultAsync(ct);
+        if (contact is null) return NotFound(new { error = "Contacto no encontrado." });
+
+        // Una conversación por (TenantId, CampaignId, ClientPhone) — la que abrió
+        // el bot al ejecutar la campaña. Si hay más de una (raro), tomamos la
+        // más reciente.
+        var conversation = await db.Conversations
+            .Where(c => c.TenantId == tenantId && c.CampaignId == id && c.ClientPhone == contact.PhoneNumber)
+            .OrderByDescending(c => c.LastActivityAt)
+            .Select(c => new { c.Id, c.Channel })
+            .FirstOrDefaultAsync(ct);
+
+        if (conversation is null)
+        {
+            // No hay conversación todavía (la campaña aún no lanzó el primer mensaje).
+            return Ok(new { conversationId = (Guid?)null, items = Array.Empty<object>() });
+        }
+
+        var messages = await db.Messages
+            .Where(m => m.ConversationId == conversation.Id)
+            .OrderBy(m => m.SentAt)
+            .Select(m => new
+            {
+                m.Id,
+                m.Content,
+                m.IsFromAgent,
+                Direction = m.Direction.ToString(),
+                m.SentAt,
+                m.ExternalMessageId,
+                m.AgentName,
+                m.DetectedIntent,
+                Channel = m.Channel.HasValue ? m.Channel.Value.ToString() : null,
+                m.Subject,
+                m.Recipient,
+                Status = m.Status.ToString(),
+            })
+            .ToListAsync(ct);
+
+        return Ok(new { conversationId = (Guid?)conversation.Id, items = messages });
+    }
+
+    /// <summary>
     /// Exporta el listado filtrado de contactos a Excel (.xlsx). Mismo
     /// criterio de filtro que ListContacts pero SIN paginar — exporta el
     /// universo completo del filtro actual.
@@ -501,6 +563,14 @@ public class CampaignsController(
     [HttpPost("create")]
     public async Task<IActionResult> CreateFromFile([FromBody] CreateCampaignFromFileRequest req, CancellationToken ct)
     {
+        // Resolver/validar el canal contra los canales habilitados del agente.
+        // Si el agente no tiene canales → rechazo total.
+        // Si tiene 1 → se usa ese, ignoramos lo que venga en el request.
+        // Si tiene >1 → el request DEBE especificar Channel y debe estar entre los habilitados.
+        var channelResolution = await ResolveCampaignChannelAsync(req.AgentId, req.Channel, ct);
+        if (channelResolution.Error is not null) return channelResolution.Error;
+        var resolvedChannel = channelResolution.Channel;
+
         var (fileStream, _) = await blobStorage.DownloadAsync(req.TempFilePath, ct);
         List<ContactRow> contactRows;
         using (fileStream)
@@ -515,7 +585,7 @@ public class CampaignsController(
             tenantCtx.TenantId,
             req.Name,
             req.AgentId,
-            ChannelType.WhatsApp,
+            resolvedChannel,
             CampaignTrigger.FileUpload,
             contactRows,
             CurrentUser,
@@ -528,18 +598,88 @@ public class CampaignsController(
         return Ok(new { campaignId, contactCount = contactRows.Count });
     }
 
+    /// <summary>
+    /// Resuelve el canal a usar para una campaña validando contra los canales
+    /// habilitados del agente. Retorna (resolvedChannel, null) si OK, o
+    /// (default, errorResult) si hay validación pendiente.
+    /// </summary>
+    private async Task<(ChannelType Channel, IActionResult? Error)>
+        ResolveCampaignChannelAsync(Guid agentId, string? requestedChannel, CancellationToken ct)
+    {
+        var agent = await db.AgentDefinitions
+            .Where(a => a.Id == agentId && a.TenantId == tenantCtx.TenantId)
+            .Select(a => new { a.Id, a.Name, a.EnabledChannels, a.IsActive })
+            .FirstOrDefaultAsync(ct);
+
+        if (agent is null)
+            return (default, NotFound(new { error = "Agente no encontrado." }));
+        if (!agent.IsActive)
+            return (default, BadRequest(new { error = "El agente está inactivo." }));
+
+        var enabled = agent.EnabledChannels ?? [];
+        if (enabled.Count == 0)
+        {
+            return (default, BadRequest(new
+            {
+                error = $"El agente '{agent.Name}' no tiene canales habilitados. " +
+                        "Editá el agente y habilitá al menos un canal antes de crear la campaña.",
+                field = "agentId",
+            }));
+        }
+
+        // 1 canal: usar ese sin importar el request
+        if (enabled.Count == 1) return (enabled[0], null);
+
+        // >1 canal: el request debe explicitar uno
+        if (string.IsNullOrWhiteSpace(requestedChannel))
+        {
+            return (default, BadRequest(new
+            {
+                error = $"El agente tiene varios canales habilitados ({string.Join(", ", enabled)}). " +
+                        "Especificá cuál usar para esta campaña.",
+                field = "channel",
+                availableChannels = enabled.Select(c => c.ToString()).ToArray(),
+            }));
+        }
+
+        if (!Enum.TryParse<ChannelType>(requestedChannel, true, out var parsed))
+        {
+            return (default, BadRequest(new
+            {
+                error = $"Canal '{requestedChannel}' no es válido.",
+                field = "channel",
+            }));
+        }
+
+        if (!enabled.Contains(parsed))
+        {
+            return (default, BadRequest(new
+            {
+                error = $"El agente '{agent.Name}' no tiene habilitado el canal {parsed}. " +
+                        $"Canales habilitados: {string.Join(", ", enabled)}.",
+                field = "channel",
+                availableChannels = enabled.Select(c => c.ToString()).ToArray(),
+            }));
+        }
+
+        return (parsed, null);
+    }
+
     [HttpPost("upload")]
     public async Task<IActionResult> UploadAndStart(
         [FromForm] CampaignUploadRequest req,
         IFormFile file,
         CancellationToken ct)
     {
+        var channelResolution = await ResolveCampaignChannelAsync(req.AgentId, req.Channel, ct);
+        if (channelResolution.Error is not null) return channelResolution.Error;
+
         var contacts = new List<ContactRow>();
         var campaignId = await mediator.Send(new StartCampaignCommand(
             tenantCtx.TenantId,
             req.Name,
             req.AgentId,
-            ChannelType.WhatsApp,
+            channelResolution.Channel,
             CampaignTrigger.FileUpload,
             contacts,
             CurrentUser,
@@ -657,11 +797,15 @@ public class CampaignsController(
                 warnings = parsed.Warnings
             });
 
+        // Validar/resolver canal contra los habilitados del agente.
+        var channelResolution = await ResolveCampaignChannelAsync(req.AgentId, req.Channel, ct);
+        if (channelResolution.Error is not null) return channelResolution.Error;
+
         var campaignId = await mediator.Send(new StartCampaignCommand(
             tenantCtx.TenantId,
             req.Name,
             req.AgentId,
-            ChannelType.WhatsApp,
+            channelResolution.Channel,
             CampaignTrigger.FileUpload,
             parsed.Contacts,
             CurrentUser,

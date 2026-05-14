@@ -12,6 +12,8 @@ public class CampaignTemplateConfiguration : IEntityTypeConfiguration<CampaignTe
         b.HasKey(t => t.Id);
         b.Property(t => t.Name).HasMaxLength(200).IsRequired();
         b.Property(t => t.EmailAddress).HasMaxLength(200);
+        b.Property(t => t.EmailSubject).HasMaxLength(300);
+        // EmailBodyHtml / EmailBodyText → nvarchar(MAX) por default al ser string?
 
         b.Property(t => t.FollowUpHours)
             .HasConversion(

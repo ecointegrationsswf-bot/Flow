@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Building2, Bot, Tag, Phone, Users, LogOut, Zap, FileText,
-  Calendar, TrendingDown, PanelLeftClose, PanelLeft, Inbox,
+  Calendar, TrendingDown, PanelLeftClose, PanelLeft, Inbox, Send,
 } from 'lucide-react'
 import { useSuperAdminStore } from '@/shared/stores/superAdminStore'
 
 const adminNav = [
   { to: '/admin/tenants',         icon: Building2,   label: 'Tenants'         },
   { to: '/admin/inbox',           icon: Inbox,       label: 'Inbox monitor'   },
+  { to: '/admin/outbox',          icon: Send,        label: 'Mensajes enviados' },
   { to: '/admin/agent-templates', icon: Bot,         label: 'Agentes'         },
   { to: '/admin/categories',      icon: Tag,         label: 'Categorías'      },
   { to: '/admin/whatsapp',        icon: Phone,       label: 'WhatsApp'        },

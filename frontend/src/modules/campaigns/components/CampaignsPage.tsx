@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect, useRef } from 'react'
+import { useState, useMemo, useEffect, useRef, useLayoutEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban, MoreVertical } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -57,12 +58,46 @@ export function CampaignsPage() {
   // Id de la campaña cuyo menú "..." está abierto. null = todos cerrados.
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  const menuBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
+  // Coordenadas absolutas en viewport para el dropdown (rendea via Portal).
+  // Necesario porque el wrapper de la tabla tiene overflow-x-auto que clipa
+  // el menú si se rendea dentro del flujo normal del DOM.
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
+
+  const placeMenu = (id: string) => {
+    const btn = menuBtnRefs.current.get(id)
+    if (!btn) return
+    const r = btn.getBoundingClientRect()
+    setMenuPos({ top: r.bottom + 4, right: window.innerWidth - r.right })
+  }
+
+  useLayoutEffect(() => {
+    if (openMenuId) placeMenu(openMenuId)
+    else setMenuPos(null)
+  }, [openMenuId])
+
+  // Si la ventana cambia tamaño / se hace scroll mientras el menú está abierto,
+  // recalculamos posición para que siga al botón.
+  useEffect(() => {
+    if (!openMenuId) return
+    const reflow = () => placeMenu(openMenuId)
+    window.addEventListener('resize', reflow)
+    window.addEventListener('scroll', reflow, true)
+    return () => {
+      window.removeEventListener('resize', reflow)
+      window.removeEventListener('scroll', reflow, true)
+    }
+  }, [openMenuId])
 
   // Cierra el menú al hacer click fuera o ESC
   useEffect(() => {
     if (!openMenuId) return
     const onDown = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpenMenuId(null)
+      const target = e.target as Node
+      const btn = menuBtnRefs.current.get(openMenuId)
+      // Click sobre el botón disparador → no cerrar (su onClick lo maneja)
+      if (btn && btn.contains(target)) return
+      if (menuRef.current && !menuRef.current.contains(target)) setOpenMenuId(null)
     }
     const onEsc = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpenMenuId(null) }
     document.addEventListener('mousedown', onDown)
@@ -366,17 +401,28 @@ export function CampaignsPage() {
                           {c.createdByUserId || '—'}
                         </td>
                         <td className="whitespace-nowrap px-2 py-1.5 text-right">
-                          <div className="relative inline-block" ref={openMenuId === c.id ? menuRef : undefined}>
+                          <div className="relative inline-block">
                             <button
-                              onClick={() => setOpenMenuId(openMenuId === c.id ? null : c.id)}
+                              ref={(el) => {
+                                if (el) menuBtnRefs.current.set(c.id, el)
+                                else menuBtnRefs.current.delete(c.id)
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setOpenMenuId(openMenuId === c.id ? null : c.id)
+                              }}
                               title="Acciones"
                               className="inline-flex items-center justify-center rounded-md p-1 text-gray-500 hover:bg-gray-100 hover:text-gray-700 transition-colors"
                             >
                               <MoreVertical className="h-4 w-4" />
                             </button>
 
-                            {openMenuId === c.id && (
-                              <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg ring-1 ring-black/5">
+                            {openMenuId === c.id && menuPos && createPortal(
+                              <div
+                                ref={menuRef}
+                                style={{ position: 'fixed', top: menuPos.top, right: menuPos.right, zIndex: 60 }}
+                                className="w-44 overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg ring-1 ring-black/5"
+                              >
                                 {/* Ver contactos — siempre disponible */}
                                 <Link
                                   to={`/campaigns/${c.id}/contacts`}
@@ -445,7 +491,8 @@ export function CampaignsPage() {
                                     </button>
                                   </>
                                 )}
-                              </div>
+                              </div>,
+                              document.body
                             )}
                           </div>
                         </td>

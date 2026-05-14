@@ -28,4 +28,20 @@ public interface IEmailService
         IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
         IEnumerable<string>? bccEmails = null,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Envía un correo con HTML libre — usado por la plantilla personalizable del
+    /// maestro de campaña (EmailBodyHtml ya renderizado con variables resueltas).
+    /// El asunto y el cuerpo ya vienen renderizados; el método solo despacha.
+    /// Devuelve el ID externo del provider (Resend id, SendGrid Message-Id, etc.)
+    /// para persistirlo en Message.ExternalMessageId y usarlo con webhooks de
+    /// delivery/bounce. Si el provider no expone id, devolver null.
+    /// </summary>
+    Task<string?> SendCustomHtmlAsync(
+        string toEmail,
+        string? ccEmail,
+        string subject,
+        string htmlBody,
+        string? textBody,
+        CancellationToken ct = default);
 }

@@ -36,7 +36,11 @@ public record UpdateSuperAdminRequest(string? FullName, string? Email, bool? IsA
 
 [ApiController]
 [Route("api/admin")]
-public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, IEmailService emailService) : ControllerBase
+public class SuperAdminController(
+    AgentFlowDbContext db,
+    IConfiguration config,
+    IEmailService emailService,
+    AgentFlow.Infrastructure.Storage.IBlobStorageService blobStorage) : ControllerBase
 {
     [HttpPost("login")]
     [EnableRateLimiting("auth")]
@@ -178,6 +182,7 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
             {
                 t.Id, t.Name, t.Slug, t.Country, t.MonthlyBillingAmount,
                 t.IsActive, t.CreatedAt, t.WhatsAppProvider, t.WhatsAppPhoneNumber,
+                t.LogoUrl,
                 UserCount = db.AppUsers.Count(u => u.TenantId == t.Id)
             })
             .OrderByDescending(t => t.CreatedAt)
@@ -231,6 +236,65 @@ public class SuperAdminController(AgentFlowDbContext db, IConfiguration config, 
 
         await db.SaveChangesAsync(ct);
         return Ok(new { tenant.Id, tenant.Name, tenant.Slug, tenant.Country, tenant.MonthlyBillingAmount, tenant.IsActive });
+    }
+
+    /// <summary>
+    /// Sube el logo del tenant a Azure Blob Storage (container "logos") y
+    /// guarda la URL pública en <c>Tenant.LogoUrl</c>. La URL se usa en el
+    /// header de los correos enviados a clientes.
+    /// </summary>
+    [HttpPost("tenants/{id:guid}/logo")]
+    [Authorize(Roles = "super_admin")]
+    [RequestSizeLimit(5 * 1024 * 1024)]
+    public async Task<IActionResult> UploadTenantLogo(Guid id, IFormFile file, CancellationToken ct)
+    {
+        if (file is null || file.Length == 0)
+            return BadRequest(new { error = "Archivo vacío." });
+
+        var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (ext is not ".png" and not ".jpg" and not ".jpeg" and not ".webp" and not ".svg")
+            return BadRequest(new { error = "Formato no soportado. Use PNG, JPG, WEBP o SVG." });
+
+        var tenant = await db.Tenants.FindAsync([id], ct);
+        if (tenant is null) return NotFound();
+
+        // Path único — incluye el tenant id para evitar colisiones.
+        var fileName = $"{id}/{DateTime.UtcNow:yyyyMMddHHmmss}{ext}";
+        var contentType = ext switch
+        {
+            ".png"  => "image/png",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".webp" => "image/webp",
+            ".svg"  => "image/svg+xml",
+            _       => "application/octet-stream",
+        };
+
+        byte[] bytes;
+        using (var ms = new MemoryStream())
+        {
+            await file.CopyToAsync(ms, ct);
+            bytes = ms.ToArray();
+        }
+
+        var url = await blobStorage.UploadToContainerAsync("logos", fileName, bytes, contentType, ct);
+
+        tenant.LogoUrl = url;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { logoUrl = url });
+    }
+
+    /// <summary>Quita el logo del tenant (deja LogoUrl en null). No borra el blob
+    /// físicamente — los blobs antiguos quedan huérfanos pero son inofensivos.</summary>
+    [HttpDelete("tenants/{id:guid}/logo")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> RemoveTenantLogo(Guid id, CancellationToken ct)
+    {
+        var tenant = await db.Tenants.FindAsync([id], ct);
+        if (tenant is null) return NotFound();
+        tenant.LogoUrl = null;
+        await db.SaveChangesAsync(ct);
+        return Ok(new { logoUrl = (string?)null });
     }
 
     // ───── Tenant Configuration (super admin gestiona todos los campos del tenant) ─────

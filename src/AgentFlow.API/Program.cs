@@ -113,6 +113,10 @@ Console.WriteLine(!string.IsNullOrEmpty(cfg["OpenAI:ApiKey"]) && cfg["OpenAI:Api
 // Filter del controller InternalEmailController — valida X-Internal-Email-Key.
 builder.Services.AddScoped<AgentFlow.API.Controllers.InternalEmailKeyFilter>();
 
+// EmailTemplateRenderer — usado por SendEmailResumeService (y futuras acciones)
+// para renderizar plantillas HTML del maestro con variables {{cliente.x}}.
+builder.Services.AddSingleton<AgentFlow.Infrastructure.Email.EmailTemplateRenderer>();
+
 // ── MediatR ────────────────────────────────────────────
 builder.Services.AddMediatR(c =>
     c.RegisterServicesFromAssemblies(
@@ -630,8 +634,104 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'AttentionEndTime')
             BEGIN ALTER TABLE CampaignTemplates ADD AttentionEndTime nvarchar(5) NOT NULL DEFAULT '17:00'; END");
+        // Plantilla de email personalizable (todas opcionales para no romper maestros antiguos).
+        // EmailSubject es nvarchar(1000) para soportar directivas Scriban condicionales
+        // (la plantilla sugerida con {{ if ... }}{{ else }}{{ end }} supera 300 chars).
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'EmailSubject')
+            BEGIN ALTER TABLE CampaignTemplates ADD EmailSubject nvarchar(1000) NULL; END");
+        // Si la columna ya existe con un size menor, agrandarla. Idempotente.
+        db.Database.ExecuteSqlRaw(@"
+            IF EXISTS (
+                SELECT 1 FROM sys.columns c
+                JOIN sys.types t ON t.user_type_id = c.user_type_id
+                WHERE c.object_id = OBJECT_ID('CampaignTemplates')
+                  AND c.name = 'EmailSubject'
+                  AND t.name = 'nvarchar'
+                  AND c.max_length BETWEEN 0 AND 1998 -- nvarchar(N) → max_length = 2*N
+            )
+            BEGIN ALTER TABLE CampaignTemplates ALTER COLUMN EmailSubject nvarchar(1000) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'EmailBodyHtml')
+            BEGIN ALTER TABLE CampaignTemplates ADD EmailBodyHtml nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'EmailBodyText')
+            BEGIN ALTER TABLE CampaignTemplates ADD EmailBodyText nvarchar(MAX) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'EmailTemplateUpdatedAt')
+            BEGIN ALTER TABLE CampaignTemplates ADD EmailTemplateUpdatedAt datetime2 NULL; END");
+        // Layout adaptativo del correo (Fase A): umbral + mapeo del dataset.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'UmbralCorporativo')
+            BEGIN ALTER TABLE CampaignTemplates ADD UmbralCorporativo int NOT NULL DEFAULT 10; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ItemsConfig')
+            BEGIN ALTER TABLE CampaignTemplates ADD ItemsConfig nvarchar(MAX) NULL; END");
+        // SampleDataJson — archivo modelo parseado para alimentar dropdowns y previews.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'SampleDataJson')
+            BEGIN ALTER TABLE CampaignTemplates ADD SampleDataJson nvarchar(MAX) NULL; END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] CampaignTemplates columns: {ex.Message}"); }
+
+    // ── Phase 1: outbound email tracking. Persistimos cada email enviado como
+    //    un Message en su Conversation. Estos campos permiten distinguir el
+    //    canal de cada mensaje individual y exponer subject/destinatario en
+    //    el monitor (que hoy es WhatsApp-centric). Channel NULL = hereda de
+    //    Conversation.Channel (compat con mensajes históricos).
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'Channel')
+            BEGIN ALTER TABLE Messages ADD Channel int NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'Subject')
+            BEGIN ALTER TABLE Messages ADD Subject nvarchar(1000) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'Recipient')
+            BEGIN ALTER TABLE Messages ADD Recipient nvarchar(500) NULL; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Messages columns: {ex.Message}"); }
+
+    // ── Resincronización Conversation.Channel ──────────────────────────────
+    // Conversaciones creadas con el modelo viejo (Channel = campaign.Channel)
+    // pueden haber quedado mal clasificadas — por ejemplo Channel=WhatsApp en
+    // conversaciones que en realidad solo tienen mensajes de Email. Reseteamos
+    // Channel de cada conversación al canal del PRIMER mensaje de esa
+    // conversación. Idempotente — solo afecta a las que están desalineadas.
+    //
+    // Conversations.Channel se guarda como string ('WhatsApp', 'Email', 'Sms')
+    // por HasConversion<string>(). Messages.Channel se guarda como int (enum).
+    // Por eso convertimos con CASE.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            UPDATE c
+            SET c.Channel = CASE sub.FirstChannel
+                              WHEN 0 THEN 'WhatsApp'
+                              WHEN 1 THEN 'Email'
+                              WHEN 2 THEN 'Sms'
+                              ELSE c.Channel
+                            END
+            FROM Conversations c
+            INNER JOIN (
+                SELECT m.ConversationId, m.Channel AS FirstChannel
+                FROM Messages m
+                INNER JOIN (
+                    SELECT ConversationId, MIN(SentAt) AS FirstSentAt
+                    FROM Messages
+                    WHERE Channel IS NOT NULL
+                    GROUP BY ConversationId
+                ) f ON f.ConversationId = m.ConversationId AND f.FirstSentAt = m.SentAt
+            ) sub ON sub.ConversationId = c.Id
+            WHERE c.Channel <> CASE sub.FirstChannel
+                                 WHEN 0 THEN 'WhatsApp'
+                                 WHEN 1 THEN 'Email'
+                                 WHEN 2 THEN 'Sms'
+                                 ELSE c.Channel
+                               END;");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] Conversation.Channel resync: {ex.Message}"); }
 
     // ── Columnas de Tenants (migraciones MoveSendGridToTenant, AddTenantLlmConfiguration) ──
     try
@@ -651,6 +751,10 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LlmProvider')
             BEGIN ALTER TABLE Tenants ADD LlmProvider nvarchar(50) NOT NULL DEFAULT ''; END");
+        // Logo del corredor — URL pública para insertarlo en el header del email.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LogoUrl')
+            BEGIN ALTER TABLE Tenants ADD LogoUrl nvarchar(500) NULL; END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Tenants columns: {ex.Message}"); }
 

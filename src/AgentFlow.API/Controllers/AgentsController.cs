@@ -87,6 +87,12 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
     [HttpPost]
     public async Task<IActionResult> Create([FromBody] AgentDto dto, CancellationToken ct)
     {
+        // Validación: el agente DEBE tener al menos un canal habilitado.
+        // Sin canales el agente no puede recibir mensajes ni dispararse desde
+        // campañas — queda como configuración rota. Lo bloqueamos al crear.
+        var channelsValidation = ValidateEnabledChannels(dto.EnabledChannels);
+        if (channelsValidation is not null) return channelsValidation;
+
         // Validación: si Brain está deshabilitado, una línea WhatsApp solo
         // puede atender a UN agente activo. Esto es lo que permite que el
         // routing por línea (ProcessIncomingMessageHandler) sea determinista.
@@ -134,6 +140,10 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
             .FirstOrDefaultAsync(a => a.Id == id && a.TenantId == tenantCtx.TenantId, ct);
 
         if (agent is null) return NotFound();
+
+        // Mismo guard que Create: no se puede dejar al agente sin canales.
+        var channelsValidation = ValidateEnabledChannels(dto.EnabledChannels);
+        if (channelsValidation is not null) return channelsValidation;
 
         var collision = await ValidateLineNotSharedAsync(
             dto.WhatsAppLineId, dto.IsActive, excludeAgentId: id, ct);
@@ -200,6 +210,24 @@ public class AgentsController(ITenantContext tenantCtx, AgentFlowDbContext db) :
     /// del mismo tenant tenga esa línea. Retorna ConflictObjectResult si choca,
     /// null si todo OK.
     /// </summary>
+    /// <summary>
+    /// Devuelve 400 si la lista de canales habilitados está vacía. Un agente
+    /// sin canales no sirve para nada — bloqueamos al crear/actualizar para
+    /// no permitir configuraciones rotas.
+    /// </summary>
+    private IActionResult? ValidateEnabledChannels(List<string>? enabledChannels)
+    {
+        if (enabledChannels is null || enabledChannels.Count == 0)
+        {
+            return BadRequest(new
+            {
+                error = "El agente debe tener al menos un canal habilitado (WhatsApp, Email o Sms).",
+                field = "enabledChannels",
+            });
+        }
+        return null;
+    }
+
     private async Task<IActionResult?> ValidateLineNotSharedAsync(
         Guid? whatsAppLineId, bool isActive, Guid? excludeAgentId, CancellationToken ct)
     {

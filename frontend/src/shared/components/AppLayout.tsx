@@ -30,6 +30,10 @@ export function AppLayout() {
   const { hasPermission } = usePermissions()
   const navigate = useNavigate()
   const waConnected = waStatus?.status === 'authenticated'
+  // Si el tenant no tiene WhatsApp configurado (status='disabled'), no
+  // mostramos el indicador en Settings — sino aparecería un dot rojo
+  // dando a entender "WhatsApp desconectado", que no es correcto.
+  const waShowIndicator = !!waStatus && waStatus.status !== 'disabled'
 
   // Filtrar items según permisos (Admin ve todo)
   const visibleItems = NAV_ITEMS.filter(item =>
@@ -70,7 +74,7 @@ export function AppLayout() {
             >
               <div className="relative shrink-0">
                 <Icon className="h-5 w-5" />
-                {to === '/settings' && (
+                {to === '/settings' && waShowIndicator && (
                   <span
                     className={`absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border-2 border-white ${waConnected ? 'bg-green-500' : 'bg-red-500'}`}
                   />

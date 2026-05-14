@@ -34,7 +34,7 @@ public class ResendEmailService(
     private string ResendFromName =>
         config["Resend:FromName"] ?? "TalkIA";
 
-    protected override async Task SendAsync(
+    protected override async Task<string?> SendAsync(
         string toEmail, string toName, string subject, string htmlContent,
         CancellationToken ct,
         IEnumerable<string>? bccEmails = null,
@@ -90,7 +90,27 @@ public class ResendEmailService(
                 $"Resend rechazó el envío a {toEmail}: HTTP {(int)resp.StatusCode}. {preview}");
         }
 
-        log.LogInformation("[Resend] Enviado a {Email} (subject={Subject}, bcc={BccCount}).",
-            toEmail, subject, bccList?.Length ?? 0);
+        // Resend devuelve { "id": "re_..." } en el body. Lo capturamos para
+        // persistirlo en Message.ExternalMessageId y poder correlacionar webhooks
+        // de delivery/bounce más adelante.
+        string? externalId = null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(
+                await resp.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.TryGetProperty("id", out var idProp)
+                && idProp.ValueKind == System.Text.Json.JsonValueKind.String)
+            {
+                externalId = idProp.GetString();
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "[Resend] No se pudo parsear el id de la respuesta JSON.");
+        }
+
+        log.LogInformation("[Resend] Enviado a {Email} (subject={Subject}, bcc={BccCount}, id={Id}).",
+            toEmail, subject, bccList?.Length ?? 0, externalId ?? "(sin id)");
+        return externalId;
     }
 }

@@ -70,6 +70,51 @@ public class CampaignTemplate
     public bool SendEmail { get; set; }
     public string? EmailAddress { get; set; }
 
+    // ── Plantilla de email personalizable ─────────────────────────────────
+    // Usado por SendEmailResumeService (y futuras acciones que envíen email)
+    // cuando el template tiene asignada una ActionDefinition con SendsEmail=true.
+    // Si EmailBodyHtml es null o vacío, se usa el cuerpo hardcoded original
+    // como fallback (compatibilidad con maestros antiguos).
+    //
+    // Soporta variables {{namespace.field}} resueltas por EmailTemplateRenderer:
+    //   {{cliente.nombre}}, {{cliente.poliza}}, {{conversacion.resumen}}, etc.
+    public string? EmailSubject { get; set; }
+    public string? EmailBodyHtml { get; set; }
+    public string? EmailBodyText { get; set; }
+    public DateTime? EmailTemplateUpdatedAt { get; set; }
+
+    // ── Layout adaptativo del correo (Fase A) ─────────────────────────────
+    // El sistema agrupa por teléfono al subir la campaña. Si el cliente
+    // termina con >= UmbralCorporativo registros (pólizas, productos, etc.),
+    // el renderer usa el bloque "corporativo" (KPIs + agrupado + top urgentes).
+    // Default 10 — configurable por maestro.
+    public int UmbralCorporativo { get; set; } = 10;
+
+    /// <summary>
+    /// Mapeo genérico del dataset para que el correo no esté acoplado al dominio
+    /// de seguros. JSON con la forma:
+    /// {
+    ///   "label": "Pólizas",            // título de la colección
+    ///   "titleColumn": "numero",        // columna del título de cada item
+    ///   "subtitleColumn": "aseguradora",// subtítulo (opcional)
+    ///   "categoryColumn": "ramo",       // badge categórico (opcional)
+    ///   "amountColumn": "saldo",        // columna del monto (opcional)
+    ///   "detailColumns": ["marca","placa","vencimiento"] // 2x N grid
+    /// }
+    /// Si es NULL, el renderer cae a defaults razonables.
+    /// </summary>
+    public string? ItemsConfig { get; set; }
+
+    /// <summary>
+    /// JSON con datos de muestra (típicamente la primera fila del archivo
+    /// modelo que el usuario subió al configurar el maestro). Se usa para:
+    ///   - poblar dropdowns de columnas en el tab Correo del maestro
+    ///   - renderizar previews del correo con datos reales (en vez del sample hardcoded)
+    /// El formato esperado es un array JSON con N objetos (cada uno = 1 fila),
+    /// igual que ContactDataJson produce el FixedFormatCampaignService.
+    /// </summary>
+    public string? SampleDataJson { get; set; }
+
     // ── Horario de atención de asesores ───────────────────────────────────
     // Días de la semana en que los asesores atienden (0=Domingo … 6=Sábado)
     // Ej: [1,2,3,4,5] = lunes a viernes

@@ -210,6 +210,47 @@ export function useCampaignContacts(params: CampaignContactsQueryParams, enabled
   })
 }
 
+export interface CampaignContactMessage {
+  id: string
+  content: string
+  isFromAgent: boolean
+  direction: 'Inbound' | 'Outbound'
+  sentAt: string
+  externalMessageId: string | null
+  agentName: string | null
+  detectedIntent: string | null
+  channel: 'WhatsApp' | 'Email' | 'Sms' | null
+  subject: string | null
+  recipient: string | null
+  status: 'Sent' | 'Delivered' | 'Read' | 'Failed'
+}
+
+export interface CampaignContactMessagesResponse {
+  conversationId: string | null
+  items: CampaignContactMessage[]
+}
+
+/**
+ * Trae todos los mensajes (WhatsApp + Email + SMS) asociados a un contacto de
+ * campaña. Si la campaña aún no tiene conversación abierta para ese teléfono,
+ * devuelve items vacío. El modal del "ojo" lo consume para mostrar el correo
+ * enviado además del mensaje inicial.
+ */
+export function useCampaignContactMessages(
+  campaignId: string, contactId: string | null
+) {
+  return useQuery({
+    queryKey: ['campaign-contact-messages', campaignId, contactId],
+    enabled: !!contactId,
+    queryFn: () => api
+      .get<CampaignContactMessagesResponse>(
+        `/campaigns/${campaignId}/contacts/${contactId}/messages`
+      )
+      .then(r => r.data),
+    staleTime: 10_000,
+  })
+}
+
 export function useExportCampaignContacts() {
   return useMutation({
     mutationFn: async ({ campaignId, status, q }: { campaignId: string; status: ContactStatusFilter; q: string }) => {

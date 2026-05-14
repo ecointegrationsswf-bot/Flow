@@ -78,6 +78,13 @@ export interface ConversationSummary {
   isHumanHandled: boolean
   lastActivityAt: string
   lastMessagePreview?: string
+  /** Asunto del último correo SALIENTE de la conversación. Solo presente cuando hay
+   *  al menos un email enviado al cliente. Se usa como preview en las cards Email. */
+  lastEmailSubject?: string
+  /** Cantidad de correos salientes (Channel=Email) emitidos en el rango de fechas
+   *  del filtro. Alimenta el badge del tab Email — refleja envíos por día, no
+   *  conversaciones únicas: si reenvías mañana a los mismos contactos, suma. */
+  outboundEmailCount?: number
 }
 
 export interface Conversation {
@@ -114,6 +121,11 @@ export interface Message {
   confidenceScore?: number
   detectedIntent?: string
   sentAt: string
+  // Phase 1 outbound tracking — canal específico de este mensaje (puede
+  // diferir del canal de la conversación). null/undefined = hereda Conversation.channel.
+  channel?: ChannelType | null
+  subject?: string | null
+  recipient?: string | null
 }
 
 export interface GestionEvent {
