@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.RateLimiting;
 using AgentFlow.Infrastructure.Channels.UltraMsg;
 using AgentFlow.Infrastructure.Email;
 using AgentFlow.Infrastructure.Persistence;
+using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -40,7 +41,8 @@ public class SuperAdminController(
     AgentFlowDbContext db,
     IConfiguration config,
     IEmailService emailService,
-    AgentFlow.Infrastructure.Storage.IBlobStorageService blobStorage) : ControllerBase
+    AgentFlow.Infrastructure.Storage.IBlobStorageService blobStorage,
+    Hangfire.IBackgroundJobClient backgroundJobs) : ControllerBase
 {
     [HttpPost("login")]
     [EnableRateLimiting("auth")]
@@ -496,8 +498,39 @@ public class SuperAdminController(
         var t = await db.Tenants.FindAsync([tenantId], ct);
         if (t is null) return NotFound();
         t.ReferenceDocumentsEnabled = req.Enabled;
+        // Activar/desactivar RAG en tándem con la carga de documentos. Modo único
+        // por tenant: si los PDFs están habilitados, SIEMPRE se procesan vía RAG
+        // (chunks + embeddings) — más eficiente y escalable que inyectar PDFs
+        // enteros.
+        t.UseRagRetrieval = req.Enabled;
         await db.SaveChangesAsync(ct);
-        return Ok(new { t.ReferenceDocumentsEnabled });
+
+        // Si se está ACTIVANDO la feature, encolar reindex de TODOS los PDFs del
+        // tenant que aún no estén indexados (IndexedAt=null). Esto cubre dos casos:
+        //   a) Tenant que ya tenía PDFs cargados antes de existir el sistema RAG.
+        //   b) Tenant que subió PDFs durante una ventana donde el indexer no corrió.
+        // Idempotente: si todos los PDFs ya están indexados, no encola nada.
+        var enqueued = 0;
+        if (req.Enabled)
+        {
+            var pendingDocIds = await db.CampaignTemplateDocuments
+                .Where(d => d.TenantId == tenantId && d.IndexedAt == null)
+                .Select(d => d.Id)
+                .ToListAsync(ct);
+            foreach (var docId in pendingDocIds)
+            {
+                backgroundJobs.Enqueue<AgentFlow.Infrastructure.Documents.DocumentIndexerHangfireJob>(
+                    j => j.IndexAsync(docId, false));
+                enqueued++;
+            }
+        }
+
+        return Ok(new
+        {
+            t.ReferenceDocumentsEnabled,
+            t.UseRagRetrieval,
+            reindexEnqueued = enqueued,
+        });
     }
 
     [HttpGet("tenants/{tenantId:guid}/agents")]
