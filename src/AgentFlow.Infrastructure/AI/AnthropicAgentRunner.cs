@@ -469,7 +469,12 @@ public class AnthropicAgentRunner(
             // no los codifica automáticamente.
             var safeUrl = EncodeBlobUrl(blobUrl);
             var http = httpClientFactory.CreateClient();
-            http.Timeout = TimeSpan.FromSeconds(30);
+            // Subido de 30s a 60s. Azure Blob ocasionalmente tarda en servir PDFs
+            // grandes en la primera lectura (cold blob). El cache de 30 min sigue
+            // protegiendo turnos subsecuentes — esto solo afecta el primer turno
+            // de la sesión o cuando expira el cache. Vale la pena el margen extra
+            // para no cortar la inyección de docs en peor caso.
+            http.Timeout = TimeSpan.FromSeconds(60);
             var bytes = await http.GetByteArrayAsync(safeUrl, ct);
 
             // Verificar magic bytes de PDF (%PDF-)

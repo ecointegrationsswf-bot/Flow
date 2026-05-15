@@ -32,6 +32,10 @@
     <PackageReference Include="StackExchange.Redis" Version="2.7.33" />
     <PackageReference Include="Anthropic.SDK" Version="5.10.0" />
     <PackageReference Include="Azure.Storage.Blobs" Version="12.19.1" />
+    <!-- PdfPig: extracción de texto de PDFs para el indexado RAG. Apache 2.0,
+         .NET nativo, soporta layout y tablas. Lo usa DocumentIndexer al subir
+         un documento al maestro de campaña. -->
+    <PackageReference Include="PdfPig" Version="0.1.10" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0-preview.3.25171.5" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0-preview.3.25171.5" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0-preview.3.25171.5" />

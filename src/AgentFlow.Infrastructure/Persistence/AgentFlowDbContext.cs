@@ -14,6 +14,8 @@ public class AgentFlowDbContext(DbContextOptions<AgentFlowDbContext> options) : 
     public DbSet<GestionEvent> GestionEvents => Set<GestionEvent>();
     public DbSet<AppUser> AppUsers => Set<AppUser>();
     public DbSet<CampaignTemplateDocument> CampaignTemplateDocuments => Set<CampaignTemplateDocument>();
+    public DbSet<CampaignTemplateDocumentChunk> CampaignTemplateDocumentChunks => Set<CampaignTemplateDocumentChunk>();
+    public DbSet<SystemAuditLog> SystemAuditLogs => Set<SystemAuditLog>();
     public DbSet<ConversationLabel> ConversationLabels => Set<ConversationLabel>();
     public DbSet<WhatsAppLine> WhatsAppLines => Set<WhatsAppLine>();
     public DbSet<SuperAdmin> SuperAdmins => Set<SuperAdmin>();

@@ -62,6 +62,7 @@ public class ProcessIncomingMessageHandler(
     AgentFlow.Domain.Webhooks.IActionPromptBuilder actionPromptBuilder,
     IDocumentReferencePromptBuilder documentReferencePromptBuilder,
     IWebhookEventDispatcher eventDispatcher,
+    ISystemAuditLogger systemAudit,
     Microsoft.Extensions.Logging.ILogger<ProcessIncomingMessageHandler> logger
 ) : IRequestHandler<ProcessIncomingMessageCommand, ProcessIncomingMessageResult>
 {
@@ -657,30 +658,60 @@ public class ProcessIncomingMessageHandler(
                     // maestro activo. Tope defensivo de 5 PDFs por turno (TenantDocsCap).
                     // Feature flag Tenant.ReferenceDocumentsEnabled controla la inyección.
                     var refDocsEnabled = tenant?.ReferenceDocumentsEnabled == true;
+                    var useRag = tenant?.UseRagRetrieval == true;
                     List<AgentFlow.Domain.Interfaces.ReferenceDocument>? referenceDocs = null;
                     string? referenceDocsBlock = null;
 
                     if (refDocsEnabled)
                     {
                         var prioritizeId = brainCampaignTemplateId ?? campaignTemplate?.Id;
-                        var tenantDocs = await documentReferencePromptBuilder.GetTenantDocumentsAsync(
-                            prioritizeId, cmd.TenantId, ct);
 
-                        if (tenantDocs.Count > 0)
+                        if (useRag)
                         {
-                            referenceDocs = tenantDocs.ToList();
-                            referenceDocsBlock = await documentReferencePromptBuilder.BuildTextBlockAsync(
-                                prioritizeId, cmd.TenantId, ct);
+                            // ── MODO RAG ─────────────────────────────────────
+                            // Recuperamos solo los chunks más relevantes a la pregunta
+                            // del cliente. No adjuntamos PDFs como base64 — los
+                            // fragmentos van directo en el system prompt como texto.
+                            // Costo ~95% menor que adjuntar PDFs enteros + escala a
+                            // muchos más documentos por maestro sin chocar context.
+                            referenceDocsBlock = await documentReferencePromptBuilder.BuildRagContextForQueryAsync(
+                                prioritizeId, cmd.TenantId, cmd.Message ?? string.Empty, ct);
 
                             logger.LogInformation(
-                                "ReferenceDocs (tenant-wide) inyectados: tenant={TenantId} prioritize={PrioritizeId} docs={DocCount} blockChars={BlockChars}",
-                                cmd.TenantId, prioritizeId, referenceDocs.Count, referenceDocsBlock?.Length ?? 0);
+                                "ReferenceDocs RAG: tenant={TenantId} prioritize={PrioritizeId} blockChars={BlockChars}",
+                                cmd.TenantId, prioritizeId, referenceDocsBlock?.Length ?? 0);
+                        }
+                        else
+                        {
+                            // ── MODO LEGACY (PDFs enteros) ───────────────────
+                            // Comportamiento previo: lista de PDFs + reglas en el
+                            // system prompt, los PDFs base64 adjuntos al request.
+                            var tenantDocs = await documentReferencePromptBuilder.GetTenantDocumentsAsync(
+                                prioritizeId, cmd.TenantId, ct);
+
+                            if (tenantDocs.Count > 0)
+                            {
+                                referenceDocs = tenantDocs.ToList();
+                                referenceDocsBlock = await documentReferencePromptBuilder.BuildTextBlockAsync(
+                                    prioritizeId, cmd.TenantId, ct);
+
+                                logger.LogInformation(
+                                    "ReferenceDocs (tenant-wide) inyectados: tenant={TenantId} prioritize={PrioritizeId} docs={DocCount} blockChars={BlockChars}",
+                                    cmd.TenantId, prioritizeId, referenceDocs.Count, referenceDocsBlock?.Length ?? 0);
+                            }
                         }
                     }
 
                     Console.WriteLine($"[WH-REFDOCS] tenant={cmd.TenantId} prioritize={brainCampaignTemplateId ?? campaignTemplate?.Id} refDocsPassed={referenceDocs?.Count ?? 0} blockLen={referenceDocsBlock?.Length ?? 0}");
 
-                    agentResponse = await agentRunner.RunAsync(new AgentRunRequest(
+                    // Reintento defensivo. Anthropic API ocasionalmente devuelve 5xx
+                    // transitorios o se cuelga por algunos segundos cuando se le
+                    // mandan PDFs grandes (3 docs × ~varios MB). Sin esto, una sola
+                    // falla resulta en "no puedo procesar su solicitud" al cliente,
+                    // aunque la siguiente llamada hubiera funcionado. Reintentamos
+                    // UNA vez con un pequeño delay; si la segunda también falla, deja
+                    // que la excepción la atrape el catch externo (fallback al cliente).
+                    var runRequest = new AgentRunRequest(
                         Agent: agent, Conversation: conversation,
                         IncomingMessage: cmd.Message, RecentHistory: recentHistorySnapshot,
                         ClientContext: clientContext, TenantLlmApiKey: tenantApiKey,
@@ -692,7 +723,49 @@ public class ProcessIncomingMessageHandler(
                         LastActionResult: lastActionForPrompt,
                         ReferenceDocuments: referenceDocs,
                         ReferenceDocumentsBlock: referenceDocsBlock
-                    ), ct);
+                    );
+
+                    // Reintentos con backoff escalonado. Anthropic devuelve dos tipos
+                    // de fallos transitorios:
+                    //   • RateLimitsExceeded — el budget de tokens/req por minuto se
+                    //     agotó. Requiere ESPERAR varios segundos para que se libere.
+                    //   • 5xx / timeouts puntuales — se resuelven en 1-2 segundos.
+                    // Por eso usamos delays distintos según el tipo de excepción y
+                    // hasta 3 intentos en total (1 original + 2 reintentos).
+                    agentResponse = null!;
+                    Exception? lastEx = null;
+                    int[] delaysMs = [0, 0, 0]; // se decide en runtime según el tipo
+                    for (var attempt = 1; attempt <= 3; attempt++)
+                    {
+                        try
+                        {
+                            agentResponse = await agentRunner.RunAsync(runRequest, ct);
+                            lastEx = null;
+                            break;
+                        }
+                        catch (Exception exRetry) when (!ct.IsCancellationRequested)
+                        {
+                            lastEx = exRetry;
+                            if (attempt == 3) break; // ya consumimos los 3 — tira fallback
+
+                            // Rate limit → delay grande (5s, 12s). Otros transitorios → 1.5s, 3s.
+                            var isRateLimit = exRetry.GetType().Name.Contains("RateLimit", StringComparison.OrdinalIgnoreCase)
+                                              || exRetry.Message.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+                                              || exRetry.Message.Contains("429");
+                            var delayMs = isRateLimit
+                                ? (attempt == 1 ? 5000 : 12000)
+                                : (attempt == 1 ? 1500 : 3000);
+
+                            logger.LogWarning(exRetry,
+                                "[AgentRunner] Intento {N} falló ({ExType}{RL}) conv {ConvId} tenant {TenantId} — reintentando en {Delay}ms",
+                                attempt, exRetry.GetType().Name,
+                                isRateLimit ? " [rate-limit]" : "",
+                                conversation.Id, cmd.TenantId, delayMs);
+                            await Task.Delay(delayMs, ct);
+                        }
+                    }
+                    if (lastEx is not null) throw lastEx;
+
                     replyText = agentResponse.ReplyText;
 
                     // ── Webhook Contract System ────────────────────────────────
@@ -823,7 +896,51 @@ public class ProcessIncomingMessageHandler(
                 {
                     replyText = "Gracias por su mensaje. En este momento no puedo procesar su solicitud. Un ejecutivo se comunicará con usted a la brevedad.";
                     agentResponse = new AgentResponse(replyText, dispatch.Intent, 0, false, false, 0);
-                    Console.WriteLine($"[AgentRunner] Error: {ex.Message}");
+                    logger.LogError(ex,
+                        "[AgentRunner] Falla tras reintento para conv {ConvId} tenant {TenantId} agent {Agent} — cliente recibió fallback. Mensaje original: '{Msg}'",
+                        conversation.Id, cmd.TenantId, agent.Name,
+                        cmd.Message?.Length > 120 ? cmd.Message[..120] : cmd.Message);
+
+                    // Persistencia en doble lugar (auditabilidad robusta):
+                    //   1) GestionEvent ligado a la conversación — visible en el detalle
+                    //      del Monitor para ver el caso específico.
+                    //   2) SystemAuditLog — tabla cross-tenant para queries agregadas:
+                    //      "todos los errores AGENT_RUN de PASESA en las últimas 24h".
+                    try
+                    {
+                        var stack = ex.ToString();
+                        var notes = $"AGENT EXCEPTION — Tipo: {ex.GetType().FullName}\n" +
+                                    $"Mensaje cliente: {(cmd.Message?.Length > 200 ? cmd.Message[..200] : cmd.Message)}\n" +
+                                    $"Stack:\n{(stack.Length > 1500 ? stack[..1500] : stack)}";
+                        await conversations.AddGestionEventAsync(new AgentFlow.Domain.Entities.GestionEvent
+                        {
+                            Id = Guid.NewGuid(),
+                            ConversationId = conversation.Id,
+                            Result = AgentFlow.Domain.Enums.GestionResult.Pending,
+                            Origin = "system:agent-exception",
+                            Notes = notes,
+                            OccurredAt = DateTime.UtcNow
+                        }, ct);
+                    }
+                    catch (Exception logEx)
+                    {
+                        logger.LogWarning(logEx, "[AgentRunner] No se pudo persistir GestionEvent del fallo.");
+                    }
+
+                    await systemAudit.LogErrorAsync(
+                        category: "AGENT_RUN",
+                        message: $"Agente falló para conversación {conversation.Id}",
+                        ex: ex,
+                        tenantId: cmd.TenantId,
+                        relatedEntityType: "Conversation",
+                        relatedEntityId: conversation.Id,
+                        contextJson: System.Text.Json.JsonSerializer.Serialize(new
+                        {
+                            agent = agent.Name,
+                            clientPhone = cmd.FromPhone,
+                            messagePreview = cmd.Message?.Length > 200 ? cmd.Message[..200] : cmd.Message
+                        }),
+                        ct: ct);
                 }
 
                 // Persistir respuesta

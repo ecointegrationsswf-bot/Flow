@@ -18,6 +18,7 @@ namespace AgentFlow.Infrastructure.AI;
 public class DocumentReferencePromptBuilder(
     AgentFlowDbContext db,
     IBlobStorageService blobStorage,
+    IDocumentRetriever ragRetriever,
     ILogger<DocumentReferencePromptBuilder> log)
     : IDocumentReferencePromptBuilder
 {
@@ -28,12 +29,15 @@ public class DocumentReferencePromptBuilder(
     // Timeout duro por documento individual. Si Azure Blob no responde en este
     // tiempo, omitimos ese PDF y seguimos con los demás. Garantiza que un blob
     // colgado nunca trabe el turno completo del agente.
-    private static readonly TimeSpan PerDocumentDownloadTimeout = TimeSpan.FromSeconds(10);
+    // (Subido a 30s para alinear con el path activo en AnthropicAgentRunner —
+    // antes era 10s y cortaba PDFs de cold blob.)
+    private static readonly TimeSpan PerDocumentDownloadTimeout = TimeSpan.FromSeconds(30);
 
     // Timeout global para descargar TODOS los PDFs del turno. Si se excede,
     // devolvemos lo que hayamos descargado y dejamos que el agente responda
     // con contexto parcial — mejor parcial que nada.
-    private static readonly TimeSpan GlobalDownloadTimeout = TimeSpan.FromSeconds(25);
+    // (Subido a 90s para soportar 3 PDFs × ~30s de cold blob en peor caso.)
+    private static readonly TimeSpan GlobalDownloadTimeout = TimeSpan.FromSeconds(90);
 
     /// <summary>
     /// Carga TODOS los documentos del tenant ordenados con prioridad al maestro
@@ -163,6 +167,74 @@ public class DocumentReferencePromptBuilder(
         return docs
             .Select(d => new ReferenceDocument(d.FileName, d.BlobUrl, d.Description))
             .ToList();
+    }
+
+    public async Task<string> BuildRagContextForQueryAsync(
+        Guid? prioritizeTemplateId, Guid tenantId, string clientQuery,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(clientQuery)) return string.Empty;
+
+        // El retriever embed-ea la query, hace cosine sobre los chunks del tenant
+        // y devuelve top-K (default 5) con score >= 0.25.
+        var chunks = await ragRetriever.RetrieveAsync(
+            tenantId, prioritizeTemplateId, clientQuery, topK: 5, minScore: 0.25f, ct);
+
+        if (chunks.Count == 0)
+        {
+            log.LogInformation(
+                "[RAG] tenant={TenantId} query='{Q}' — sin chunks relevantes. Agente responderá sin contexto documental.",
+                tenantId, clientQuery.Length > 60 ? clientQuery[..60] : clientQuery);
+            return string.Empty;
+        }
+
+        // Agrupamos los chunks por documento para que el bloque sea legible y
+        // las citas queden ordenadas (página ascendente dentro de cada documento).
+        var byDoc = chunks
+            .GroupBy(c => new { c.DocumentId, c.FileName, c.Description })
+            .Select(g => new
+            {
+                g.Key.FileName,
+                g.Key.Description,
+                Pages = g.OrderBy(c => c.PageNumber).ToList()
+            })
+            .ToList();
+
+        var sb = new StringBuilder();
+        sb.AppendLine();
+        sb.AppendLine("## INFORMACIÓN RELEVANTE DE DOCUMENTOS OFICIALES");
+        sb.AppendLine();
+        sb.AppendLine($"Estos {chunks.Count} fragmentos fueron recuperados automáticamente de los");
+        sb.AppendLine("documentos del corredor por su relevancia a la pregunta del cliente.");
+        sb.AppendLine("Úsalos como fuente autorizada (productos, coberturas, redes, ubicaciones,");
+        sb.AppendLine("teléfonos, plazos, procedimientos). No menciones que son fragmentos al cliente —");
+        sb.AppendLine("comunica la información como conocimiento propio del producto.");
+        sb.AppendLine();
+
+        foreach (var doc in byDoc)
+        {
+            var desc = string.IsNullOrWhiteSpace(doc.Description) ? "" : $" — {doc.Description}";
+            sb.AppendLine($"### {doc.FileName}{desc}");
+            foreach (var c in doc.Pages)
+            {
+                sb.AppendLine();
+                sb.AppendLine($"[Página {c.PageNumber}, relevancia {c.Score:F2}]");
+                sb.AppendLine(c.Text);
+            }
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("### REGLAS DE USO");
+        sb.AppendLine("1. Si la respuesta del cliente está cubierta por estos fragmentos, ÚSALA con precisión");
+        sb.AppendLine("   (nombres, teléfonos, direcciones, plazos textuales — sin parafrasear datos).");
+        sb.AppendLine("2. Si los fragmentos NO cubren la pregunta, responde con transparencia y ofrece");
+        sb.AppendLine("   escalar a un ejecutivo humano. NO inventes datos no presentes en los fragmentos.");
+        sb.AppendLine("3. NO expongas que la información viene de un \"documento\" o \"fragmento\" — el cliente");
+        sb.AppendLine("   debe percibirlo como conocimiento natural del agente.");
+        sb.AppendLine("4. Para datos PERSONALES del cliente (su póliza, saldo, historial), estos fragmentos");
+        sb.AppendLine("   NO los contienen — usa la acción VALIDATE_IDENTITY + consulta correspondiente.");
+
+        return sb.ToString();
     }
 
     private sealed record TenantDocRecord(

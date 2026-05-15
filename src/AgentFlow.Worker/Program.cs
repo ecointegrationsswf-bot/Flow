@@ -164,6 +164,21 @@ builder.Services.AddScoped<ITranscriptionService, WhisperTranscriptionService>()
 builder.Services.AddScoped<IDocumentReferencePromptBuilder,
     AgentFlow.Infrastructure.AI.DocumentReferencePromptBuilder>();
 
+// ── RAG: pipeline de indexado y retrieval (compartido con la API) ────────────
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IEmbeddingService,
+    AgentFlow.Infrastructure.Embeddings.OpenAIEmbeddingService>();
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IPdfTextExtractor,
+    AgentFlow.Infrastructure.Documents.PdfPigTextExtractor>();
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.ITextChunker,
+    AgentFlow.Infrastructure.Documents.SentenceAwareChunker>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDocumentIndexer,
+    AgentFlow.Infrastructure.Documents.DocumentIndexer>();
+builder.Services.AddScoped<AgentFlow.Infrastructure.Documents.DocumentIndexerHangfireJob>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDocumentRetriever,
+    AgentFlow.Infrastructure.Documents.ChunkBasedDocumentRetriever>();
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.ISystemAuditLogger,
+    AgentFlow.Infrastructure.Auditing.SystemAuditLogger>();
+
 // Cerebro — usado cuando Tenant.BrainEnabled = true.
 builder.Services.AddScoped<IAgentRegistry,
     AgentFlow.Infrastructure.Brain.AgentRegistryService>();

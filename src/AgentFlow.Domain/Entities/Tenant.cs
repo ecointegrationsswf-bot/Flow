@@ -113,6 +113,22 @@ public class Tenant
     public bool ReferenceDocumentsEnabled { get; set; }
 
     /// <summary>
+    /// Cuando es true, el sistema usa RAG (Retrieval-Augmented Generation) para los
+    /// documentos de referencia: en vez de inyectar los PDFs enteros en cada turno
+    /// (que para 3 PDFs ya consume ~98k tokens), recupera por embedding similarity
+    /// solo los chunks más relevantes a la pregunta del cliente (~3k tokens).
+    ///
+    /// Reduce ~95% el costo por turno y elimina los choques con rate limits de
+    /// Anthropic. Requiere que los PDFs estén indexados — CampaignTemplateDocument.IndexedAt
+    /// no nulo. Si un PDF no está indexado y este flag está en true, ese PDF se omite.
+    ///
+    /// Default false: opt-in por tenant para validar antes de activar en bloque.
+    /// Cuando todos los tenants usan RAG, este flag puede eliminarse y el código viejo
+    /// (PDFs enteros) puede deprecarse.
+    /// </summary>
+    public bool UseRagRetrieval { get; set; }
+
+    /// <summary>
     /// Lista de IDs de PromptTemplates asignados a este tenant. Los prompts son un
     /// catálogo global; esta columna JSON restringe qué prompts son visibles en
     /// el formulario del maestro de campaña del tenant.

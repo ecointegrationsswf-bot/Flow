@@ -320,6 +320,27 @@ builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionPromptBuilder,
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDocumentReferencePromptBuilder,
     AgentFlow.Infrastructure.AI.DocumentReferencePromptBuilder>();
 
+// ── RAG: pipeline de indexado y retrieval de documentos ─────────────────────
+// Servicios sin estado, registrados como singleton para reutilizar HttpClient.
+// EmbeddingService llama a OpenAI; PdfPig y el chunker son in-process.
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IEmbeddingService,
+    AgentFlow.Infrastructure.Embeddings.OpenAIEmbeddingService>();
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IPdfTextExtractor,
+    AgentFlow.Infrastructure.Documents.PdfPigTextExtractor>();
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.ITextChunker,
+    AgentFlow.Infrastructure.Documents.SentenceAwareChunker>();
+// El indexer es Scoped porque depende de AgentFlowDbContext (Scoped).
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDocumentIndexer,
+    AgentFlow.Infrastructure.Documents.DocumentIndexer>();
+// Wrapper Hangfire — Hangfire necesita instanciar el job via DI.
+builder.Services.AddScoped<AgentFlow.Infrastructure.Documents.DocumentIndexerHangfireJob>();
+// Retriever (lectura): se consulta en cada mensaje cuando Tenant.UseRagRetrieval=true.
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDocumentRetriever,
+    AgentFlow.Infrastructure.Documents.ChunkBasedDocumentRetriever>();
+// Auditoría centralizada — Singleton porque internamente abre scopes nuevos.
+builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.ISystemAuditLogger,
+    AgentFlow.Infrastructure.Auditing.SystemAuditLogger>();
+
 // ── Tenant context ─────────────────────────────────────
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ITenantContext, HttpTenantContext>();
@@ -755,8 +776,97 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LogoUrl')
             BEGIN ALTER TABLE Tenants ADD LogoUrl nvarchar(500) NULL; END");
+        // Feature flag RAG por tenant — opt-in para usar retrieval de chunks
+        // en vez de inyectar los PDFs enteros al prompt cada turno.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'UseRagRetrieval')
+            BEGIN ALTER TABLE Tenants ADD UseRagRetrieval bit NOT NULL DEFAULT 0; END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Tenants columns: {ex.Message}"); }
+
+    // ── RAG: indexado de PDFs (CampaignTemplateDocuments + Chunks) ──────────
+    // Día 1 del rollout RAG. CampaignTemplateDocuments existe; le agregamos columnas
+    // de estado de indexado. La tabla Chunks la creamos desde cero si no existe
+    // (no hay migración EF dedicada — self-healing schema mantiene paridad con la
+    // entidad sin requerir dotnet ef en producción).
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplateDocuments') AND name = 'IndexedAt')
+            BEGIN ALTER TABLE CampaignTemplateDocuments ADD IndexedAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplateDocuments') AND name = 'IndexedTokenCount')
+            BEGIN ALTER TABLE CampaignTemplateDocuments ADD IndexedTokenCount int NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplateDocuments') AND name = 'IndexingError')
+            BEGIN ALTER TABLE CampaignTemplateDocuments ADD IndexingError nvarchar(500) NULL; END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] CampaignTemplateDocuments RAG columns: {ex.Message}"); }
+
+    try
+    {
+        // Tabla de chunks. Cascade delete vía Document. El embedding se guarda como
+        // VARBINARY(MAX) — 1536 floats × 4 bytes para text-embedding-3-small.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID('CampaignTemplateDocumentChunks') AND type = 'U')
+            BEGIN
+                CREATE TABLE CampaignTemplateDocumentChunks (
+                    Id                  uniqueidentifier NOT NULL PRIMARY KEY,
+                    DocumentId          uniqueidentifier NOT NULL,
+                    TenantId            uniqueidentifier NOT NULL,
+                    CampaignTemplateId  uniqueidentifier NOT NULL,
+                    PageNumber          int              NOT NULL,
+                    ChunkIndex          int              NOT NULL,
+                    Text                nvarchar(max)    NOT NULL,
+                    TextHash            nvarchar(64)     NOT NULL,
+                    Embedding           varbinary(max)   NOT NULL,
+                    TokenCount          int              NOT NULL,
+                    CreatedAt           datetime2        NOT NULL,
+                    CONSTRAINT FK_DocChunks_Document
+                        FOREIGN KEY (DocumentId)
+                        REFERENCES CampaignTemplateDocuments(Id)
+                        ON DELETE CASCADE
+                );
+                CREATE NONCLUSTERED INDEX IX_DocChunks_TenantTemplate
+                    ON CampaignTemplateDocumentChunks (TenantId, CampaignTemplateId);
+                CREATE NONCLUSTERED INDEX IX_DocChunks_Document
+                    ON CampaignTemplateDocumentChunks (DocumentId);
+                CREATE NONCLUSTERED INDEX IX_DocChunks_DocumentHash
+                    ON CampaignTemplateDocumentChunks (DocumentId, TextHash);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] CampaignTemplateDocumentChunks: {ex.Message}"); }
+
+    // ── SystemAuditLog — auditoría general de errores/eventos sistémicos ──
+    // Cualquier error operacional (RAG, providers, blobs, etc.) que no encaje
+    // en una entidad específica se guarda aquí. Tabla agnóstica del dominio:
+    // se filtra por OccurredAtUtc, TenantId, Category.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE object_id = OBJECT_ID('SystemAuditLog') AND type = 'U')
+            BEGIN
+                CREATE TABLE SystemAuditLog (
+                    Id                 uniqueidentifier NOT NULL PRIMARY KEY,
+                    OccurredAtUtc      datetime2        NOT NULL,
+                    TenantId           uniqueidentifier NULL,
+                    Category           nvarchar(50)     NOT NULL,
+                    Severity           nvarchar(20)     NOT NULL,
+                    Message            nvarchar(1000)   NOT NULL,
+                    StackTrace         nvarchar(max)    NULL,
+                    RelatedEntityType  nvarchar(50)     NULL,
+                    RelatedEntityId    uniqueidentifier NULL,
+                    Context            nvarchar(max)    NULL
+                );
+                CREATE NONCLUSTERED INDEX IX_SystemAudit_Time
+                    ON SystemAuditLog (OccurredAtUtc DESC);
+                CREATE NONCLUSTERED INDEX IX_SystemAudit_TenantTime
+                    ON SystemAuditLog (TenantId, OccurredAtUtc DESC);
+                CREATE NONCLUSTERED INDEX IX_SystemAudit_CategoryTime
+                    ON SystemAuditLog (Category, OccurredAtUtc DESC);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] SystemAuditLog: {ex.Message}"); }
 
     // ── Columnas adicionales en Campaigns y AppUsers ──────────────────────
     try

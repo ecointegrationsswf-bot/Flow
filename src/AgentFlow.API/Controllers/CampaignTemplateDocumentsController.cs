@@ -1,7 +1,9 @@
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Documents;
 using AgentFlow.Infrastructure.Persistence;
 using AgentFlow.Infrastructure.Storage;
+using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 
@@ -19,7 +21,9 @@ namespace AgentFlow.API.Controllers;
 public class CampaignTemplateDocumentsController(
     ITenantContext tenantCtx,
     AgentFlowDbContext db,
-    IBlobStorageService blobStorage) : ControllerBase
+    IBlobStorageService blobStorage,
+    IBackgroundJobClient backgroundJobs,
+    IDocumentRetriever ragRetriever) : ControllerBase
 {
     // Límites duros por maestro — se aplican al subir. Defensivo ante context window
     // y costos de Anthropic. Alineado con Fase 3 del plan de Referencia Documents.
@@ -113,6 +117,24 @@ public class CampaignTemplateDocumentsController(
         db.CampaignTemplateDocuments.Add(doc);
         await db.SaveChangesAsync(ct);
 
+        // ── Disparar indexado RAG asíncrono ─────────────────────────────────
+        // Hangfire persiste el job en BD y un servidor Hangfire lo levanta
+        // (API en site12 o Worker on-prem — el primero que esté libre). Si
+        // la indexación falla, hay 3 reintentos automáticos; tras eso el
+        // documento queda con IndexingError persistido para que el admin
+        // pueda reintentar manualmente desde la UI.
+        try
+        {
+            backgroundJobs.Enqueue<DocumentIndexerHangfireJob>(
+                j => j.IndexAsync(doc.Id, false));
+        }
+        catch (Exception ex)
+        {
+            // No-bloqueante: si Hangfire está caído, el upload sigue siendo
+            // exitoso — el PDF queda no-indexado y se puede reintentar después.
+            Console.WriteLine($"[CTDocs] No se pudo encolar indexado RAG de {doc.Id}: {ex.Message}");
+        }
+
         return Ok(new
         {
             doc.Id,
@@ -123,6 +145,91 @@ public class CampaignTemplateDocumentsController(
             doc.UploadedAt,
             doc.Description,
         });
+    }
+
+    /// <summary>
+    /// Fuerza el reindexado RAG de un documento. Útil cuando:
+    ///   - El indexado original falló (IndexingError no nulo) y queremos reintentar.
+    ///   - Se mejora el chunker o se cambia el modelo de embedding y necesitamos
+    ///     reprocesar el PDF para aprovecharlo.
+    ///   - El PDF se subió antes de que existiera el sistema RAG (back-fill).
+    /// </summary>
+    [HttpPost("{docId:guid}/reindex")]
+    public async Task<IActionResult> Reindex(Guid templateId, Guid docId, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var exists = await db.CampaignTemplateDocuments
+            .AnyAsync(d => d.Id == docId
+                        && d.CampaignTemplateId == templateId
+                        && d.TenantId == tenantId, ct);
+        if (!exists) return NotFound(new { error = "Documento no encontrado." });
+
+        backgroundJobs.Enqueue<DocumentIndexerHangfireJob>(j => j.IndexAsync(docId, true));
+        return Accepted(new { docId, queued = true });
+    }
+
+    /// <summary>
+    /// Diagnóstico RAG — recibe una pregunta y devuelve los top chunks que el
+    /// retriever recuperaría para esa query. Útil para validar la calidad del
+    /// indexado sin tener que pasar por una conversación WhatsApp real.
+    /// El endpoint NO necesita que el tenant tenga UseRagRetrieval=true.
+    /// </summary>
+    public record RagDiagnoseRequest(string Query, int? TopK, float? MinScore);
+
+    [HttpPost("rag-diagnose")]
+    public async Task<IActionResult> RagDiagnose(
+        Guid templateId, [FromBody] RagDiagnoseRequest req, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        if (string.IsNullOrWhiteSpace(req.Query))
+            return BadRequest(new { error = "Query es requerido." });
+
+        var chunks = await ragRetriever.RetrieveAsync(
+            tenantId,
+            prioritizeTemplateId: templateId,
+            query: req.Query,
+            topK:     req.TopK ?? 5,
+            minScore: req.MinScore ?? 0.25f,
+            ct: ct);
+
+        return Ok(new
+        {
+            query     = req.Query,
+            tenantId,
+            templateId,
+            matched   = chunks.Count,
+            results   = chunks.Select(c => new
+            {
+                c.FileName,
+                c.PageNumber,
+                Score = Math.Round(c.Score, 3),
+                Preview = c.Text.Length > 220 ? c.Text[..220] + "…" : c.Text,
+            }),
+        });
+    }
+
+    /// <summary>
+    /// Devuelve estado de indexado RAG de los documentos del maestro — para que
+    /// la UI del admin muestre íconos de "Indexando…", "Indexado ✓" o
+    /// "Error ⚠" con detalle.
+    /// </summary>
+    [HttpGet("indexing-status")]
+    public async Task<IActionResult> IndexingStatus(Guid templateId, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var rows = await db.CampaignTemplateDocuments
+            .Where(d => d.CampaignTemplateId == templateId && d.TenantId == tenantId)
+            .Select(d => new
+            {
+                d.Id,
+                d.FileName,
+                d.IndexedAt,
+                d.IndexedTokenCount,
+                d.IndexingError,
+                ChunkCount = db.CampaignTemplateDocumentChunks.Count(c => c.DocumentId == d.Id),
+            })
+            .ToListAsync(ct);
+        return Ok(rows);
     }
 
     public record UpdateDocumentDescriptionRequest(string? Description);

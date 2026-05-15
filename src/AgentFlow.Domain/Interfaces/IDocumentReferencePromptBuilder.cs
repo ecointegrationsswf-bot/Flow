@@ -40,6 +40,27 @@ public interface IDocumentReferencePromptBuilder
     /// </summary>
     Task<IReadOnlyList<ReferenceDocument>> GetTenantDocumentsAsync(
         Guid? prioritizeTemplateId, Guid tenantId, CancellationToken ct = default);
+
+    /// <summary>
+    /// MODO RAG — recupera los chunks más relevantes para la pregunta del cliente
+    /// y construye un bloque de texto compacto listo para inyectar al system prompt.
+    /// Reemplaza la inyección de PDFs enteros: pasa de ~98k tokens por turno a
+    /// ~3-5k. Se usa SOLO cuando <c>Tenant.UseRagRetrieval = true</c>.
+    ///
+    /// Devuelve string vacío si:
+    ///   - El tenant no tiene chunks indexados
+    ///   - El retriever no encontró nada con score &gt;= umbral
+    ///   - La query está vacía
+    ///
+    /// En esos casos el caller cae al fallback (PDFs enteros) si está habilitado,
+    /// o responde sin contexto documental — el agente seguirá funcionando con su
+    /// system prompt base.
+    /// </summary>
+    Task<string> BuildRagContextForQueryAsync(
+        Guid? prioritizeTemplateId,
+        Guid tenantId,
+        string clientQuery,
+        CancellationToken ct = default);
 }
 
 /// <summary>
