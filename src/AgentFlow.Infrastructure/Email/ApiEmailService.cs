@@ -66,7 +66,7 @@ public class ApiEmailService(
 
     public Task SendLabelingSummaryAsync(string toEmail, string fullName, string excelUrl,
         IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
-        IEnumerable<string>? bccEmails = null, CancellationToken ct = default)
+        IEnumerable<string>? bccEmails = null, int outboundEmailCount = 0, CancellationToken ct = default)
         => PostAsync("/api/internal/email/labeling-summary",
             new
             {
@@ -77,7 +77,8 @@ public class ApiEmailService(
                     countsByLabel = c.CountsByLabel.ToDictionary(k => k.Key, v => v.Value),
                     unlabeled = c.Unlabeled
                 }).ToList(),
-                bccEmails = bccEmails?.ToList()
+                bccEmails = bccEmails?.ToList(),
+                outboundEmailCount,
             }, ct);
 
     private async Task PostAsync(string path, object payload, CancellationToken ct)

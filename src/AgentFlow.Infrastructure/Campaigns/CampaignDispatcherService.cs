@@ -95,7 +95,12 @@ public class CampaignDispatcherService(
         {
             campaign.CompletedAt = DateTime.UtcNow;
             campaign.Status = CampaignStatus.Completed;
-            campaign.IsActive = false;
+            // IsActive se MANTIENE en true a propósito. "Completed" significa que
+            // ya no hay mensajes iniciales por mandar, pero la campaña sigue VIVA
+            // para que FollowUpSweep dispare los seguimientos parametrizados y
+            // para que AutoCloseSweep la cierre cuando se cumplan AutoCloseHours
+            // desde CompletedAt. El flip a IsActive=false lo hace AutoCloseSweep,
+            // no este dispatcher.
             await db.SaveChangesAsync(ct);
 
             logger.LogInformation("Campaña {CampaignId}: completada (cierre temprano fuera de horario o sin in-flight).", campaignId);
@@ -250,7 +255,9 @@ public class CampaignDispatcherService(
             {
                 campaign.CompletedAt = DateTime.UtcNow;
                 campaign.Status = CampaignStatus.Completed;
-                campaign.IsActive = false;
+                // IsActive se MANTIENE en true. Ver nota en el cierre temprano arriba —
+                // la transición a IsActive=false la hace AutoCloseSweep cuando se
+                // cumplan AutoCloseHours desde CompletedAt.
                 await db.SaveChangesAsync(ct);
 
                 logger.LogInformation("Campaña {CampaignId}: completada. Todos los contactos procesados.", campaignId);

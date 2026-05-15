@@ -21,12 +21,19 @@ public interface IEmailService
     /// Incluye conteo por etiqueta + botón "Ver resumen" → Excel en Azure Blob.
     /// Los emails en bccEmails reciben copia oculta (típicamente todos los super admins).
     /// </summary>
+    /// <param name="outboundEmailCount">
+    /// Total de correos salientes (Direction=Outbound, Channel=Email) emitidos por
+    /// las campañas del reporte desde el último LabelingSummarySentAt. Se muestra
+    /// como una 4ª tarjeta KPI ("Emails enviados") en el correo. Default 0 si no
+    /// se quiere mostrar — la tarjeta sigue apareciendo con valor 0.
+    /// </param>
     Task SendLabelingSummaryAsync(
         string toEmail,
         string fullName,
         string excelUrl,
         IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
         IEnumerable<string>? bccEmails = null,
+        int outboundEmailCount = 0,
         CancellationToken ct = default);
 
     /// <summary>

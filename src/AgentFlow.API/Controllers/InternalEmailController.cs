@@ -29,7 +29,8 @@ public class InternalEmailController(IEmailService email) : ControllerBase
     public record MessageEntry(string Who, string Text);
     public record LabelingSummaryBody(
         string ToEmail, string FullName, string ExcelUrl,
-        List<CampaignSummary> Campaigns, List<string>? BccEmails);
+        List<CampaignSummary> Campaigns, List<string>? BccEmails,
+        int OutboundEmailCount = 0);
     public record CampaignSummary(string CampaignName, Dictionary<string, int> CountsByLabel, int Unlabeled);
     public record CustomHtmlBody(string ToEmail, string? CcEmail, string Subject, string HtmlBody, string? TextBody);
 
@@ -84,7 +85,7 @@ public class InternalEmailController(IEmailService email) : ControllerBase
                           (IReadOnlyDictionary<string, int>)c.CountsByLabel,
                           c.Unlabeled))
             .ToList();
-        await email.SendLabelingSummaryAsync(b.ToEmail, b.FullName, b.ExcelUrl, campaigns, b.BccEmails, ct);
+        await email.SendLabelingSummaryAsync(b.ToEmail, b.FullName, b.ExcelUrl, campaigns, b.BccEmails, b.OutboundEmailCount, ct);
         return Ok();
     }
 }

@@ -167,6 +167,32 @@ public class SendLabelingSummaryExecutor(
             {
                 var (excelBytes, perCampaignSummary) = await BuildExcelAndSummaryAsync(campaignIds, ct);
 
+                // ── Conteo de correos salientes en el delta del reporte ──────────
+                // Mismo criterio de idempotencia que las etiquetas: solo correos
+                // enviados DESPUÉS de la última fecha de envío del resumen
+                // (LabelingSummarySentAt). Si la campaña nunca se reportó (NULL),
+                // entran todos sus correos salientes. Esto se muestra como la 4ª
+                // tarjeta KPI "Emails enviados". Si la query falla por cualquier
+                // razón, default a 0 para no romper el envío del resumen.
+                var outboundEmailCount = 0;
+                try
+                {
+                    outboundEmailCount = await db.Messages
+                        .Where(m => m.Direction == MessageDirection.Outbound
+                                 && m.Channel == ChannelType.Email
+                                 && m.Conversation.CampaignId != null
+                                 && campaignIds.Contains(m.Conversation.CampaignId!.Value)
+                                 && (m.Conversation.Campaign!.LabelingSummarySentAt == null
+                                     || m.SentAt > m.Conversation.Campaign.LabelingSummarySentAt))
+                        .CountAsync(ct);
+                }
+                catch (Exception exCount)
+                {
+                    log.LogWarning(exCount,
+                        "Summary: no se pudo calcular outboundEmailCount para grupo '{Key}' tenant {TenantId} — se enviará el resumen con 0.",
+                        key, groupTenantId);
+                }
+
                 // Folder en blob — para automatizadas, namespace por tenant; para
                 // humanas, namespace por email del usuario (legacy).
                 var stamp = DateTime.UtcNow.ToString("yyyyMMddHHmmss");
@@ -190,7 +216,9 @@ public class SendLabelingSummaryExecutor(
                     {
                         await emailService.SendLabelingSummaryAsync(
                             r.Email, r.FullName, url, perCampaignSummary,
-                            bccEmails: superAdminEmails, ct: ct);
+                            bccEmails: superAdminEmails,
+                            outboundEmailCount: outboundEmailCount,
+                            ct: ct);
                         perGroupSent++;
                     }
                     catch (Exception exMail)

@@ -476,10 +476,11 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         string excelUrl,
         IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
         IEnumerable<string>? bccEmails = null,
+        int outboundEmailCount = 0,
         CancellationToken ct = default)
     {
         var subject = "TalkIA — Resumen del etiquetado";
-        var html = BuildLabelingSummaryTemplate(fullName, excelUrl, campaigns);
+        var html = BuildLabelingSummaryTemplate(fullName, excelUrl, campaigns, outboundEmailCount);
         await SendAsync(toEmail, fullName, subject, html, ct, bccEmails);
     }
 
@@ -499,7 +500,8 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
 
     private static string BuildLabelingSummaryTemplate(
         string fullName, string excelUrl,
-        IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns)
+        IReadOnlyList<(string CampaignName, IReadOnlyDictionary<string, int> CountsByLabel, int Unlabeled)> campaigns,
+        int outboundEmailCount = 0)
     {
         var totalConv = 0;
         var totalEtiq = 0;
@@ -677,34 +679,43 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
                   </p>
                 </td></tr>
 
-                <!-- KPI Cards -->
+                <!-- KPI Cards (4 columnas: Etiquetadas / Total convs / Campañas / Emails enviados) -->
                 <tr><td style="padding:18px 40px 12px;">
                   <table width="100%" cellpadding="0" cellspacing="0">
                     <tr>
-                      <td width="33%" valign="top" style="padding:0 5px 0 0;">
+                      <td width="25%" valign="top" style="padding:0 4px 0 0;">
                         <table cellpadding="0" cellspacing="0" border="0" width="100%">
-                          <tr><td bgcolor="#dbeafe" style="background-color:#dbeafe;background-image:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%);border:1px solid #bfdbfe;border-radius:10px;padding:14px 12px;text-align:center;">
-                            <div style="font-size:11px;color:#1e40af;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Etiquetadas</div>
-                            <div style="font-size:28px;color:#1e3a8a;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{totalEtiq}}</div>
+                          <tr><td bgcolor="#dbeafe" style="background-color:#dbeafe;background-image:linear-gradient(135deg,#dbeafe 0%,#eff6ff 100%);border:1px solid #bfdbfe;border-radius:10px;padding:14px 10px;text-align:center;">
+                            <div style="font-size:10px;color:#1e40af;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Etiquetadas</div>
+                            <div style="font-size:26px;color:#1e3a8a;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{totalEtiq}}</div>
                             <div style="font-size:11px;color:#3b82f6;font-weight:700;margin-top:2px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{pct}}%</div>
                           </td></tr>
                         </table>
                       </td>
-                      <td width="33%" valign="top" style="padding:0 5px;">
+                      <td width="25%" valign="top" style="padding:0 4px;">
                         <table cellpadding="0" cellspacing="0" border="0" width="100%">
-                          <tr><td bgcolor="#f1f5f9" style="background-color:#f1f5f9;background-image:linear-gradient(135deg,#f1f5f9 0%,#f8fafc 100%);border:1px solid #e2e8f0;border-radius:10px;padding:14px 12px;text-align:center;">
-                            <div style="font-size:11px;color:#475569;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Total convs</div>
-                            <div style="font-size:28px;color:#0f172a;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{totalConv}}</div>
+                          <tr><td bgcolor="#f1f5f9" style="background-color:#f1f5f9;background-image:linear-gradient(135deg,#f1f5f9 0%,#f8fafc 100%);border:1px solid #e2e8f0;border-radius:10px;padding:14px 10px;text-align:center;">
+                            <div style="font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Total convs</div>
+                            <div style="font-size:26px;color:#0f172a;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{totalConv}}</div>
                             <div style="font-size:11px;color:#64748b;font-weight:700;margin-top:2px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">procesadas</div>
                           </td></tr>
                         </table>
                       </td>
-                      <td width="33%" valign="top" style="padding:0 0 0 5px;">
+                      <td width="25%" valign="top" style="padding:0 4px;">
                         <table cellpadding="0" cellspacing="0" border="0" width="100%">
-                          <tr><td bgcolor="#fef3c7" style="background-color:#fef3c7;background-image:linear-gradient(135deg,#fef3c7 0%,#fffbeb 100%);border:1px solid #fde68a;border-radius:10px;padding:14px 12px;text-align:center;">
-                            <div style="font-size:11px;color:#a16207;text-transform:uppercase;letter-spacing:0.6px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Campañas</div>
-                            <div style="font-size:28px;color:#78350f;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{campaigns.Count}}</div>
+                          <tr><td bgcolor="#fef3c7" style="background-color:#fef3c7;background-image:linear-gradient(135deg,#fef3c7 0%,#fffbeb 100%);border:1px solid #fde68a;border-radius:10px;padding:14px 10px;text-align:center;">
+                            <div style="font-size:10px;color:#a16207;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Campañas</div>
+                            <div style="font-size:26px;color:#78350f;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{campaigns.Count}}</div>
                             <div style="font-size:11px;color:#a16207;font-weight:700;margin-top:2px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">en el reporte</div>
+                          </td></tr>
+                        </table>
+                      </td>
+                      <td width="25%" valign="top" style="padding:0 0 0 4px;">
+                        <table cellpadding="0" cellspacing="0" border="0" width="100%">
+                          <tr><td bgcolor="#dcfce7" style="background-color:#dcfce7;background-image:linear-gradient(135deg,#dcfce7 0%,#f0fdf4 100%);border:1px solid #bbf7d0;border-radius:10px;padding:14px 10px;text-align:center;">
+                            <div style="font-size:10px;color:#15803d;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;font-family:'Segoe UI',Roboto,Arial,sans-serif;">Emails enviados</div>
+                            <div style="font-size:26px;color:#14532d;font-weight:700;line-height:1.1;margin-top:4px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">{{outboundEmailCount}}</div>
+                            <div style="font-size:11px;color:#16a34a;font-weight:700;margin-top:2px;font-family:'Segoe UI',Roboto,Arial,sans-serif;">en el corte</div>
                           </td></tr>
                         </table>
                       </td>

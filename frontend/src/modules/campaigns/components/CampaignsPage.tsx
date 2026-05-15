@@ -35,6 +35,9 @@ const statusConfig: Record<string, { label: string; className: string }> = {
   Completed:  { label: 'Completada', className: 'bg-blue-100 text-blue-700' },
   Failed:     { label: 'Error',      className: 'bg-red-100 text-red-700' },
   Cancelled:  { label: 'Cancelada',  className: 'bg-gray-200 text-gray-600 line-through' },
+  // Status final del ciclo de vida — la setea AutoCloseSweep al cumplirse
+  // CampaignTemplate.AutoCloseHours desde CompletedAt. No más follow-ups.
+  Closed:     { label: 'Cerrada',    className: 'bg-slate-200 text-slate-700' },
 }
 
 // Estados desde los que se puede CANCELAR (terminal — irreversible).

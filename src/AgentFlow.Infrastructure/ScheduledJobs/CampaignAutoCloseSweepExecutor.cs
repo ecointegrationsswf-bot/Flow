@@ -32,19 +32,27 @@ public class CampaignAutoCloseSweepExecutor(
     {
         var nowUtc = DateTime.UtcNow;
 
-        // Cargamos campañas Running con su template (necesitamos AutoCloseHours).
-        var runningCampaigns = await db.Campaigns
+        // Cargamos campañas vivas (Running o Completed) con su template — necesitamos
+        // AutoCloseHours. Incluir Completed es CRÍTICO: el dispatcher marca
+        // Status=Completed apenas termina de mandar los mensajes iniciales, pero
+        // la campaña sigue viva (IsActive=true) durante la ventana de follow-ups y
+        // hasta que se cumplan AutoCloseHours desde CompletedAt. Si solo
+        // filtráramos por Running, las campañas Completed quedarían colgadas para
+        // siempre y nunca pasarían a Closed → el "Cierre automático" del maestro
+        // no se reflejaría en la vista de Campañas.
+        var liveCampaigns = await db.Campaigns
             .Where(c => c.IsActive
-                     && c.Status == CampaignStatus.Running
+                     && (c.Status == CampaignStatus.Running
+                         || c.Status == CampaignStatus.Completed)
                      && c.CampaignTemplateId != null)
-            .OrderBy(c => c.LaunchedAt ?? c.CreatedAt)
+            .OrderBy(c => c.CompletedAt ?? c.LaunchedAt ?? c.CreatedAt)
             .Take(MaxCampaignsPerTick)
             .ToListAsync(ct);
 
-        if (runningCampaigns.Count == 0)
-            return JobRunResult.Skipped("Sin campañas Running.");
+        if (liveCampaigns.Count == 0)
+            return JobRunResult.Skipped("Sin campañas vivas (Running/Completed) para evaluar.");
 
-        var templateIds = runningCampaigns.Select(c => c.CampaignTemplateId!.Value).Distinct().ToList();
+        var templateIds = liveCampaigns.Select(c => c.CampaignTemplateId!.Value).Distinct().ToList();
         var templates = await db.CampaignTemplates
             .Where(t => templateIds.Contains(t.Id))
             .ToDictionaryAsync(t => t.Id, ct);
@@ -53,18 +61,22 @@ public class CampaignAutoCloseSweepExecutor(
         var campaignsTouched = 0;
         var failures = 0;
 
-        foreach (var campaign in runningCampaigns)
+        foreach (var campaign in liveCampaigns)
         {
             if (ct.IsCancellationRequested) break;
             if (!templates.TryGetValue(campaign.CampaignTemplateId!.Value, out var template)) continue;
             if (template.AutoCloseHours <= 0) continue;
 
-            // El "reloj" de auto-cierre arranca con la campaña; usamos LaunchedAt
-            // o, en su defecto, CreatedAt. Cuando una conversación tiene actividad
-            // posterior, no se cierra hasta que esa conversación supere su propio
-            // umbral por inactividad — eso lo gestiona el campo Conversation.LastActivityAt.
-            var campaignDueAt = (campaign.LaunchedAt ?? campaign.CreatedAt)
-                                    .AddHours(template.AutoCloseHours);
+            // El reloj de auto-cierre arranca DESPUÉS de que terminó el dispatch
+            // inicial (CompletedAt). Esto matchea el label del UI: "Horas después de
+            // enviada la campaña para cerrar automáticamente". Si la campaña todavía
+            // está en Running (CompletedAt == null), caemos a LaunchedAt como
+            // fallback para no esperar indefinidamente; y a CreatedAt para casos
+            // legacy donde LaunchedAt nunca se setteó.
+            var anchorUtc = campaign.CompletedAt
+                              ?? campaign.LaunchedAt
+                              ?? campaign.CreatedAt;
+            var campaignDueAt = anchorUtc.AddHours(template.AutoCloseHours);
             if (nowUtc < campaignDueAt) continue; // todavía dentro de la ventana
 
             try
@@ -72,7 +84,11 @@ public class CampaignAutoCloseSweepExecutor(
                 var (closed, failed) = await CloseCampaignAsync(campaign, template, ctx, ct);
                 totalClosed += closed;
                 failures += failed;
-                if (closed > 0) campaignsTouched++;
+                // Contamos la campaña como "tocada" si la cerramos efectivamente
+                // (Status=Closed), independiente de si hubo o no conversaciones
+                // que cerrar. Antes solo contaba si había convs activas — fallaba
+                // el caso típico donde todos los contactos están en WaitingClient.
+                campaignsTouched++;
             }
             catch (Exception ex)
             {
@@ -87,34 +103,40 @@ public class CampaignAutoCloseSweepExecutor(
 
         await auditor.FlushAsync(ct);
 
-        var summary = $"Closed={totalClosed} convs en {campaignsTouched} campañas · failures={failures} · scanned={runningCampaigns.Count}";
+        var summary = $"Closed={totalClosed} convs en {campaignsTouched} campañas · failures={failures} · scanned={liveCampaigns.Count}";
         log.LogInformation("[AutoCloseSweep] {Summary}", summary);
 
-        if (totalClosed == 0 && failures == 0)
+        // Si cerramos al menos una campaña, es Success aunque no hubiera convs que cerrar.
+        if (campaignsTouched == 0 && failures == 0)
             return JobRunResult.Skipped(summary);
-        if (failures > 0 && totalClosed == 0)
+        if (failures > 0 && campaignsTouched == 0)
             return JobRunResult.Failed(summary);
-        return JobRunResult.Success(totalClosed, summary);
+        // El conteo principal del Success es de campañas cerradas. La línea de
+        // summary ya muestra el detalle de convs cerradas + failures.
+        return JobRunResult.Success(campaignsTouched, summary);
     }
 
     private async Task<(int closed, int failed)> CloseCampaignAsync(
         Campaign campaign, CampaignTemplate template, ScheduledJobContext ctx, CancellationToken ct)
     {
-        var activeConvs = await db.Conversations
+        // Cerramos también conversaciones que sigan esperando al cliente — un cliente
+        // que jamás respondió mantiene la conversación en WaitingClient, no en Active.
+        // Si solo cerramos Active dejábamos un montón de conversaciones colgando.
+        var openConvs = await db.Conversations
             .Where(c => c.CampaignId == campaign.Id
-                     && c.Status == ConversationStatus.Active)
+                     && (c.Status == ConversationStatus.Active
+                         || c.Status == ConversationStatus.WaitingClient))
             .ToListAsync(ct);
-        if (activeConvs.Count == 0) return (0, 0);
 
         var autoCloseMessage = template.AutoCloseMessage;
-        var provider = string.IsNullOrEmpty(autoCloseMessage)
+        var provider = string.IsNullOrEmpty(autoCloseMessage) || openConvs.Count == 0
             ? null
             : await providerFactory.GetProviderAsync(campaign.TenantId, ct);
 
         var success = 0;
         var failure = 0;
 
-        foreach (var conv in activeConvs)
+        foreach (var conv in openConvs)
         {
             if (ct.IsCancellationRequested) break;
             try
@@ -156,21 +178,28 @@ public class CampaignAutoCloseSweepExecutor(
                     ex.Message);
             }
         }
+
+        // ── Cierre formal de la campaña ──────────────────────────────────────
+        // Esto es lo que hace que aparezca "Cerrada" en la vista de Campañas.
+        // Antes del fix, el sweeper cerraba las conversaciones pero NUNCA tocaba
+        // los flags de la campaña, así que la UI mostraba "Completada" para
+        // siempre. Ahora flipamos a Closed + IsActive=false.
+        // Una vez IsActive=false, el FollowUpSweepExecutor deja de tomar sus
+        // contactos (filtro c.Campaign.IsActive) → no más seguimientos.
+        // (El timestamp del cierre queda registrado en el audit log del job.)
+        campaign.Status   = CampaignStatus.Closed;
+        campaign.IsActive = false;
+
         await db.SaveChangesAsync(ct);
 
-        foreach (var conv in activeConvs.Where(c => c.Status == ConversationStatus.Closed))
+        foreach (var conv in openConvs.Where(c => c.Status == ConversationStatus.Closed))
         {
             try { await eventDispatcher.DispatchAsync("ConversationClosed", conv.Id.ToString(), campaign.TenantId, ct); }
             catch (Exception ex) { log.LogWarning(ex, "[AutoCloseSweep] no pude disparar ConversationClosed."); }
         }
 
-        var stillActive = await db.Conversations
-            .CountAsync(c => c.CampaignId == campaign.Id && c.Status == ConversationStatus.Active, ct);
-        if (stillActive == 0)
-        {
-            try { await eventDispatcher.DispatchAsync("CampaignFinished", campaign.Id.ToString(), campaign.TenantId, ct); }
-            catch (Exception ex) { log.LogWarning(ex, "[AutoCloseSweep] no pude disparar CampaignFinished."); }
-        }
+        try { await eventDispatcher.DispatchAsync("CampaignFinished", campaign.Id.ToString(), campaign.TenantId, ct); }
+        catch (Exception ex) { log.LogWarning(ex, "[AutoCloseSweep] no pude disparar CampaignFinished."); }
 
         return (success, failure);
     }
