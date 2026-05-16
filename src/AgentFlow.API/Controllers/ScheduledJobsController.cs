@@ -15,7 +15,11 @@ public record ScheduledJobUpsertRequest(
     string? TriggerEvent,
     int? DelayMinutes,
     string Scope = "AllTenants",
-    bool IsActive = true);
+    bool IsActive = true,
+    // ContextId — solo relevante cuando Scope=SingleTenant. Para acciones globales
+    // (DOWNLOAD_DELINQUENCY_DATA, etc.) este campo guarda el TenantId del override.
+    // El executor lee ContextId para filtrar configs aplicables.
+    string? ContextId = null);
 
 public record CronPreviewRequest(string Expression);
 
@@ -35,7 +39,25 @@ public class ScheduledJobsController(
     [HttpGet]
     public async Task<IActionResult> List(CancellationToken ct)
     {
-        var list = await jobs.ListAsync(ct);
+        var list = (await jobs.ListAsync(ct)).ToList();
+
+        // Resolver nombres de tenant para los jobs SingleTenant — el frontend
+        // muestra un badge "📌 UNISEGUROS" en esas filas. Hacemos una sola query
+        // por todos los ContextIds que sean Guids válidos (los demás se ignoran).
+        var tenantGuids = list
+            .Where(j => string.Equals(j.Scope, "SingleTenant", StringComparison.OrdinalIgnoreCase)
+                     && !string.IsNullOrEmpty(j.ContextId))
+            .Select(j => Guid.TryParse(j.ContextId, out var g) ? g : Guid.Empty)
+            .Where(g => g != Guid.Empty)
+            .Distinct()
+            .ToList();
+        var tenantNames = tenantGuids.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await db.Tenants
+                .Where(t => tenantGuids.Contains(t.Id))
+                .Select(t => new { t.Id, t.Name })
+                .ToDictionaryAsync(t => t.Id, t => t.Name, ct);
+
         return Ok(list.Select(j => new
         {
             j.Id,
@@ -53,7 +75,12 @@ public class ScheduledJobsController(
             j.LastRunSummary,
             j.ConsecutiveFailures,
             j.CreatedAt,
-            j.UpdatedAt
+            j.UpdatedAt,
+            j.ContextId,
+            TenantName = (!string.IsNullOrEmpty(j.ContextId)
+                          && Guid.TryParse(j.ContextId, out var ctxGuid)
+                          && tenantNames.TryGetValue(ctxGuid, out var tn))
+                ? tn : null,
         }));
     }
 
@@ -73,6 +100,26 @@ public class ScheduledJobsController(
         var validation = ValidateRequest(req);
         if (validation is not null) return BadRequest(new { error = validation });
 
+        // Validación específica de SingleTenant: ContextId obligatorio y debe ser
+        // un TenantId válido (Guid). Permite que la UI cree overrides per-tenant
+        // sin endpoint separado.
+        if (string.Equals(req.Scope, "SingleTenant", StringComparison.OrdinalIgnoreCase))
+        {
+            if (string.IsNullOrWhiteSpace(req.ContextId) || !Guid.TryParse(req.ContextId, out var ctxId))
+                return BadRequest(new { error = "Scope=SingleTenant requiere ContextId con el TenantId." });
+            if (!await db.Tenants.AnyAsync(t => t.Id == ctxId, ct))
+                return BadRequest(new { error = "El tenant indicado en ContextId no existe." });
+            // Idempotencia: 1 cron SingleTenant por (action, tenant). Si ya existe
+            // uno activo, devolver 409 para que el admin lo borre antes de crear otro.
+            var dupExists = await db.ScheduledWebhookJobs.AnyAsync(j =>
+                j.ActionDefinitionId == req.ActionDefinitionId
+                && j.Scope == "SingleTenant"
+                && j.ContextId == req.ContextId
+                && j.IsActive, ct);
+            if (dupExists)
+                return Conflict(new { error = "Ya existe un cron activo para este tenant y esta acción. Elimínalo antes de crear otro." });
+        }
+
         var job = new ScheduledWebhookJob
         {
             Id = Guid.NewGuid(),
@@ -83,6 +130,7 @@ public class ScheduledJobsController(
             DelayMinutes = req.DelayMinutes,
             Scope = req.Scope,
             IsActive = req.IsActive,
+            ContextId = req.ContextId,
             NextRunAt = ComputeInitialNextRunAt(req)
         };
         await jobs.AddAsync(job, ct);

@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import {
   Calendar, Clock, Play, Pause, Trash2, RefreshCw, Plus,
   AlertCircle, CheckCircle2, XCircle, Loader2, EyeOff, Eye,
+  Settings, Pin,
 } from 'lucide-react'
 import {
   useScheduledJobs, useDeleteScheduledJob, useRunScheduledJobNow,
@@ -11,7 +12,12 @@ import { useTenantTime } from '@/shared/hooks/useTenantTime'
 import { getActionFriendlyName } from '@/shared/actionLabels'
 import { ScheduledJobFormModal } from './ScheduledJobFormModal'
 import { ScheduledJobHistoryModal } from './ScheduledJobHistoryModal'
+import { PerTenantOverrideModal } from './PerTenantOverrideModal'
 import { confirmDialog } from '@/shared/components/dialog'
+
+// Acciones que soportan override per-tenant. Por ahora solo morosidad —
+// agregar más slugs aquí cuando se generalice la lógica a otros executors.
+const OVERRIDE_ENABLED_ACTIONS = new Set(['DOWNLOAD_DELINQUENCY_DATA'])
 
 export function ScheduledJobsPage() {
   const { data: jobs, isLoading, refetch } = useScheduledJobs()
@@ -22,6 +28,9 @@ export function ScheduledJobsPage() {
   const [editing, setEditing] = useState<ScheduledJob | null>(null)
   const [creating, setCreating] = useState(false)
   const [historyJobId, setHistoryJobId] = useState<string | null>(null)
+  // Job sobre el cual se abre el modal de "Personalizar por tenant" — guarda
+  // el job base (AllTenants) para heredar action + cron por default en el modal.
+  const [overrideBaseJob, setOverrideBaseJob] = useState<ScheduledJob | null>(null)
   // Por defecto ocultamos los pausados — se acumulan rápido cuando se cancelan
   // jobs viejos y abruman la lista. Toggle visible para verlos cuando hace falta.
   const [showPaused, setShowPaused] = useState(false)
@@ -147,7 +156,18 @@ export function ScheduledJobsPage() {
                     <TriggerCell job={j} />
                   </td>
                   <td className="px-3 py-2">
-                    <ScopeBadge scope={j.scope} />
+                    <div className="flex items-center gap-1.5">
+                      <ScopeBadge scope={j.scope} />
+                      {j.scope === 'SingleTenant' && j.tenantName && (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-700/40 bg-emerald-900/30 px-1.5 py-0.5 text-[10px] font-medium text-emerald-300"
+                          title={`Override per-tenant — ContextId: ${j.contextId}`}
+                        >
+                          <Pin className="h-2.5 w-2.5" />
+                          {j.tenantName}
+                        </span>
+                      )}
+                    </div>
                   </td>
                   <td className="px-3 py-2 text-gray-400">
                     {j.nextRunAt ? tt.dateTime(j.nextRunAt) : '—'}
@@ -182,6 +202,20 @@ export function ScheduledJobsPage() {
                       >
                         <Clock className="h-4 w-4" />
                       </button>
+                      {/* Personalizar por tenant — solo en filas AllTenants
+                          cuya acción esté habilitada. Permite crear un cron
+                          específico para un tenant sin afectar al resto. */}
+                      {j.scope === 'AllTenants'
+                        && j.actionName
+                        && OVERRIDE_ENABLED_ACTIONS.has(j.actionName) && (
+                        <button
+                          onClick={() => setOverrideBaseJob(j)}
+                          title="Personalizar para un tenant específico"
+                          className="rounded p-1.5 text-gray-400 hover:bg-gray-800 hover:text-emerald-400"
+                        >
+                          <Settings className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
                         onClick={() => handleDelete(j)}
                         title="Eliminar"
@@ -214,6 +248,13 @@ export function ScheduledJobsPage() {
           onClose={() => setHistoryJobId(null)}
         />
       )}
+
+      {overrideBaseJob && (
+        <PerTenantOverrideModal
+          baseJob={overrideBaseJob}
+          onClose={() => setOverrideBaseJob(null)}
+        />
+      )}
     </div>
   )
 }
@@ -233,6 +274,7 @@ function TriggerCell({ job }: { job: ScheduledJob }) {
 function ScopeBadge({ scope }: { scope: string }) {
   const cls = scope === 'AllTenants' ? 'bg-blue-900/50 text-blue-300'
     : scope === 'PerCampaign' ? 'bg-amber-900/50 text-amber-300'
+    : scope === 'SingleTenant' ? 'bg-purple-900/50 text-purple-300'
     : 'bg-emerald-900/50 text-emerald-300'
   return <span className={`rounded px-1.5 py-0.5 text-xs ${cls}`}>{scope}</span>
 }

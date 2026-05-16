@@ -51,13 +51,47 @@ public class DelinquencyDownloadExecutor(
         if (actionDef is null)
             return JobRunResult.Failed("ActionDefinition DOWNLOAD_DELINQUENCY_DATA no encontrada.");
 
-        // 2. Buscar todos los tenants con configuración activa de morosidad para esta acción
-        var configs = await db.ActionDelinquencyConfigs
-            .Where(c => c.ActionDefinitionId == actionDef.Id && c.IsActive)
-            .ToListAsync(ct);
+        // 2. Buscar las configuraciones aplicables según el Scope del job:
+        //    • Scope=SingleTenant: solo el tenant cuyo Id viene en ContextId (override).
+        //    • Scope=AllTenants: el resto de tenants — EXCLUYENDO los que tengan su
+        //      propio cron SingleTenant activo (evita doble ejecución para tenants
+        //      con horario personalizado vía la pantalla Scheduled Jobs).
+        var configsQuery = db.ActionDelinquencyConfigs
+            .Where(c => c.ActionDefinitionId == actionDef.Id && c.IsActive);
+
+        if (string.Equals(job.Scope, "SingleTenant", StringComparison.OrdinalIgnoreCase)
+            && Guid.TryParse(ctx.ContextId, out var singleTenantId))
+        {
+            configsQuery = configsQuery.Where(c => c.TenantId == singleTenantId);
+        }
+        else
+        {
+            // Modo AllTenants (o cualquier otro fallback): excluir los tenants
+            // que tienen su propio cron SingleTenant activo para esta misma acción.
+            var overrideContextIds = await db.ScheduledWebhookJobs
+                .Where(j => j.ActionDefinitionId == actionDef.Id
+                         && j.IsActive
+                         && j.Scope == "SingleTenant"
+                         && j.ContextId != null)
+                .Select(j => j.ContextId!)
+                .ToListAsync(ct);
+            var excludedTenantIds = overrideContextIds
+                .Select(s => Guid.TryParse(s, out var g) ? g : Guid.Empty)
+                .Where(g => g != Guid.Empty)
+                .ToHashSet();
+            if (excludedTenantIds.Count > 0)
+            {
+                log.LogInformation(
+                    "DelinquencyDownload AllTenants: excluyendo {N} tenants con cron propio: [{Ids}]",
+                    excludedTenantIds.Count, string.Join(",", excludedTenantIds));
+                configsQuery = configsQuery.Where(c => !excludedTenantIds.Contains(c.TenantId));
+            }
+        }
+
+        var configs = await configsQuery.ToListAsync(ct);
 
         if (configs.Count == 0)
-            return JobRunResult.Skipped("No hay configuraciones activas de morosidad para ningún tenant.");
+            return JobRunResult.Skipped("No hay configuraciones activas de morosidad para los tenants aplicables.");
 
         log.LogInformation("DelinquencyDownload: {N} tenants configurados.", configs.Count);
 

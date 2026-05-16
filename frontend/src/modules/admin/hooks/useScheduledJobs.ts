@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { adminClient } from '@/shared/api/adminClient'
 
 export type TriggerType = 'Cron' | 'EventBased' | 'DelayFromEvent'
-export type JobScope = 'AllTenants' | 'PerCampaign' | 'PerConversation'
+export type JobScope = 'AllTenants' | 'PerCampaign' | 'PerConversation' | 'SingleTenant'
 
 export interface ScheduledJob {
   id: string
@@ -21,6 +21,9 @@ export interface ScheduledJob {
   consecutiveFailures: number
   createdAt: string
   updatedAt: string
+  // SingleTenant: GUID del tenant guardado en ContextId del job + su nombre resuelto
+  contextId: string | null
+  tenantName: string | null
 }
 
 export interface ScheduledJobUpsert {
@@ -31,6 +34,8 @@ export interface ScheduledJobUpsert {
   delayMinutes?: number | null
   scope: JobScope
   isActive: boolean
+  // Solo aplica cuando Scope=SingleTenant. TenantId al que aplica el override.
+  contextId?: string | null
 }
 
 export interface JobExecution {
