@@ -40,7 +40,11 @@ public record UserInfo(
 
 [ApiController]
 [Route("api/auth")]
-public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmailService emailService) : ControllerBase
+public class AuthController(
+    AgentFlowDbContext db,
+    IConfiguration config,
+    IEmailService emailService,
+    AgentFlow.Domain.Interfaces.ISystemAuditLogger systemAudit) : ControllerBase
 {
     [HttpPost("login")]
     [EnableRateLimiting("auth")]
@@ -66,6 +70,45 @@ public class AuthController(AgentFlowDbContext db, IConfiguration config, IEmail
                 await db.SaveChangesAsync(ct);
                 var tempToken = GenerateTempToken(user.Id.ToString(), "password-change");
                 return Ok(new { requiresPasswordChange = true, tempToken });
+            }
+
+            // ── Bypass 2FA — short-circuit para cuentas operativas internas ──
+            // Solo aplicable a cuentas creadas con BypassTwoFactor=true desde el
+            // panel super admin. Pensado para cuentas del equipo de Jamcst (ej:
+            // setup-uniseguros@jamcst.com) donde la fricción del código por email
+            // es innecesaria. Cada uso queda registrado en SystemAuditLog para
+            // auditoría — ver Category="AUTH_2FA_BYPASS".
+            if (user.BypassTwoFactor)
+            {
+                await db.SaveChangesAsync(ct);
+                await systemAudit.LogWarningAsync(
+                    category: "AUTH_2FA_BYPASS",
+                    message: $"Login sin 2FA: {user.Email} ({user.Role})",
+                    tenantId: user.TenantId,
+                    relatedEntityType: "AppUser",
+                    relatedEntityId: user.Id,
+                    contextJson: System.Text.Json.JsonSerializer.Serialize(new
+                    {
+                        tenantName = user.Tenant?.Name,
+                        userEmail = user.Email,
+                        userRole = user.Role.ToString(),
+                        ip = HttpContext.Connection.RemoteIpAddress?.ToString(),
+                    }),
+                    ct: ct);
+
+                var directToken = GenerateJwt(user);
+                return Ok(new LoginResponse(
+                    Token: directToken,
+                    TenantId: user.TenantId.ToString(),
+                    User: new UserInfo(
+                        Id: user.Id.ToString(),
+                        FullName: user.FullName,
+                        Email: user.Email,
+                        Role: user.Role.ToString(),
+                        AvatarUrl: user.AvatarUrl,
+                        Permissions: user.Permissions ?? []
+                    )
+                ));
             }
 
             // Paso 2: Enviar código 2FA

@@ -17,7 +17,7 @@ namespace AgentFlow.API.Controllers;
 public record AdminLoginRequest(string Email, string Password);
 public record CreateTenantRequest(string Name, string Slug, string Country, decimal MonthlyBillingAmount);
 public record UpdateTenantRequest(string? Name, string? Country, decimal? MonthlyBillingAmount, bool? IsActive);
-public record CreateTenantUserRequest(string FullName, string Email, string Password, string Role);
+public record CreateTenantUserRequest(string FullName, string Email, string Password, string Role, bool BypassTwoFactor = false);
 public record ChangePasswordRequest(string NewPassword);
 public record CreateAgentCategoryRequest(string Name);
 public record UpdateAgentCategoryRequest(string? Name, bool? IsActive);
@@ -749,7 +749,7 @@ public class SuperAdminController(
     {
         var users = await db.AppUsers
             .Where(u => u.TenantId == tenantId)
-            .Select(u => new { u.Id, u.FullName, u.Email, Role = u.Role.ToString(), u.IsActive, u.CreatedAt, u.LastLoginAt })
+            .Select(u => new { u.Id, u.FullName, u.Email, Role = u.Role.ToString(), u.IsActive, u.CreatedAt, u.LastLoginAt, u.BypassTwoFactor })
             .ToListAsync(ct);
 
         return Ok(users);
@@ -777,6 +777,11 @@ public class SuperAdminController(
             PasswordHash = AuthController.HashPassword(req.Password),
             Role = role,
             IsActive = true,
+            // Bypass 2FA solo super admin lo activa al crear. Sirve para cuentas
+            // operativas internas (setup-tenant@jamcst.com) donde la fricción del
+            // código por email no aporta seguridad real. Cuentas del cliente
+            // final deben mantenerlo en false.
+            BypassTwoFactor = req.BypassTwoFactor,
         };
 
         db.AppUsers.Add(user);

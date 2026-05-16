@@ -877,6 +877,9 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AppUsers') AND name = 'NotifyPhone')
             BEGIN ALTER TABLE AppUsers ADD NotifyPhone nvarchar(20) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AppUsers') AND name = 'BypassTwoFactor')
+            BEGIN ALTER TABLE AppUsers ADD BypassTwoFactor bit NOT NULL DEFAULT 0; END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Campaigns/AppUsers columns: {ex.Message}"); }
 

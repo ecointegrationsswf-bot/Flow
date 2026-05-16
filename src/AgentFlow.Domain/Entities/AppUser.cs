@@ -43,6 +43,18 @@ public class AppUser
     public string? TwoFactorCode { get; set; }
     public DateTime? TwoFactorExpiry { get; set; }
 
+    /// <summary>
+    /// Cuando es true, este usuario salta el paso de verificación 2FA al iniciar
+    /// sesión y recibe el JWT directo tras validar email + password.
+    /// Default false (seguro por defecto). Solo el super admin debería poder
+    /// activarlo, pensado para cuentas operativas internas del equipo de Jamcst
+    /// (ej: setup-uniseguros@jamcst.com) donde la fricción del código por email
+    /// es innecesaria. NUNCA activar para usuarios del corredor (clientes finales).
+    /// Cada login con BypassTwoFactor=true queda registrado en SystemAuditLog
+    /// (Category=AUTH_2FA_BYPASS) para auditoría.
+    /// </summary>
+    public bool BypassTwoFactor { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? LastLoginAt { get; set; }
 }

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { X, Loader2, KeyRound, UserPlus, Eye, EyeOff } from 'lucide-react'
+import { X, Loader2, KeyRound, UserPlus, Eye, EyeOff, ShieldOff, ShieldCheck } from 'lucide-react'
 import {
   useAdminTenantUsers,
   useCreateTenantUser,
@@ -16,6 +16,7 @@ const newUserSchema = z.object({
   email: z.string().email('Email invalido'),
   password: z.string().min(8, 'Minimo 8 caracteres'),
   role: z.string().min(1, 'El rol es requerido'),
+  bypassTwoFactor: z.boolean().optional(),
 })
 
 type NewUserForm = z.infer<typeof newUserSchema>
@@ -74,7 +75,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
     formState: { errors },
   } = useForm<NewUserForm>({
     resolver: zodResolver(newUserSchema),
-    defaultValues: { fullName: '', email: '', password: '', role: 'Cobros' },
+    defaultValues: { fullName: '', email: '', password: '', role: 'Cobros', bypassTwoFactor: false },
   })
 
   const onCreateUser = async (data: NewUserForm) => {
@@ -153,6 +154,9 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                     Estado
                   </th>
                   <th className="pb-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
+                    2FA
+                  </th>
+                  <th className="pb-2 text-left text-xs font-medium uppercase tracking-wider text-gray-500">
                     Ultimo acceso
                   </th>
                   <th className="pb-2 text-right text-xs font-medium uppercase tracking-wider text-gray-500">
@@ -180,6 +184,25 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                       >
                         {user.isActive ? 'Activo' : 'Inactivo'}
                       </span>
+                    </td>
+                    <td className="py-2">
+                      {user.bypassTwoFactor ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700"
+                          title="2FA desactivado — cuenta operativa sin verificación de código por email"
+                        >
+                          <ShieldOff className="h-3 w-3" />
+                          Off
+                        </span>
+                      ) : (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600"
+                          title="2FA activo — el usuario recibe código por email en cada login"
+                        >
+                          <ShieldCheck className="h-3 w-3" />
+                          On
+                        </span>
+                      )}
                     </td>
                     <td className="py-2 text-xs text-gray-500">
                       {formatDate(user.lastLoginAt)}
@@ -243,7 +266,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                 ))}
                 {users?.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="py-6 text-center text-sm text-gray-500">
+                    <td colSpan={7} className="py-6 text-center text-sm text-gray-500">
                       No hay usuarios en este tenant
                     </td>
                   </tr>
@@ -334,6 +357,34 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                       )}
                     </div>
                   </div>
+
+                  {/* Bypass 2FA — solo super admin lo ve en este modal.
+                      Pensado para cuentas operativas internas (equipo Jamcst) donde
+                      la fricción del código por email es innecesaria. NUNCA activar
+                      para usuarios del corredor. Cada login con bypass queda
+                      registrado en SystemAuditLog (Category=AUTH_2FA_BYPASS). */}
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        {...register('bypassTwoFactor')}
+                        className="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                      />
+                      <div className="flex-1">
+                        <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-900">
+                          <ShieldOff className="h-3.5 w-3.5" />
+                          Cuenta operativa sin 2FA
+                        </div>
+                        <p className="mt-0.5 text-[11px] text-amber-700 leading-relaxed">
+                          Saltar verificación de código por email al iniciar sesión.
+                          Pensado para cuentas de configuración del equipo interno.
+                          <strong> NO activar</strong> para usuarios del cliente final.
+                          Cada login queda registrado en auditoría.
+                        </p>
+                      </div>
+                    </label>
+                  </div>
+
                   <div className="flex justify-end gap-2">
                     <button
                       type="button"

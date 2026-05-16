@@ -39,6 +39,7 @@ export interface AdminTenantUser {
   isActive: boolean
   createdAt: string
   lastLoginAt: string | null
+  bypassTwoFactor: boolean
 }
 
 export interface CreateTenantUserPayload {
@@ -46,6 +47,7 @@ export interface CreateTenantUserPayload {
   email: string
   password: string
   role: string
+  bypassTwoFactor?: boolean
 }
 
 export interface ChangePasswordPayload {
