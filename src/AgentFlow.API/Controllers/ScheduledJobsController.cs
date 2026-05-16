@@ -248,7 +248,9 @@ public class ScheduledJobsController(
         if (!validTriggers.Contains(r.TriggerType))
             return $"TriggerType debe ser uno de: {string.Join(", ", validTriggers)}.";
 
-        var validScopes = new[] { "AllTenants", "PerCampaign", "PerConversation" };
+        // SingleTenant = override per-tenant (cron específico para 1 tenant que
+        // toma precedencia sobre el cron AllTenants para esa misma acción).
+        var validScopes = new[] { "AllTenants", "PerCampaign", "PerConversation", "SingleTenant" };
         if (!validScopes.Contains(r.Scope))
             return $"Scope debe ser uno de: {string.Join(", ", validScopes)}.";
 
