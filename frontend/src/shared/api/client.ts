@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { attachGlobalErrorInterceptor } from './errorInterceptor'
 
 export const api = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL ?? '/api',
@@ -31,20 +32,20 @@ function isSilent401Url(url: string | undefined): boolean {
   return SILENT_401_PATHS.some(p => url.includes(p))
 }
 
-// Auto-logout SOLO en 401 de acciones explícitas. El refresh silencioso
-// de /auth/me al cargar la app NO debe deslogear — antes esto provocaba
-// que cualquier blip de red al abrir el browser (incluso con JWT válido en
-// localStorage) tirara al usuario al login y le pidiera 2FA de nuevo.
-api.interceptors.response.use(
-  res => res,
-  err => {
+// Interceptor global de errores de validación — muestra modal automática
+// para cualquier 400/409/422/500 en escrituras. Logout en 401 explícito.
+attachGlobalErrorInterceptor(api, {
+  onUnauthorized: (err) => {
     const url = err.config?.url as string | undefined
-    if (err.response?.status === 401 && localStorage.getItem('token') && !isSilent401Url(url)) {
+    // Auto-logout SOLO en 401 de acciones explícitas. El refresh silencioso
+    // de /auth/me al cargar la app NO debe deslogear — antes esto provocaba
+    // que cualquier blip de red al abrir el browser (incluso con JWT válido en
+    // localStorage) tirara al usuario al login y le pidiera 2FA de nuevo.
+    if (localStorage.getItem('token') && !isSilent401Url(url)) {
       localStorage.removeItem('token')
       localStorage.removeItem('tenantId')
       localStorage.removeItem('user')
       window.location.href = '/login'
     }
-    return Promise.reject(err)
-  }
-)
+  },
+})

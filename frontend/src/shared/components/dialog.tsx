@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle, Info, X, XCircle } from 'lucide-react'
+import { MessageDialog, type MessageDialogKind } from './MessageDialog'
 
 // ── API imperativa ──────────────────────────────────────────────────────────
 // Reemplazo de window.confirm / window.alert por modales React.
 // Uso:
 //   if (await confirmDialog({ title: 'Eliminar?', description: '...' })) { ... }
+//   await alertDialog({ kind: 'error', title: 'Validación fallida', description: '...' })
 //   toast.error('Mensaje de error')
 //   toast.success('Listo')
 
@@ -16,11 +18,23 @@ export interface ConfirmOptions {
   variant?: 'danger' | 'default'
 }
 
+export interface AlertOptions {
+  /** Tipo visual del modal — define icono + color. Default: 'error'. */
+  kind?: MessageDialogKind
+  title: string
+  description?: string
+  /** Detalle técnico colapsable (JSON crudo, stack trace, etc.). */
+  detail?: string
+  closeLabel?: string
+}
+
 type ConfirmHandler = (opts: ConfirmOptions) => Promise<boolean>
+type AlertHandler = (opts: AlertOptions) => Promise<void>
 type ToastKind = 'info' | 'success' | 'error' | 'warning'
 type ToastHandler = (msg: string, kind?: ToastKind) => void
 
 let confirmHandler: ConfirmHandler | null = null
+let alertHandler: AlertHandler | null = null
 let toastHandler: ToastHandler | null = null
 
 export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
@@ -29,6 +43,21 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
     return Promise.resolve(window.confirm(`${opts.title}\n\n${opts.description ?? ''}`))
   }
   return confirmHandler(opts)
+}
+
+/**
+ * Modal imperativa para mostrar mensajes (validaciones, errores, info).
+ * Usada por los interceptores de axios para surfacing automático de errores
+ * de validación del backend (HTTP 400/409/422). También se puede llamar
+ * manualmente desde cualquier handler para mostrar un mensaje sin toast.
+ */
+export function alertDialog(opts: AlertOptions): Promise<void> {
+  if (!alertHandler) {
+    console.warn('DialogHost no está montado — fallback a window.alert')
+    window.alert(`${opts.title}\n\n${opts.description ?? ''}`)
+    return Promise.resolve()
+  }
+  return alertHandler(opts)
 }
 
 export const toast = {
@@ -43,6 +72,10 @@ interface ConfirmState extends ConfirmOptions {
   resolve: (v: boolean) => void
 }
 
+interface AlertState extends AlertOptions {
+  resolve: () => void
+}
+
 interface ToastItem {
   id: number
   msg: string
@@ -51,11 +84,15 @@ interface ToastItem {
 
 export function DialogHost() {
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null)
+  const [alertState, setAlertState] = useState<AlertState | null>(null)
   const [toasts, setToasts] = useState<ToastItem[]>([])
 
   useEffect(() => {
     confirmHandler = (opts) =>
       new Promise<boolean>((resolve) => setConfirmState({ ...opts, resolve }))
+
+    alertHandler = (opts) =>
+      new Promise<void>((resolve) => setAlertState({ ...opts, resolve }))
 
     toastHandler = (msg, kind = 'info') => {
       const id = Date.now() + Math.random()
@@ -65,6 +102,7 @@ export function DialogHost() {
 
     return () => {
       confirmHandler = null
+      alertHandler = null
       toastHandler = null
     }
   }, [])
@@ -72,6 +110,11 @@ export function DialogHost() {
   const closeConfirm = (result: boolean) => {
     confirmState?.resolve(result)
     setConfirmState(null)
+  }
+
+  const closeAlert = () => {
+    alertState?.resolve()
+    setAlertState(null)
   }
 
   return (
@@ -122,6 +165,17 @@ export function DialogHost() {
           </div>
         </div>
       )}
+
+      {/* Alert / validation modal */}
+      <MessageDialog
+        open={!!alertState}
+        onClose={closeAlert}
+        kind={alertState?.kind ?? 'error'}
+        title={alertState?.title ?? ''}
+        description={alertState?.description}
+        detail={alertState?.detail}
+        secondaryLabel={alertState?.closeLabel ?? 'Entendido'}
+      />
 
       {/* Toast stack */}
       {toasts.length > 0 && (

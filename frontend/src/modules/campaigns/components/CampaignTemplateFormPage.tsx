@@ -435,25 +435,33 @@ export function CampaignTemplateFormPage() {
       if (conflict) {
         setSwapConflict(conflict)
         setPendingPayload(payload)
-      } else {
-        // Cualquier otro error: mostrarlo en modal visible, NO toast escondido.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const anyErr = err as any
-        const status = anyErr?.response?.status
-        const apiMsg = anyErr?.response?.data?.error || anyErr?.response?.data?.title || anyErr?.message
-        const detailJson = anyErr?.response?.data
-          ? JSON.stringify(anyErr.response.data, null, 2)
-          : (anyErr?.stack as string | undefined)
-        console.error('[CampaignTemplate save error]', err)
-        setMessageDialog({
-          kind: 'error',
-          title: 'No se pudo guardar el maestro',
-          description: apiMsg
-            ? `${status ? `HTTP ${status} — ` : ''}${apiMsg}`
-            : `${status ? `HTTP ${status} — ` : ''}Error inesperado al guardar. Verificá los datos e intentá de nuevo.`,
-          detail: detailJson,
-        })
+        return
       }
+      // El interceptor global de axios (errorInterceptor.ts) ya mostró una
+      // modal con el mensaje de validación del backend. No duplicamos.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if ((err as any)?.handledByGlobalDialog) {
+        console.error('[CampaignTemplate save error — handled by global dialog]', err)
+        return
+      }
+      // Fallback por si el interceptor no se activó (ej. error muy raro sin
+      // body): mostrar igual modal local para que el usuario no quede colgado.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const anyErr = err as any
+      const status = anyErr?.response?.status
+      const apiMsg = anyErr?.response?.data?.error || anyErr?.response?.data?.title || anyErr?.message
+      const detailJson = anyErr?.response?.data
+        ? JSON.stringify(anyErr.response.data, null, 2)
+        : (anyErr?.stack as string | undefined)
+      console.error('[CampaignTemplate save error]', err)
+      setMessageDialog({
+        kind: 'error',
+        title: 'No se pudo guardar el maestro',
+        description: apiMsg
+          ? `${status ? `HTTP ${status} — ` : ''}${apiMsg}`
+          : `${status ? `HTTP ${status} — ` : ''}Error inesperado al guardar. Verificá los datos e intentá de nuevo.`,
+        detail: detailJson,
+      })
     }
     const onSaveOk = () => {
       // Mostramos modal de éxito en vez de navegar silencioso, así el usuario
