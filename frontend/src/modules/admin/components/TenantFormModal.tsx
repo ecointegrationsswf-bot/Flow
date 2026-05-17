@@ -21,6 +21,7 @@ import { AssignmentConflictModal } from './AssignmentConflictModal'
 import { AdminTenantConfigTab } from './AdminTenantConfigTab'
 import { TenantActionsConfigTab } from './TenantActionsConfigTab'
 import { TenantLabelingPromptsTab } from './TenantLabelingPromptsTab'
+import { getActionFriendlyName } from '@/shared/actionLabels'
 
 const tenantSchema = z.object({
   name: z.string().min(1, 'El nombre es requerido'),
@@ -203,9 +204,13 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
   const filteredActions = useMemo(() => {
     const actions = assignments?.actions ?? []
     const q = search.trim().toLowerCase()
+    // El buscador matchea tanto contra el nombre amigable ("Cierre automático
+    // de campaña") como contra el slug raw ("AUTO_CLOSE_CAMPAIGN_SWEEP") y la
+    // descripción. Así un admin técnico puede seguir buscando por código.
     const matched = q
       ? actions.filter(
           (a) =>
+            getActionFriendlyName(a.name).toLowerCase().includes(q) ||
             a.name.toLowerCase().includes(q) ||
             (a.description ?? '').toLowerCase().includes(q),
         )
@@ -214,7 +219,9 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
       const aAssigned = selectedActionIds.has(a.id) ? 0 : 1
       const bAssigned = selectedActionIds.has(b.id) ? 0 : 1
       if (aAssigned !== bAssigned) return aAssigned - bAssigned
-      return a.name.localeCompare(b.name, 'es', { sensitivity: 'base' })
+      const aLabel = getActionFriendlyName(a.name) || a.name
+      const bLabel = getActionFriendlyName(b.name) || b.name
+      return aLabel.localeCompare(bLabel, 'es', { sensitivity: 'base' })
     })
   }, [assignments?.actions, search, selectedActionIds])
 
@@ -633,8 +640,21 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
                           />
                           <Zap className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-2">
-                              <p className="text-sm font-medium text-gray-900">{a.name}</p>
+                            <div className="flex flex-wrap items-center gap-2">
+                              {/* Nombre amigable como título; el slug crudo
+                                  queda como chip mono pequeño para que el
+                                  admin técnico siga teniéndolo a la vista. */}
+                              <p className="text-sm font-medium text-gray-900">
+                                {getActionFriendlyName(a.name) || a.name}
+                              </p>
+                              {getActionFriendlyName(a.name) && (
+                                <span
+                                  className="rounded bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] text-gray-500"
+                                  title="Código interno de la acción"
+                                >
+                                  {a.name}
+                                </span>
+                              )}
                               {a.isGlobal ? (
                                 <span className="inline-flex items-center gap-1 rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
                                   <Globe className="h-2.5 w-2.5" />
