@@ -74,6 +74,34 @@ public class CampaignDispatcherService(
         if (tenant is null)
             return new DispatchResult(0, 0, "Tenant no encontrado", DispatchStopReason.Error);
 
+        // ── 1.b Recovery sweep — liberar Claimed huérfanos ──────────────
+        // Causa típica: el Worker se reinicia (deploy, crash, OOM, machine reboot)
+        // en medio del foreach de envío. La rama de cancellation del foreach hacía
+        // break sin devolver los contactos a Queued, así que esos contactos quedan
+        // invisibles para el siguiente tick (la query de candidatos solo mira
+        // Queued, no Claimed). Resultado: campaña stuck en X/N sin avanzar.
+        //
+        // Cualquier Claimed con ClaimedAt más viejo que el cutoff se considera
+        // huérfano. Un send individual dura ~3-30 seg incluso con LLM + WhatsApp,
+        // así que 5 minutos es seguro: si lleva tanto tiempo Claimed, el proceso
+        // que lo reclamó no va a volver. ExecuteUpdate es atómico — no hay riesgo
+        // de pisar un Worker activo, porque el send activo todavía no salió de su
+        // iteración (no ha pasado tanto tiempo).
+        var staleClaimCutoff = DateTime.UtcNow.AddMinutes(-5);
+        var releasedStaleClaims = await db.CampaignContacts
+            .Where(cc => cc.CampaignId == campaignId
+                      && cc.DispatchStatus == DispatchStatus.Claimed
+                      && cc.ClaimedAt < staleClaimCutoff
+                      && cc.SentAt == null)
+            .ExecuteUpdateAsync(s => s
+                .SetProperty(c => c.DispatchStatus, DispatchStatus.Queued)
+                .SetProperty(c => c.ClaimedAt, (DateTime?)null), ct);
+        if (releasedStaleClaims > 0)
+            logger.LogWarning(
+                "Campaña {CampaignId}: liberados {N} contactos huérfanos en Claimed > 5 min " +
+                "(probable reinicio del Worker en lote anterior). Vuelven a Queued para el próximo intento.",
+                campaignId, releasedStaleClaims);
+
         // Off-switch del tenant (no relanza, no envía).
         if (!tenant.CampaignDispatchEnabled)
         {
@@ -322,6 +350,14 @@ public class CampaignDispatcherService(
         var failed = 0;
         var consecutiveErrors = 0;
 
+        // Try/finally para garantizar que cualquier contacto que quede Claimed
+        // por nosotros pero NO fue procesado (porque el ct cancelló durante
+        // Task.Delay, o una excepción no controlada burbujeó del send), vuelva
+        // a Queued inmediatamente — sin esperar al recovery sweep de 5 min del
+        // próximo tick. Esto es el fix de raíz para el caso "campaña stuck en
+        // 22/99 después de un deploy del Worker".
+        try
+        {
         foreach (var contact in pendingContacts)
         {
             if (ct.IsCancellationRequested) break;
@@ -512,6 +548,46 @@ public class CampaignDispatcherService(
             var jitter = (_random.NextDouble() * 0.4) - 0.2;     // [-0.2, +0.2]
             var actualDelay = Math.Max(MinDelaySecondsFloor, baseDelaySeconds * (1 + jitter));
             await Task.Delay(TimeSpan.FromSeconds(actualDelay), ct);
+        }
+        }
+        finally
+        {
+            // Liberación inmediata del lote actual: si el foreach salió por
+            // cancelación (Task.Delay arrojó OperationCanceledException) o por
+            // una excepción que burbujeó, los contactos no procesados aún están
+            // como DispatchStatus=Claimed en BD con NUESTRO ClaimedAt. Hay que
+            // devolverlos a Queued para que el próximo tick (de este Worker o de
+            // otro recién deployado) los retome al instante.
+            //
+            // ExecuteUpdate atómico bypassa el change tracker — funciona incluso
+            // si hay cambios pendientes en el DbContext que se perdieron por la
+            // excepción. Usamos CancellationToken.None a propósito: queremos que
+            // este release corra incluso cuando el ct padre ya está cancelado
+            // (apagado en curso). Si NO usamos None, el ExecuteUpdate también
+            // se cancelaría y volvemos al bug original.
+            try
+            {
+                var batchIds = pendingContacts.Select(c => c.Id).ToList();
+                var releasedFromBatch = await db.CampaignContacts
+                    .Where(cc => batchIds.Contains(cc.Id)
+                              && cc.DispatchStatus == DispatchStatus.Claimed
+                              && cc.ClaimedAt == claimedAt)
+                    .ExecuteUpdateAsync(s => s
+                        .SetProperty(c => c.DispatchStatus, DispatchStatus.Queued)
+                        .SetProperty(c => c.ClaimedAt, (DateTime?)null), CancellationToken.None);
+                if (releasedFromBatch > 0)
+                    logger.LogInformation(
+                        "Campaña {CampaignId}: liberados {N} contactos del lote actual " +
+                        "(foreach terminó antes de procesarlos — cancellation o exception).",
+                        campaignId, releasedFromBatch);
+            }
+            catch (Exception ex)
+            {
+                // Best-effort: si esto falla, el recovery sweep de 5 min del
+                // próximo tick los rescata igual. No quiero comerme la excepción
+                // original del foreach por culpa del cleanup.
+                logger.LogError(ex, "Campaña {CampaignId}: error liberando huérfanos del lote en finally.", campaignId);
+            }
         }
 
         // ── 8. Actualizar contadores de la campaña ───────
