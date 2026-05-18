@@ -260,12 +260,30 @@ public class WebhookController(
             // flujo cae al procesamiento normal de mensaje entrante.
             if (string.Equals(wrapper?.EventType, "message_ack", StringComparison.OrdinalIgnoreCase))
             {
+                // Resolver tenant ANTES de tocar Messages/CampaignContacts. Los IDs
+                // de UltraMsg son auto-increment POR INSTANCIA — pueden colisionar
+                // entre tenants. Sin scope por TenantId, un ACK de la cuenta A
+                // podría actualizar un mensaje de la cuenta B con el mismo ID.
+                var ackInstance = (instanceId ?? wrapper?.InstanceId ?? "").Trim();
+                var resolvedTenantId = await ResolveTenantFromInstanceAsync(ackInstance, ct);
+
                 log.Status = "ack";
-                log.StatusReason = $"ack={wrapper?.Data?.Ack} status={wrapper?.Data?.Status}";
+                log.StatusReason = $"ack={wrapper?.Data?.Ack} status={wrapper?.Data?.Status} instance={ackInstance} tenant={resolvedTenantId}";
+                log.TenantId = resolvedTenantId;
                 db.WebhookLogs.Add(log);
-                await HandleMessageAckAsync(wrapper!, ct);
+
+                if (resolvedTenantId is null)
+                {
+                    // Sin tenant resuelto, no podemos saber a qué Message corresponde.
+                    // Lo registramos para diagnóstico pero no tocamos BD (mejor que pisar
+                    // un mensaje equivocado).
+                    await db.SaveChangesAsync(ct);
+                    return Ok(new { status = "ignored", reason = "unknown instanceId for ack", tried = ackInstance });
+                }
+
+                await HandleMessageAckAsync(wrapper!, resolvedTenantId.Value, ct);
                 await db.SaveChangesAsync(ct);
-                return Ok(new { status = "ack-processed", id = wrapper?.Data?.Id, deliveryStatus = wrapper?.Data?.Status });
+                return Ok(new { status = "ack-processed", id = wrapper?.Data?.Id, deliveryStatus = wrapper?.Data?.Status, tenant = resolvedTenantId });
             }
             if (string.Equals(wrapper?.EventType, "message_create", StringComparison.OrdinalIgnoreCase)
                 && wrapper?.Data?.FromMe == true)
@@ -557,7 +575,7 @@ public class WebhookController(
     /// ejecución de la campaña lo reintente (en vez de creer que ya se envió).
     /// </summary>
     private async Task HandleMessageAckAsync(
-        UltraMsgWebhookWrapper wrapper, CancellationToken ct)
+        UltraMsgWebhookWrapper wrapper, Guid tenantId, CancellationToken ct)
     {
         var data = wrapper.Data;
         if (data is null || string.IsNullOrEmpty(data.Id)) return;
@@ -568,9 +586,13 @@ public class WebhookController(
         var status     = (data.Status ?? AckToStatusString(ack)).ToLowerInvariant();
         var nowUtc     = DateTime.UtcNow;
 
-        // 1) Actualizar Message (conversaciones del monitor)
+        // 1) Actualizar Message — SIEMPRE filtrar por TenantId para evitar
+        //    colisiones de ExternalMessageId entre instancias UltraMsg.
         var msg = await db.Messages
-            .FirstOrDefaultAsync(m => m.ExternalMessageId == externalId, ct);
+            .Include(m => m.Conversation)
+            .Where(m => m.ExternalMessageId == externalId
+                     && m.Conversation.TenantId == tenantId)
+            .FirstOrDefaultAsync(ct);
         if (msg != null)
         {
             msg.DeliveryStatus    = status;
@@ -592,9 +614,12 @@ public class WebhookController(
             };
         }
 
-        // 2) Actualizar CampaignContact (envíos masivos)
+        // 2) Actualizar CampaignContact (envíos masivos) — también scoped al tenant.
+        //    CampaignContact no tiene TenantId directo, lo resolvemos vía Campaign.
         var cc = await db.CampaignContacts
-            .FirstOrDefaultAsync(c => c.ExternalMessageId == externalId, ct);
+            .Where(c => c.ExternalMessageId == externalId
+                     && db.Campaigns.Any(camp => camp.Id == c.CampaignId && camp.TenantId == tenantId))
+            .FirstOrDefaultAsync(ct);
         if (cc != null)
         {
             cc.DeliveryStatus = status;
@@ -626,6 +651,27 @@ public class WebhookController(
          3 => "read",
          _ => "unknown",
     };
+
+    /// <summary>
+    /// Resuelve el TenantId a partir del instanceId de UltraMsg. Reusa la
+    /// misma tabla WhatsAppLines que el flujo de mensajes entrantes, con la
+    /// misma normalización (acepta "133282", "instance133282", etc.).
+    /// Devuelve null si la instancia no está registrada o no está activa.
+    /// </summary>
+    private async Task<Guid?> ResolveTenantFromInstanceAsync(string? rawInstance, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(rawInstance)) return null;
+        var instanceNumber = rawInstance
+            .Replace("instance", "", StringComparison.OrdinalIgnoreCase).Trim();
+        var line = await db.WhatsAppLines
+            .Where(l => l.TenantId != null && l.IsActive)
+            .Where(l => l.InstanceId == instanceNumber
+                     || l.InstanceId == rawInstance
+                     || l.InstanceId == $"instance{instanceNumber}")
+            .Select(l => new { l.TenantId })
+            .FirstOrDefaultAsync(ct);
+        return line?.TenantId;
+    }
 
     /// <summary>
     /// Endpoint de diagnóstico — muestra los últimos 50 registros de la bitácora del webhook.
