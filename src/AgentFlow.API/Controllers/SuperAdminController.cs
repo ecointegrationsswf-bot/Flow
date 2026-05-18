@@ -42,8 +42,34 @@ public class SuperAdminController(
     IConfiguration config,
     IEmailService emailService,
     AgentFlow.Infrastructure.Storage.IBlobStorageService blobStorage,
-    Hangfire.IBackgroundJobClient backgroundJobs) : ControllerBase
+    Hangfire.IBackgroundJobClient backgroundJobs,
+    AgentFlow.Infrastructure.Campaigns.CampaignContactOrphanReleaseJob orphanRelease) : ControllerBase
 {
+    /// <summary>
+    /// Recuperación manual de contactos atascados en DispatchStatus=Claimed.
+    /// Útil cuando un super admin detecta una campaña stuck en X/N (la barra
+    /// de progreso no avanza) y quiere forzar el release inmediato sin
+    /// esperar al sweep automático que corre cada 5 min en Hangfire.
+    ///
+    /// Es seguro llamarlo en cualquier momento: si no hay huérfanos, devuelve
+    /// released=0. Si hay envíos en curso legítimos (Claimed reciente &lt; 5min),
+    /// el filtro de edad los protege — no interrumpe Workers activos.
+    /// </summary>
+    [HttpPost("campaigns/release-orphans")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> ReleaseOrphans(CancellationToken ct)
+    {
+        var released = await orphanRelease.ReleaseAllAsync(ct);
+        return Ok(new
+        {
+            released,
+            message = released == 0
+                ? "Sin huérfanos pendientes. Todo limpio."
+                : $"Se liberaron {released} contactos atascados en Claimed > 5 min. " +
+                  "El Worker los retomará en el próximo tick.",
+        });
+    }
+
     [HttpPost("login")]
     [EnableRateLimiting("auth")]
     public async Task<IActionResult> Login([FromBody] AdminLoginRequest req, CancellationToken ct)

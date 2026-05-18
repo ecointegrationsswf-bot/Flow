@@ -155,6 +155,11 @@ catch (Exception ex)
 // ── Campaign Dispatcher (envío de campañas con rate limiting) ────────
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherService>();
 builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcherJob>();
+// Red de seguridad global contra Claimed huérfanos. La capa 1 vive en el
+// dispatcher del Worker (release inline al cancelar + recovery sweep por
+// campaña). Este job es la capa 2: corre en Hangfire del API cada 5 min
+// y libera Claimed > 5 min de TODAS las campañas, sin depender del Worker.
+builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignContactOrphanReleaseJob>();
 // Business hours en TZ del tenant — necesario para programar follow-ups
 // dentro del horario laboral del cliente.
 builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IBusinessHoursClock,
@@ -1171,5 +1176,28 @@ app.MapControllers();
 app.MapHub<ConversationHub>("/hubs/conversations");
 
 if (hangfireEnabled) { try { app.MapHangfireDashboard("/hangfire"); } catch { } }
+
+// ── Recurring: red de seguridad para Claimed huérfanos ────────────────
+// Hangfire dispara cada 5 min CampaignContactOrphanReleaseJob.ReleaseAllAsync()
+// que libera contactos atascados en DispatchStatus=Claimed > 5 min globalmente.
+// Defense in depth: aunque el fix in-dispatcher del Worker on-prem no esté
+// activo (Worker viejo, caído, no actualizado), las campañas no se atascan
+// porque esta sweep las recupera en menos de 5 min.
+if (hangfireEnabled)
+{
+    try
+    {
+        RecurringJob.AddOrUpdate<AgentFlow.Infrastructure.Campaigns.CampaignContactOrphanReleaseJob>(
+            recurringJobId: "campaign-orphan-release",
+            methodCall: job => job.ReleaseAllAsync(CancellationToken.None),
+            cronExpression: "*/5 * * * *",
+            options: new RecurringJobOptions { TimeZone = TimeZoneInfo.Utc });
+        Console.WriteLine("[Startup] Hangfire recurring 'campaign-orphan-release' programado cada 5 min.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Startup] No se pudo registrar recurring 'campaign-orphan-release': {ex.Message}");
+    }
+}
 
 app.Run();
