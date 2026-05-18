@@ -33,7 +33,15 @@ public record MessageDetail(
     string? Channel,
     string? Subject,
     string? Recipient,
-    string Status
+    string Status,
+    // Delivery status real reportado por UltraMsg vía webhook message_ack.
+    // Se llena cuando el toggle "Webhook on ACK" está activo en la instancia
+    // y el mensaje es saliente. Para entrantes y canales sin tracking queda NULL.
+    //   queue | sent | delivered | read | invalid | failed | expired | unsent
+    string? DeliveryStatus,
+    int? LastAck,
+    DateTime? DeliveredAt,
+    DateTime? ReadAt
 );
 
 public class GetConversationDetailHandler(IConversationRepository repo)
@@ -79,7 +87,11 @@ public class GetConversationDetailHandler(IConversationRepository repo)
                     m.Channel?.ToString(),
                     m.Subject,
                     m.Recipient,
-                    m.Status.ToString()
+                    m.Status.ToString(),
+                    m.DeliveryStatus,
+                    m.LastAck,
+                    m.DeliveredAt,
+                    m.ReadAt
                 )),
             campaignName
         );

@@ -66,6 +66,19 @@ export interface Campaign {
   launchedAt?: string | null
 }
 
+/** Estado real de entrega de un mensaje saliente, reportado por UltraMsg
+ *  vía webhook message_ack. NULL = sin tracking (canal no soportado o
+ *  toggle del webhook deshabilitado en la instancia). */
+export type DeliveryStatus =
+  | 'queue'      // 0 — en cola UltraMsg, WhatsApp aún no procesó
+  | 'sent'       // 1 — servidor WhatsApp recibió
+  | 'delivered'  // 2 — ✓✓ gris al teléfono destino
+  | 'read'       // 3 — ✓✓ azul, cliente abrió el chat
+  | 'invalid'    // -1 — número no existe / cuenta restringida
+  | 'failed'     // falló definitivamente
+  | 'expired'    // expiró antes de despachar
+  | 'unsent'     // cuenta WhatsApp desconectada
+
 export interface ConversationSummary {
   id: string
   clientPhone: string
@@ -85,6 +98,17 @@ export interface ConversationSummary {
    *  del filtro. Alimenta el badge del tab Email — refleja envíos por día, no
    *  conversaciones únicas: si reenvías mañana a los mismos contactos, suma. */
   outboundEmailCount?: number
+  // === Delivery status (Phase 2 — webhook message_ack) ===
+  /** Status real del ÚLTIMO mensaje saliente. NULL = sin tracking. */
+  lastOutboundDeliveryStatus?: DeliveryStatus | null
+  /** true si el último saliente fue leído por el cliente. */
+  lastOutboundRead?: boolean
+  /** true si hay al menos un saliente entregado pero no leído. */
+  hasUnreadOutbound?: boolean
+  /** true si el cliente envió un mensaje DESPUÉS del último saliente. */
+  clientResponded?: boolean
+  /** true si hay al menos un saliente NO entregado (queue/invalid/etc). */
+  hasUndelivered?: boolean
 }
 
 export interface Conversation {
@@ -126,6 +150,13 @@ export interface Message {
   channel?: ChannelType | null
   subject?: string | null
   recipient?: string | null
+  // Phase 2 — delivery status real (UltraMsg webhook message_ack)
+  /** Estado real reportado por WhatsApp. Solo poblado en outbounds via webhook. */
+  deliveryStatus?: DeliveryStatus | null
+  /** Último ACK numérico: -1 invalid | 0 queue | 1 sent | 2 delivered | 3 read */
+  lastAck?: number | null
+  deliveredAt?: string | null
+  readAt?: string | null
 }
 
 export interface GestionEvent {

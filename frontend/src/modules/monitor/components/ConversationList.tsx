@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Search, CalendarRange, X, MessageSquare, Mail, Smartphone } from 'lucide-react'
+import { Search, CalendarRange, X, MessageSquare, Mail, Smartphone, CheckCheck, Eye, Reply, XOctagon } from 'lucide-react'
 import { differenceInMinutes } from 'date-fns'
 import type { ConversationSummary, ConversationStatus } from '@/shared/types'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
@@ -50,6 +50,14 @@ export function ConversationList({
   // Filtro por canal — útil cuando el tenant maneja campañas WhatsApp + Email
   // simultáneamente. 'all' muestra todo (default).
   const [filterChannel, setFilterChannel] = useState<'all' | 'WhatsApp' | 'Email' | 'Sms'>('all')
+  // Filtro por delivery status (Phase 2 — webhook message_ack):
+  //   all         → sin filtro (default)
+  //   read        → conversaciones donde el último saliente fue leído
+  //   unread      → entregado pero no leído (al menos un mensaje en ese estado)
+  //   responded   → cliente respondió DESPUÉS del último saliente
+  //   undelivered → al menos un saliente NO se entregó (queue/invalid/...)
+  type DeliveryFilter = 'all' | 'read' | 'unread' | 'responded' | 'undelivered'
+  const [filterDelivery, setFilterDelivery] = useState<DeliveryFilter>('all')
 
   const agentNames = useMemo(() => {
     const names = new Set<string>()
@@ -93,6 +101,23 @@ export function ConversationList({
     return counts
   }, [deduplicated, conversations])
 
+  // Contadores por estado de delivery — se calculan sobre la lista FILTRADA
+  // por canal (porque los iconos ✓✓ aplican al WhatsApp principalmente; en
+  // Email tendrías que mirar bounces). Para mantener simpleza, los conteos
+  // se basan en deduplicated dentro del canal seleccionado.
+  const deliveryCounts = useMemo(() => {
+    const base = filterChannel === 'all'
+      ? deduplicated
+      : deduplicated.filter(c => c.channel === filterChannel)
+    return {
+      all:         base.length,
+      read:        base.filter(c => c.lastOutboundRead).length,
+      unread:      base.filter(c => c.hasUnreadOutbound && !c.lastOutboundRead).length,
+      responded:   base.filter(c => c.clientResponded).length,
+      undelivered: base.filter(c => c.hasUndelivered).length,
+    }
+  }, [deduplicated, filterChannel])
+
   const filtered = deduplicated.filter((c) => {
     if (search) {
       const q = search.toLowerCase()
@@ -106,6 +131,11 @@ export function ConversationList({
     }
     if (filterStatus && c.status !== filterStatus) return false
     if (filterChannel !== 'all' && c.channel !== filterChannel) return false
+    // Filtro por delivery status — ortogonal al canal/status/agente.
+    if (filterDelivery === 'read'        && !c.lastOutboundRead)                          return false
+    if (filterDelivery === 'unread'      && (!c.hasUnreadOutbound || c.lastOutboundRead)) return false
+    if (filterDelivery === 'responded'   && !c.clientResponded)                           return false
+    if (filterDelivery === 'undelivered' && !c.hasUndelivered)                            return false
     return true
   })
 
@@ -197,6 +227,53 @@ export function ConversationList({
             onClick={() => setFilterChannel('Sms')}
           />
         )}
+      </div>
+
+      {/* Delivery status filter — Phase 2 (UltraMsg webhook message_ack).
+          Permite al usuario ver de un vistazo:
+          • cuántos morosos LEYERON el mensaje (verdadero indicador de impacto)
+          • cuántos quedaron sin leer (recordatorio pendiente)
+          • cuántos respondieron (lead caliente)
+          • cuántos NO entregados (cuenta restringida o número inválido — recontactar por otro medio) */}
+      <div className="flex flex-wrap gap-1 px-4 pb-2">
+        <DeliveryTab
+          label="Todos"
+          count={deliveryCounts.all}
+          active={filterDelivery === 'all'}
+          onClick={() => setFilterDelivery('all')}
+        />
+        <DeliveryTab
+          label="Leídos"
+          icon={<CheckCheck className="h-3 w-3 text-sky-500" />}
+          count={deliveryCounts.read}
+          tone="sky"
+          active={filterDelivery === 'read'}
+          onClick={() => setFilterDelivery('read')}
+        />
+        <DeliveryTab
+          label="No leídos"
+          icon={<Eye className="h-3 w-3 text-gray-500" />}
+          count={deliveryCounts.unread}
+          tone="gray"
+          active={filterDelivery === 'unread'}
+          onClick={() => setFilterDelivery('unread')}
+        />
+        <DeliveryTab
+          label="Respondió"
+          icon={<Reply className="h-3 w-3 text-emerald-500" />}
+          count={deliveryCounts.responded}
+          tone="emerald"
+          active={filterDelivery === 'responded'}
+          onClick={() => setFilterDelivery('responded')}
+        />
+        <DeliveryTab
+          label="No entregado"
+          icon={<XOctagon className="h-3 w-3 text-red-500" />}
+          count={deliveryCounts.undelivered}
+          tone="red"
+          active={filterDelivery === 'undelivered'}
+          onClick={() => setFilterDelivery('undelivered')}
+        />
       </div>
 
       {/* Filters */}
@@ -322,6 +399,52 @@ function ChannelTab({
       className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-medium transition-colors ${
         active
           ? 'bg-blue-600 text-white shadow-sm'
+          : 'bg-[#f6f6f6] text-gray-600 hover:bg-gray-200'
+      }`}
+    >
+      {icon}
+      <span>{label}</span>
+      <span
+        className={`ml-0.5 rounded-full px-1.5 text-[10px] font-semibold ${
+          active ? 'bg-white/25 text-white' : 'bg-white text-gray-500'
+        }`}
+      >
+        {count}
+      </span>
+    </button>
+  )
+}
+
+/**
+ * Tab pill para los filtros de delivery status (Leídos / No leídos /
+ * Respondió / No entregado). Igual API que ChannelTab, pero con paleta
+ * por tono — el botón activo cambia de color según la categoría para
+ * que el usuario sepa al instante qué filtro está mirando.
+ */
+function DeliveryTab({
+  label, icon, count, active, onClick, tone = 'blue',
+}: {
+  label: string
+  icon?: React.ReactNode
+  count: number
+  active: boolean
+  onClick: () => void
+  tone?: 'blue' | 'sky' | 'gray' | 'emerald' | 'red'
+}) {
+  const activeBg: Record<string, string> = {
+    blue:    'bg-blue-600 text-white',
+    sky:     'bg-sky-500 text-white',
+    gray:    'bg-gray-600 text-white',
+    emerald: 'bg-emerald-600 text-white',
+    red:     'bg-red-600 text-white',
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[11px] font-medium transition-colors ${
+        active
+          ? `${activeBg[tone]} shadow-sm`
           : 'bg-[#f6f6f6] text-gray-600 hover:bg-gray-200'
       }`}
     >

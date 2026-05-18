@@ -38,7 +38,23 @@ public record ConversationSummary(
     /// <summary>Cantidad de correos salientes (Direction=Outbound, Channel=Email) emitidos
     /// dentro del rango de fechas filtrado. Permite que el badge del tab Email refleje
     /// los correos enviados por día — si mañana se reenvía a los mismos contactos, suma.</summary>
-    int OutboundEmailCount
+    int OutboundEmailCount,
+    // === Filtros de delivery status (Phase 2 — webhook message_ack) ===
+    /// <summary>Status real del ÚLTIMO saliente: queue | sent | delivered | read |
+    /// invalid | failed | expired | unsent | null (sin tracking).</summary>
+    string? LastOutboundDeliveryStatus,
+    /// <summary>true si el último saliente fue leído (DeliveryStatus='read').</summary>
+    bool LastOutboundRead,
+    /// <summary>true si hay AL MENOS un saliente entregado pero NO leído
+    /// (DeliveryStatus='delivered' sin un 'read' posterior).</summary>
+    bool HasUnreadOutbound,
+    /// <summary>true si el cliente respondió DESPUÉS del último saliente
+    /// (hay un Message Inbound con SentAt > último Outbound).</summary>
+    bool ClientResponded,
+    /// <summary>true si HAY al menos un saliente que NO se entregó
+    /// (DeliveryStatus IN queue/invalid/failed/expired/unsent — UltraMsg
+    /// confirmó que WhatsApp no lo despachó).</summary>
+    bool HasUndelivered
 );
 
 public class GetActiveConversationsHandler(IConversationRepository repo)
@@ -79,6 +95,33 @@ public class GetActiveConversationsHandler(IConversationRepository repo)
                 && (!fromDate.HasValue || m.SentAt.AddHours(paOffsetHours).Date >= fromDate.Value)
                 && (!toDate.HasValue   || m.SentAt.AddHours(paOffsetHours).Date <= toDate.Value));
 
+            // === Cálculo de flags de delivery status ===
+            // Solo miran salientes (Direction=Outbound). Para entrantes la noción
+            // de "delivered/read" no aplica desde la perspectiva del agente.
+            var outbounds = c.Messages
+                .Where(m => m.Direction == MessageDirection.Outbound)
+                .OrderBy(m => m.SentAt)
+                .ToList();
+            var lastOutbound = outbounds.LastOrDefault();
+
+            string? lastDeliveryStatus = lastOutbound?.DeliveryStatus;
+            bool lastRead = string.Equals(lastDeliveryStatus, "read", StringComparison.OrdinalIgnoreCase);
+
+            // "No leído" = entregado pero no leído. NO incluye los todavía
+            // en queue/sent — esos están en otra categoría.
+            bool hasUnreadOutbound = outbounds.Any(m =>
+                string.Equals(m.DeliveryStatus, "delivered", StringComparison.OrdinalIgnoreCase));
+
+            // "Cliente respondió" = hay un Inbound con SentAt > último Outbound.
+            // Si nunca hubo Outbound, técnicamente no hay nada que responder.
+            bool clientResponded = lastOutbound != null &&
+                c.Messages.Any(m => m.Direction == MessageDirection.Inbound
+                                 && m.SentAt > lastOutbound.SentAt);
+
+            // "No entregado" = al menos un saliente confirmado como NO despachado.
+            bool hasUndelivered = outbounds.Any(m =>
+                m.DeliveryStatus is "queue" or "invalid" or "failed" or "expired" or "unsent");
+
             return new ConversationSummary(
                 c.Id,
                 c.ClientPhone,
@@ -92,7 +135,12 @@ public class GetActiveConversationsHandler(IConversationRepository repo)
                 c.LastActivityAt,
                 preview,
                 lastOutboundEmail?.Subject,
-                outboundEmailCount
+                outboundEmailCount,
+                lastDeliveryStatus,
+                lastRead,
+                hasUnreadOutbound,
+                clientResponded,
+                hasUndelivered
             );
         });
     }

@@ -1,7 +1,48 @@
 import { useState } from 'react'
-import { FileText, Download, CheckCheck, Mic, X, ZoomIn, Mail, ChevronDown, ChevronUp, AlertCircle, Maximize2 } from 'lucide-react'
+import { FileText, Download, Check, CheckCheck, Clock, Mic, X, ZoomIn, Mail, ChevronDown, ChevronUp, AlertCircle, Maximize2, XOctagon } from 'lucide-react'
 import type { Message } from '@/shared/types'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
+
+/**
+ * Icono de delivery status estilo WhatsApp para mensajes salientes.
+ *
+ *   queue / pending  → 🕐 reloj gris  (no salió aún de UltraMsg)
+ *   sent             → ✓ un check gris  (servidor WhatsApp recibió)
+ *   delivered        → ✓✓ doble gris  (entregado al teléfono destino)
+ *   read             → ✓✓ doble azul  (cliente abrió el chat)
+ *   invalid|failed|
+ *   expired|unsent   → ⊗ rojo  (no entregado — cuenta restringida o nro inválido)
+ *   null/undefined   → ✓✓ gris  (fallback al comportamiento previo —
+ *                      mensaje viejo sin tracking o canal sin webhook ACK)
+ */
+function DeliveryStatusIcon({ message, dark }: { message: Message; dark: boolean }) {
+  const ds = message.deliveryStatus
+  const baseGray = dark ? 'text-white/70' : 'text-gray-400'
+  const cls = 'h-3.5 w-3.5'
+
+  // Tooltip con info detallada para hover
+  const tooltip = (() => {
+    if (!ds) return 'Sin información de entrega'
+    if (ds === 'queue')     return 'En cola — WhatsApp aún no la despachó'
+    if (ds === 'sent')      return 'Enviado al servidor WhatsApp'
+    if (ds === 'delivered') return `Entregado al teléfono${message.deliveredAt ? ` · ${new Date(message.deliveredAt).toLocaleString('es-PA')}` : ''}`
+    if (ds === 'read')      return `Leído por el cliente${message.readAt ? ` · ${new Date(message.readAt).toLocaleString('es-PA')}` : ''}`
+    if (ds === 'invalid')   return 'No entregado — cuenta restringida o número inválido'
+    if (ds === 'failed')    return 'No entregado — fallo en WhatsApp'
+    if (ds === 'expired')   return 'No entregado — el mensaje expiró antes de despacharse'
+    if (ds === 'unsent')    return 'No entregado — la cuenta WhatsApp está desconectada'
+    return ds
+  })()
+
+  if (ds === 'queue') return <Clock className={`${cls} ${baseGray}`} aria-label="En cola"     >  <title>{tooltip}</title></Clock>
+  if (ds === 'sent')  return <Check className={`${cls} ${baseGray}`} aria-label="Enviado"      ><title>{tooltip}</title></Check>
+  if (ds === 'read')  return <CheckCheck className={`${cls} text-sky-400`} aria-label="Leído"  ><title>{tooltip}</title></CheckCheck>
+  if (ds === 'invalid' || ds === 'failed' || ds === 'expired' || ds === 'unsent') {
+    return <XOctagon className={`${cls} text-red-400`} aria-label="No entregado"><title>{tooltip}</title></XOctagon>
+  }
+  // delivered, null/undefined: doble check gris
+  return <CheckCheck className={`${cls} ${baseGray}`} aria-label="Entregado"><title>{tooltip}</title></CheckCheck>
+}
 
 const agentAvatars: Record<string, string> = {
   'Agente Cobros': 'https://i.pravatar.cc/150?img=32',
@@ -158,7 +199,7 @@ export function MessageBubble({ message }: { message: Message }) {
           )}
           <span className="text-[11px]">{fmtTime(message.sentAt)}</span>
           {!isInbound && (
-            <CheckCheck className="h-3.5 w-3.5" />
+            <DeliveryStatusIcon message={message} dark={!isInbound} />
           )}
         </div>
       </div>
