@@ -102,7 +102,8 @@ public class GetActiveConversationsHandler(IConversationRepository repo)
                 .Where(m => m.Direction == MessageDirection.Outbound)
                 .OrderBy(m => m.SentAt)
                 .ToList();
-            var lastOutbound = outbounds.LastOrDefault();
+            var firstOutbound = outbounds.FirstOrDefault();
+            var lastOutbound  = outbounds.LastOrDefault();
 
             string? lastDeliveryStatus = lastOutbound?.DeliveryStatus;
             bool lastRead = string.Equals(lastDeliveryStatus, "read", StringComparison.OrdinalIgnoreCase);
@@ -112,11 +113,17 @@ public class GetActiveConversationsHandler(IConversationRepository repo)
             bool hasUnreadOutbound = outbounds.Any(m =>
                 string.Equals(m.DeliveryStatus, "delivered", StringComparison.OrdinalIgnoreCase));
 
-            // "Cliente respondió" = hay un Inbound con SentAt > último Outbound.
-            // Si nunca hubo Outbound, técnicamente no hay nada que responder.
-            bool clientResponded = lastOutbound != null &&
+            // "Cliente respondió" = hay AL MENOS UN Inbound posterior al PRIMER
+            // Outbound (no al último). Semántica corregida 2026-05-18:
+            // antes contaba "respondió" solo si el cliente tenía la ÚLTIMA palabra
+            // (Inbound > LastOutbound). Eso es útil para "pendiente de atender"
+            // pero NO para "el cliente engagó con la campaña". Para campañas
+            // de cobros, lo que importa es: ¿el moroso respondió en algún momento?
+            // Si sí, sigue contando como "Respondió" aunque el bot ya le haya
+            // contestado.
+            bool clientResponded = firstOutbound != null &&
                 c.Messages.Any(m => m.Direction == MessageDirection.Inbound
-                                 && m.SentAt > lastOutbound.SentAt);
+                                 && m.SentAt > firstOutbound.SentAt);
 
             // "No entregado" = al menos un saliente confirmado como NO despachado.
             bool hasUndelivered = outbounds.Any(m =>
