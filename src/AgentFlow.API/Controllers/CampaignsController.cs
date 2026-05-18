@@ -1004,4 +1004,138 @@ public class CampaignsController(
 
         return mapping;
     }
+
+    /// <summary>
+    /// Sincroniza el estado real de entrega de cada CampaignContact contra
+    /// UltraMsg. Útil para campañas que se lanzaron ANTES de activar el
+    /// webhook on_ack — sin esto la BD muestra todos los contactos como
+    /// "Sent" aunque WhatsApp haya descartado algunos por restricción.
+    ///
+    /// Flujo:
+    /// 1. Resuelve la línea WhatsApp del tenant.
+    /// 2. Llama UltraMsg /messages?status=X para cada status problemático
+    ///    (queue, invalid, failed, expired, unsent).
+    /// 3. Cruza por ExternalMessageId con los CampaignContacts de ESTA campaña.
+    /// 4. Actualiza DeliveryStatus y, si es no-entregado, fuerza DispatchStatus=Error.
+    /// 5. Devuelve summary agregado para mostrar en la modal.
+    /// </summary>
+    [HttpPost("{id:guid}/sync-delivery-status")]
+    public async Task<IActionResult> SyncDeliveryStatus(Guid id, CancellationToken ct)
+    {
+        // 1. Cargar la campaña y validar tenant
+        var campaign = await campaignRepo.GetByIdAsync(id, tenantCtx.TenantId, ct);
+        if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
+
+        // 2. Buscar línea UltraMsg activa del tenant
+        var line = await db.WhatsAppLines
+            .Where(l => l.TenantId == tenantCtx.TenantId && l.IsActive)
+            .OrderBy(l => l.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+        if (line is null)
+            return BadRequest(new { error = "El tenant no tiene una línea WhatsApp activa configurada." });
+
+        var instanceNumber = (line.InstanceId ?? "").Replace("instance", "", StringComparison.OrdinalIgnoreCase).Trim();
+        if (string.IsNullOrEmpty(instanceNumber) || string.IsNullOrEmpty(line.ApiToken))
+            return BadRequest(new { error = "La línea WhatsApp no tiene InstanceId o ApiToken configurados." });
+
+        // 3. Cargar TODOS los CampaignContacts de esta campaña con ExternalMessageId
+        var contacts = await db.CampaignContacts
+            .Where(c => c.CampaignId == id && c.ExternalMessageId != null)
+            .ToListAsync(ct);
+        var byExternalId = contacts.ToDictionary(c => c.ExternalMessageId!, c => c);
+
+        // 4. Para cada status problemático, llamar UltraMsg API y cruzar.
+        //    `sent` no lo pedimos porque ya damos por bueno todo lo que NO esté
+        //    en los 5 estados de falla. Reduce llamadas (UltraMsg tiene rate limit).
+        var statusesToFetch = new[] { "queue", "invalid", "failed", "expired", "unsent" };
+        var http = httpClientFactory.CreateClient();
+        http.Timeout = TimeSpan.FromSeconds(20);
+
+        var updated = new List<object>();
+        var counts = new Dictionary<string, int>
+        {
+            ["queue"]=0, ["invalid"]=0, ["failed"]=0, ["expired"]=0, ["unsent"]=0,
+        };
+
+        foreach (var status in statusesToFetch)
+        {
+            var url = $"https://api.ultramsg.com/instance{instanceNumber}/messages" +
+                      $"?token={Uri.EscapeDataString(line.ApiToken)}&status={status}&limit=500";
+            HttpResponseMessage? resp = null;
+            try { resp = await http.GetAsync(url, ct); }
+            catch (Exception ex)
+            {
+                return StatusCode(502, new { error = $"Error consultando UltraMsg ({status}): {ex.Message}" });
+            }
+            if (!resp.IsSuccessStatusCode) continue;
+
+            var body = await resp.Content.ReadAsStringAsync(ct);
+            using var doc = JsonDocument.Parse(body);
+            if (!doc.RootElement.TryGetProperty("messages", out var messagesArr)) continue;
+
+            foreach (var m in messagesArr.EnumerateArray())
+            {
+                var extId = m.GetProperty("id").ToString();
+                if (!byExternalId.TryGetValue(extId, out var cc)) continue;
+
+                var previous = cc.DeliveryStatus;
+                cc.DeliveryStatus = status;
+                cc.DispatchStatus = AgentFlow.Domain.Enums.DispatchStatus.Error;
+                cc.DispatchError ??= $"UltraMsg status={status} (sync)";
+                counts[status]++;
+                updated.Add(new
+                {
+                    contactId   = cc.Id,
+                    clientName  = cc.ClientName,
+                    phoneNumber = cc.PhoneNumber,
+                    externalId  = extId,
+                    previous,
+                    newStatus   = status,
+                });
+            }
+        }
+
+        if (updated.Count > 0) await db.SaveChangesAsync(ct);
+
+        // 5. Construir summary final desde BD (después del update).
+        //    Para los `delivered`/`read` confiamos en lo que el webhook puso
+        //    previamente. Para los `sent`, asumimos todos los que NO están
+        //    en las 5 categorías de falla y tienen SentAt poblado.
+        var summary = await db.CampaignContacts
+            .Where(c => c.CampaignId == id)
+            .GroupBy(c => 1)
+            .Select(g => new
+            {
+                total       = g.Count(),
+                read        = g.Count(c => c.DeliveryStatus == "read"),
+                delivered   = g.Count(c => c.DeliveryStatus == "delivered"),
+                queue       = g.Count(c => c.DeliveryStatus == "queue"),
+                invalid     = g.Count(c => c.DeliveryStatus == "invalid"),
+                failed      = g.Count(c => c.DeliveryStatus == "failed"),
+                expired     = g.Count(c => c.DeliveryStatus == "expired"),
+                unsent      = g.Count(c => c.DeliveryStatus == "unsent"),
+                // "sent_or_unknown" = SentAt no nulo pero sin DeliveryStatus específico
+                sentNoTracking = g.Count(c => c.SentAt != null && c.DeliveryStatus == null),
+                pending     = g.Count(c => c.SentAt == null
+                                          && c.DispatchStatus != AgentFlow.Domain.Enums.DispatchStatus.Error),
+                error       = g.Count(c => c.DispatchStatus == AgentFlow.Domain.Enums.DispatchStatus.Error),
+            })
+            .FirstOrDefaultAsync(ct) ?? new
+            {
+                total = 0, read = 0, delivered = 0, queue = 0, invalid = 0,
+                failed = 0, expired = 0, unsent = 0, sentNoTracking = 0,
+                pending = 0, error = 0,
+            };
+
+        return Ok(new
+        {
+            campaignId   = id,
+            campaignName = campaign.Name,
+            syncedAt     = DateTime.UtcNow,
+            updatedCount = updated.Count,
+            summary,
+            // Lista detallada de los que cambiaron — top 50 para no inflar el payload
+            details      = updated.Take(50),
+        });
+    }
 }

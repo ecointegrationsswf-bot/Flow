@@ -281,3 +281,62 @@ export function useCampaignById(campaignId: string | undefined) {
     queryFn: () => api.get(`/campaigns/${campaignId}`).then((r) => r.data),
   })
 }
+
+// ── Estadísticas de delivery (UltraMsg sync) ──────────────────────────
+// Llama el endpoint backend POST /api/campaigns/{id}/sync-delivery-status
+// que cruza contactos de la campaña con la API real de UltraMsg para
+// detectar mensajes en queue/invalid/failed/expired/unsent.
+export interface CampaignDeliverySummary {
+  total: number
+  read: number
+  delivered: number
+  queue: number
+  invalid: number
+  failed: number
+  expired: number
+  unsent: number
+  /** Marcados Sent en BD pero sin DeliveryStatus tracked (mensajes viejos sin webhook on_ack) */
+  sentNoTracking: number
+  /** Aún por enviar (Pending/Queued/Claimed/Retry/Deferred sin error) */
+  pending: number
+  /** Marcados DispatchStatus=Error (UltraMsg confirmó NO entregado) */
+  error: number
+}
+
+export interface CampaignDeliveryDetail {
+  contactId: string
+  clientName: string | null
+  phoneNumber: string
+  externalId: string
+  previous: string | null
+  newStatus: string
+}
+
+export interface CampaignDeliverySyncResult {
+  campaignId: string
+  campaignName: string
+  syncedAt: string
+  updatedCount: number
+  summary: CampaignDeliverySummary
+  details: CampaignDeliveryDetail[]
+}
+
+/**
+ * Mutation que dispara el sync con UltraMsg. Es POST (no GET) porque
+ * además de leer, escribe en BD los DeliveryStatus que detecta como
+ * no entregados.
+ */
+export function useSyncCampaignDelivery() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (campaignId: string) =>
+      api.post<CampaignDeliverySyncResult>(
+        `/campaigns/${campaignId}/sync-delivery-status`,
+      ).then((r) => r.data),
+    onSuccess: (_data, campaignId) => {
+      // Refresca la lista de campañas y el detalle si está abierto.
+      qc.invalidateQueries({ queryKey: ['campaigns'] })
+      qc.invalidateQueries({ queryKey: ['campaign', campaignId] })
+    },
+  })
+}

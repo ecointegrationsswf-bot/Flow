@@ -1,7 +1,8 @@
 import { useState, useMemo, useEffect, useRef, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban, MoreVertical } from 'lucide-react'
+import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban, MoreVertical, BarChart3 } from 'lucide-react'
+import { CampaignDeliveryStatsModal } from './CampaignDeliveryStatsModal'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -60,6 +61,8 @@ export function CampaignsPage() {
   const [cancellingId, setCancellingId] = useState<string | null>(null)
   // Id de la campaña cuyo menú "..." está abierto. null = todos cerrados.
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
+  // Campaña abierta en el modal de estadísticas de delivery.
+  const [statsCampaign, setStatsCampaign] = useState<{ id: string; name: string } | null>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
   const menuBtnRefs = useRef<Map<string, HTMLButtonElement>>(new Map())
   // Coordenadas absolutas en viewport para el dropdown (rendea via Portal).
@@ -436,6 +439,19 @@ export function CampaignsPage() {
                                   Ver contactos
                                 </Link>
 
+                                {/* Estadísticas de delivery — disponible siempre que
+                                    la campaña haya tenido al menos un envío (LaunchedAt
+                                    no nulo). Cruza BD con UltraMsg en tiempo real. */}
+                                {c.launchedAt && (
+                                  <button
+                                    onClick={() => { setOpenMenuId(null); setStatsCampaign({ id: c.id, name: c.name }) }}
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-xs text-gray-700 hover:bg-blue-50 hover:text-blue-700"
+                                  >
+                                    <BarChart3 className="h-3.5 w-3.5 text-blue-600" />
+                                    Estadísticas
+                                  </button>
+                                )}
+
                                 {/* Pausar */}
                                 {canLaunch && status === 'Running' && c.isActive && (
                                   <button
@@ -509,6 +525,15 @@ export function CampaignsPage() {
         </div>
       )}
       <ToastContainer toasts={toasts} onRemove={remove} />
+
+      {/* Modal de estadísticas de delivery — montada al root para z-index correcto. */}
+      {statsCampaign && (
+        <CampaignDeliveryStatsModal
+          campaignId={statsCampaign.id}
+          campaignName={statsCampaign.name}
+          onClose={() => setStatsCampaign(null)}
+        />
+      )}
     </div>
   )
 }
