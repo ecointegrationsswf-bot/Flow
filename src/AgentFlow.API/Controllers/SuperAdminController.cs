@@ -364,6 +364,10 @@ public class SuperAdminController(
             t.CampaignMaxPerHour,
             t.CampaignMaxPerDay,
             t.CampaignDispatchEnabled,
+            // Phase 3 — batching + circuit breaker anti-restricción WhatsApp
+            t.CampaignBatchSize,
+            t.CampaignBatchCoolDownMinutes,
+            t.CampaignAutoPauseFailureRate,
         });
     }
 
@@ -402,6 +406,39 @@ public class SuperAdminController(
         return Ok(new {
             t.CampaignMessagesPerMinute, t.CampaignMaxPerHour,
             t.CampaignMaxPerDay, t.CampaignDispatchEnabled
+        });
+    }
+
+    public record UpdateBatchingRequest(int BatchSize, int CoolDownMinutes, decimal AutoPauseFailureRate);
+
+    /// <summary>
+    /// Configura el batching anti-restricción a nivel tenant.
+    /// - BatchSize: cuántos contactos procesar por tick del dispatcher (5-100).
+    /// - CoolDownMinutes: pausa entre batches del mismo Campaign (0-120 min).
+    /// - AutoPauseFailureRate: % de fallos en un batch que auto-pausa el Campaign (0-100). 0 = deshabilitado.
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/campaign-batching")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantCampaignBatching(
+        Guid tenantId, [FromBody] UpdateBatchingRequest req, CancellationToken ct)
+    {
+        if (req.BatchSize < 5 || req.BatchSize > 100)
+            return BadRequest(new { error = "BatchSize debe estar entre 5 y 100." });
+        if (req.CoolDownMinutes < 0 || req.CoolDownMinutes > 120)
+            return BadRequest(new { error = "CoolDownMinutes debe estar entre 0 y 120." });
+        if (req.AutoPauseFailureRate < 0 || req.AutoPauseFailureRate > 100)
+            return BadRequest(new { error = "AutoPauseFailureRate debe estar entre 0 y 100." });
+
+        var t = await db.Tenants.FindAsync([tenantId], ct);
+        if (t is null) return NotFound();
+
+        t.CampaignBatchSize              = req.BatchSize;
+        t.CampaignBatchCoolDownMinutes   = req.CoolDownMinutes;
+        t.CampaignAutoPauseFailureRate   = req.AutoPauseFailureRate;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new {
+            t.CampaignBatchSize, t.CampaignBatchCoolDownMinutes, t.CampaignAutoPauseFailureRate
         });
     }
 

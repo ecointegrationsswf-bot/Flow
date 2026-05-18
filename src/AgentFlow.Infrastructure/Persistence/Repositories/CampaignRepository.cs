@@ -59,6 +59,8 @@ public class CampaignRepository(AgentFlowDbContext db) : ICampaignRepository
                 SourceFileName = c.SourceFileName,
                 Status = c.Status,
                 LaunchedAt = c.LaunchedAt,
+                // Phase 3 — el frontend lo usa para mostrar "Próximo batch en X min"
+                NextBatchAfterUtc = c.NextBatchAfterUtc,
             })
             .ToListAsync(ct);
     }

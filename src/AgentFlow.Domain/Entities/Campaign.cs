@@ -64,5 +64,13 @@ public class Campaign
     /// </summary>
     public DateTime? LabelingSummarySentAt { get; set; }
 
+    /// <summary>
+    /// UTC. Si está poblado y &gt; ahora, el dispatcher SALTA esta campaña en
+    /// este tick (cool-down entre batches). Se setea al final de cada batch
+    /// con Tenant.CampaignBatchCoolDownMinutes. NULL = sin cool-down activo,
+    /// el dispatcher la procesa normalmente.
+    /// </summary>
+    public DateTime? NextBatchAfterUtc { get; set; }
+
     public ICollection<CampaignContact> Contacts { get; set; } = [];
 }

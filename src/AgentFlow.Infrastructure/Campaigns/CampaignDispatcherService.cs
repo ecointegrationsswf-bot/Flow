@@ -110,6 +110,22 @@ public class CampaignDispatcherService(
             return new DispatchResult(0, 0, "Dispatch deshabilitado por tenant", DispatchStopReason.CampaignInactive);
         }
 
+        // ── 1.c Cool-down entre batches (Phase 3) ────────────────────────
+        // Si esta campaña terminó un batch hace poco, esperamos a que pase
+        // CampaignBatchCoolDownMinutes antes de tomar el siguiente lote.
+        // Esto evita ráfagas largas que disparan detección anti-spam de WhatsApp.
+        // El cool-down se setea al final de cada batch que envió al menos 1 msg.
+        if (campaign.NextBatchAfterUtc.HasValue && campaign.NextBatchAfterUtc.Value > DateTime.UtcNow)
+        {
+            var waitMin = (int)(campaign.NextBatchAfterUtc.Value - DateTime.UtcNow).TotalMinutes;
+            logger.LogDebug(
+                "Campaña {CampaignId}: en cool-down hasta {Until:o} (~{Min} min). Saltando este tick.",
+                campaignId, campaign.NextBatchAfterUtc.Value, waitMin);
+            return new DispatchResult(0, 0,
+                $"En cool-down entre batches ({waitMin} min restantes)",
+                DispatchStopReason.BatchCompleted);
+        }
+
         // ── 2. Cierre temprano: si NO queda ningún contacto en estado in-flight, la
         //      campaña ya terminó. Marcamos Completed independientemente del horario
         //      de oficina — cerrar una campaña terminada no es lo mismo que enviar.
@@ -253,7 +269,14 @@ public class CampaignDispatcherService(
         // el mismo candidato, el primero que ejecuta el UPDATE gana — el segundo no encuentra
         // filas con DispatchStatus=Queued para esos IDs y quedará procesando 0.
         var nowUtc = DateTime.UtcNow;
-        var batchSize = Math.Min(maxPerHour, maxPerDay - sentToday);
+        // Tope efectivo del batch:
+        //   • maxPerHour  — ya configurado por tenant
+        //   • maxPerDay - sentToday — cuántos quedan en el día
+        //   • CampaignBatchSize — NUEVO (Phase 3): el batch de UN solo tick
+        //     no debería superar este tope. Permite controlar el ritmo natural
+        //     sin tocar maxPerHour (que es un guard absoluto, no operativo).
+        var configuredBatchSize = Math.Max(1, tenant.CampaignBatchSize);
+        var batchSize = Math.Min(Math.Min(maxPerHour, maxPerDay - sentToday), configuredBatchSize);
 
         // Paso A: identificar candidatos del lote — IDs en orden FIFO.
         var candidateIds = await db.CampaignContacts
@@ -598,6 +621,50 @@ public class CampaignDispatcherService(
                                || cc.DispatchStatus == DispatchStatus.Skipped
                                || cc.DispatchStatus == DispatchStatus.Duplicate), ct);
 
+        // ── 8.b Cool-down + Circuit breaker (Phase 3) ────────────────────
+        // Solo aplican si el batch movió al menos un mensaje (sent O failed).
+        // Si no envió nada (fuera de horario, sin Queued, etc.) NO seteamos
+        // cool-down — eso aplazaría innecesariamente el próximo intento.
+        var processedThisBatch = sent + failed;
+        if (processedThisBatch > 0)
+        {
+            // Circuit breaker: si la tasa de fallo de ESTE batch supera el
+            // umbral configurado, auto-pausar el Campaign + alerta al admin.
+            // 0% = deshabilitado.
+            var threshold = tenant.CampaignAutoPauseFailureRate;
+            if (threshold > 0)
+            {
+                var failureRate = (decimal)failed * 100m / processedThisBatch;
+                if (failureRate >= threshold)
+                {
+                    campaign.IsActive = false;
+                    campaign.Status   = CampaignStatus.Paused;
+                    logger.LogWarning(
+                        "Campaña {CampaignId}: AUTO-PAUSADA. Batch terminó con " +
+                        "{Failed}/{Total} fallidos ({Rate:F1}% >= {Threshold:F1}% umbral). " +
+                        "Posible cuenta WhatsApp restringida o lista con problemas. " +
+                        "Revisar antes de reanudar.",
+                        campaignId, failed, processedThisBatch, failureRate, threshold);
+                    // Email al admin del tenant — fire-and-forget para no bloquear.
+                    _ = NotifyCampaignAutoPausedAsync(tenant.Id, campaign, failed, processedThisBatch, failureRate);
+                }
+            }
+
+            // Si la campaña NO se auto-pausó, aplicar cool-down para el próximo batch.
+            if (campaign.Status != CampaignStatus.Paused)
+            {
+                var cooldownMin = Math.Max(0, tenant.CampaignBatchCoolDownMinutes);
+                if (cooldownMin > 0)
+                {
+                    campaign.NextBatchAfterUtc = DateTime.UtcNow.AddMinutes(cooldownMin);
+                    logger.LogInformation(
+                        "Campaña {CampaignId}: batch completado ({Sent}✓ + {Failed}✗). " +
+                        "Próximo batch en {Min} min ({NextUtc:o}).",
+                        campaignId, sent, failed, cooldownMin, campaign.NextBatchAfterUtc.Value);
+                }
+            }
+        }
+
         await db.SaveChangesAsync(ct);
 
         var stopReason = consecutiveErrors >= ConsecutiveErrorThreshold ? DispatchStopReason.TooManyErrors
@@ -609,6 +676,77 @@ public class CampaignDispatcherService(
             campaignId, sent, failed, stopReason);
 
         return new DispatchResult(sent, failed, null, stopReason);
+    }
+
+    /// <summary>
+    /// Best-effort: notificar al admin del tenant que una campaña se auto-pausó
+    /// por superar el umbral de fallos. No bloqueamos el dispatcher — si el
+    /// email falla, lo logueamos pero seguimos.
+    /// </summary>
+    private async Task NotifyCampaignAutoPausedAsync(
+        Guid tenantId, Campaign campaign, int failed, int total, decimal rate)
+    {
+        try
+        {
+            // Buscar admins/supervisores del tenant para notificar
+            var adminEmails = await db.AppUsers
+                .Where(u => u.TenantId == tenantId && u.IsActive
+                         && (u.Role == AgentFlow.Domain.Entities.UserRole.Admin
+                             || u.Role == AgentFlow.Domain.Entities.UserRole.Supervisor))
+                .Select(u => u.Email)
+                .ToListAsync();
+
+            if (adminEmails.Count == 0)
+            {
+                logger.LogWarning(
+                    "Campaña {CampaignId}: auto-pausada pero no hay admins del tenant {TenantId} a quien notificar.",
+                    campaign.Id, tenantId);
+                return;
+            }
+
+            var subject = $"⚠️ Campaña '{campaign.Name}' auto-pausada por alta tasa de fallos";
+            var body = $@"<p>Hola,</p>
+<p>La campaña <strong>{campaign.Name}</strong> fue <strong>pausada automáticamente</strong>
+por el sistema de protección anti-restricción.</p>
+<p><strong>Motivo:</strong> El último lote procesó {total} mensajes con
+<strong>{failed} fallidos ({rate:F1}%)</strong>, superando el umbral configurado de
+{campaign.Tenant?.CampaignAutoPauseFailureRate ?? 30m:F1}%.</p>
+<p><strong>Causas probables:</strong></p>
+<ul>
+<li>La cuenta WhatsApp del tenant está temporalmente restringida por Meta.</li>
+<li>La lista contiene una proporción alta de números inválidos o desactivados.</li>
+<li>Los mensajes están siendo rechazados por contenido (template demasiado promocional).</li>
+</ul>
+<p><strong>Próximos pasos:</strong></p>
+<ol>
+<li>Verificar el estado del número en el dashboard UltraMsg.</li>
+<li>Revisar las estadísticas de la campaña (botón 'Estadísticas' en la página).</li>
+<li>Si la causa fue puntual, reanudar la campaña manualmente.</li>
+</ol>
+<p style=""color:#666;font-size:12px;"">AgentFlow — Notificación automática del Circuit Breaker.</p>";
+
+            foreach (var email in adminEmails)
+            {
+                try
+                {
+                    await emailService.SendCustomHtmlAsync(
+                        toEmail:  email,
+                        ccEmail:  null,
+                        subject:  subject,
+                        htmlBody: body,
+                        textBody: null,
+                        ct:       CancellationToken.None);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogError(ex, "No se pudo enviar email de auto-pausa a {Email}", email);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Error en NotifyCampaignAutoPausedAsync para campaña {CampaignId}", campaign.Id);
+        }
     }
 
     private static string? Truncate(string? s, int max) =>

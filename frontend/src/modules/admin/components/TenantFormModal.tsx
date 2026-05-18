@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { X, Loader2, Building2, FileText, Zap, Check, Search, CircleDot, Globe, CheckCircle2, Settings, Webhook, Tag, Upload, Image as ImageIcon } from 'lucide-react'
+import { X, Loader2, Building2, FileText, Zap, Check, Search, CircleDot, Globe, CheckCircle2, Settings, Webhook, Tag, Upload, Image as ImageIcon, Megaphone } from 'lucide-react'
 import {
   useCreateTenant,
   useUpdateTenant,
@@ -21,6 +21,7 @@ import { AssignmentConflictModal } from './AssignmentConflictModal'
 import { AdminTenantConfigTab } from './AdminTenantConfigTab'
 import { TenantActionsConfigTab } from './TenantActionsConfigTab'
 import { TenantLabelingPromptsTab } from './TenantLabelingPromptsTab'
+import { AdminTenantCampaignsTab } from './AdminTenantCampaignsTab'
 import { getActionFriendlyName } from '@/shared/actionLabels'
 
 const tenantSchema = z.object({
@@ -32,7 +33,7 @@ const tenantSchema = z.object({
 
 type TenantForm = z.infer<typeof tenantSchema>
 
-type Tab = 'general' | 'config' | 'prompts' | 'actions' | 'webhooks' | 'labeling'
+type Tab = 'general' | 'config' | 'prompts' | 'actions' | 'webhooks' | 'labeling' | 'campaigns'
 
 interface TenantFormModalProps {
   tenant?: AdminTenant
@@ -354,6 +355,13 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
               icon={<Tag className="h-4 w-4" />}
             >
               Etiquetado
+            </TabButton>
+            <TabButton
+              active={tab === 'campaigns'}
+              onClick={() => setTab('campaigns')}
+              icon={<Megaphone className="h-4 w-4" />}
+            >
+              Campañas
             </TabButton>
           </div>
         )}
@@ -726,6 +734,10 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
 
         {isEdit && tab === 'labeling' && tenant && (
           <TenantLabelingPromptsTab tenantId={tenant.id} />
+        )}
+
+        {isEdit && tab === 'campaigns' && tenant && (
+          <AdminTenantCampaignsTab tenantId={tenant.id} />
         )}
       </div>
 

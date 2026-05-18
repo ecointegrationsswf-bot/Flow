@@ -64,6 +64,10 @@ export interface Campaign {
   launchedByUserId?: string | null
   status?: string
   launchedAt?: string | null
+  /** Phase 3 — si está poblado y futuro, la campaña está en cool-down entre
+   *  batches. El dispatcher la salta hasta esta fecha (UTC). El frontend lo
+   *  usa para mostrar "Próximo batch en X min" en la fila de la campaña. */
+  nextBatchAfterUtc?: string | null
 }
 
 /** Estado real de entrega de un mensaje saliente, reportado por UltraMsg

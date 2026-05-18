@@ -34,6 +34,13 @@ export interface AdminTenantConfig {
   campaignMaxPerHour: number
   campaignMaxPerDay: number
   campaignDispatchEnabled: boolean
+  // Phase 3 — batching + circuit breaker anti-restricción WhatsApp
+  /** Cuántos contactos procesa el dispatcher por tick. Default 15. */
+  campaignBatchSize: number
+  /** Minutos de pausa entre batches del mismo Campaign. Default 20. */
+  campaignBatchCoolDownMinutes: number
+  /** % de fallos por batch que dispara auto-pausa + email al admin. Default 30. 0 = deshabilitado. */
+  campaignAutoPauseFailureRate: number
 }
 
 export function useAdminTenantConfig(tenantId: string | null | undefined) {
@@ -148,6 +155,27 @@ export function useAdminUpdateTenantCampaignRateLimits() {
         maxPerHour: p.maxPerHour,
         maxPerDay: p.maxPerDay,
         dispatchEnabled: p.dispatchEnabled,
+      }).then((r: { data: unknown }) => r.data),
+    onSuccess: (_d, v) => invalidateConfig(qc, v.tenantId),
+  })
+}
+
+// ── Phase 3: Batching + Circuit Breaker ────────────────────────────────
+interface CampaignBatchingPayload {
+  tenantId: string
+  batchSize: number
+  coolDownMinutes: number
+  autoPauseFailureRate: number
+}
+
+export function useAdminUpdateTenantCampaignBatching() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (p: CampaignBatchingPayload) =>
+      adminClient.put(`/admin/tenants/${p.tenantId}/campaign-batching`, {
+        batchSize: p.batchSize,
+        coolDownMinutes: p.coolDownMinutes,
+        autoPauseFailureRate: p.autoPauseFailureRate,
       }).then((r: { data: unknown }) => r.data),
     onSuccess: (_d, v) => invalidateConfig(qc, v.tenantId),
   })

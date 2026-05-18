@@ -399,6 +399,22 @@ export function CampaignsPage() {
                             {isRunning && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
                             {stCfg.label}
                           </span>
+                          {/* Badge cool-down: si Running + tiene NextBatchAfterUtc futuro,
+                              mostrar cuánto falta para el próximo batch. Phase 3. */}
+                          {isRunning && c.nextBatchAfterUtc && (() => {
+                            const minLeft = Math.max(0, Math.round(
+                              (new Date(c.nextBatchAfterUtc).getTime() - Date.now()) / 60000
+                            ))
+                            if (minLeft <= 0) return null
+                            return (
+                              <span
+                                className="ml-1 inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800"
+                                title={`Cool-down activo. Próximo batch a las ${new Date(c.nextBatchAfterUtc).toLocaleTimeString('es-PA', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Panama' })}`}
+                              >
+                                ⏸ {minLeft}m
+                              </span>
+                            )
+                          })()}
                         </td>
                         <td className="whitespace-nowrap px-2 py-1.5 text-[10px] text-gray-500">
                           {tt.date(c.createdAt)}

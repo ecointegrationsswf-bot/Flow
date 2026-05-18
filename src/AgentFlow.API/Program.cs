@@ -814,6 +814,25 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'UseRagRetrieval')
             BEGIN ALTER TABLE Tenants ADD UseRagRetrieval bit NOT NULL DEFAULT 0; END");
+
+        // Batching + Circuit Breaker (Phase 3) — anti-restricción de WhatsApp.
+        // Cuántos contactos por batch, minutos de pausa entre batches y umbral
+        // de fallos para auto-pausar la campaña + notificar al admin.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'CampaignBatchSize')
+            BEGIN ALTER TABLE Tenants ADD CampaignBatchSize int NOT NULL DEFAULT 15; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'CampaignBatchCoolDownMinutes')
+            BEGIN ALTER TABLE Tenants ADD CampaignBatchCoolDownMinutes int NOT NULL DEFAULT 20; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'CampaignAutoPauseFailureRate')
+            BEGIN ALTER TABLE Tenants ADD CampaignAutoPauseFailureRate decimal(5,2) NOT NULL DEFAULT 30.0; END");
+
+        // Cool-down timestamp por campaña — el dispatcher salta esta campaña
+        // hasta que ahora >= NextBatchAfterUtc.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'NextBatchAfterUtc')
+            BEGIN ALTER TABLE Campaigns ADD NextBatchAfterUtc datetime2 NULL; END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] Tenants columns: {ex.Message}"); }
 

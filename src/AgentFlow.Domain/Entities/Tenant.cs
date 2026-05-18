@@ -79,6 +79,36 @@ public class Tenant
     /// </summary>
     public bool CampaignDispatchEnabled { get; set; } = true;
 
+    // ─── Batching + Circuit Breaker (Phase 3 — protección anti-restricción) ───
+    // Lección de Somos Seguros 18/05: una campaña de 95 cold contacts en bloque
+    // gatilla restricción de WhatsApp. Estos 3 valores permiten enviar en
+    // ráfagas controladas con pausa entre ellas y auto-pausa ante alta tasa
+    // de fallo.
+
+    /// <summary>
+    /// Cuántos contactos procesa el dispatcher en cada "batch" antes de aplicar
+    /// el cooldown. Default 15 — suficientemente bajo para que cada batch no
+    /// dispare detección de WhatsApp, suficientemente alto para que una campaña
+    /// de 100 contactos termine en horas, no días.
+    /// </summary>
+    public int CampaignBatchSize { get; set; } = 15;
+
+    /// <summary>
+    /// Minutos de pausa entre batches del mismo Campaign. Durante este tiempo
+    /// el dispatcher salta esta campaña aunque tenga contactos Queued — espera
+    /// hasta NextBatchAfterUtc. Default 20 min.
+    /// </summary>
+    public int CampaignBatchCoolDownMinutes { get; set; } = 20;
+
+    /// <summary>
+    /// Umbral porcentual de fallos por batch para disparar auto-pausa del
+    /// campaign + alerta al admin del tenant. Si en un batch de 15 enviados,
+    /// más del 30% terminaron en error o invalid → la campaña se pausa
+    /// automáticamente y se notifica por email. Default 30.0 (30%).
+    /// Rango: 0-100. 0 = deshabilitado (nunca auto-pausa).
+    /// </summary>
+    public decimal CampaignAutoPauseFailureRate { get; set; } = 30.0m;
+
     /// <summary>
     /// Tiempo de espera (debounce) para agrupar mensajes entrantes del mismo cliente
     /// antes de procesarlos con el agente. Evita que el agente responda mensaje por
