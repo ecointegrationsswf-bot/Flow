@@ -1044,17 +1044,20 @@ public class CampaignsController(
             .ToListAsync(ct);
         var byExternalId = contacts.ToDictionary(c => c.ExternalMessageId!, c => c);
 
-        // 4. Para cada status problemático, llamar UltraMsg API y cruzar.
-        //    `sent` no lo pedimos porque ya damos por bueno todo lo que NO esté
-        //    en los 5 estados de falla. Reduce llamadas (UltraMsg tiene rate limit).
-        var statusesToFetch = new[] { "queue", "invalid", "failed", "expired", "unsent" };
+        // 4. Para cada status REAL de UltraMsg, llamar API y cruzar.
+        //    UltraMsg statuses válidos (confirmados vía /messages/statistics):
+        //    queue, invalid, expired, unsent — son los que indican "no entregado".
+        //    'sent' = aceptado por servidor WhatsApp (puede haber sido leído o no).
+        //    'failed' NO ES un status válido de UltraMsg — si lo pasamos como filtro,
+        //    UltraMsg devuelve TODOS los mensajes sin filtrar (bug detectado 2026-05-18).
+        var statusesToFetch = new[] { "queue", "invalid", "expired", "unsent" };
         var http = httpClientFactory.CreateClient();
         http.Timeout = TimeSpan.FromSeconds(20);
 
         var updated = new List<object>();
         var counts = new Dictionary<string, int>
         {
-            ["queue"]=0, ["invalid"]=0, ["failed"]=0, ["expired"]=0, ["unsent"]=0,
+            ["queue"]=0, ["invalid"]=0, ["expired"]=0, ["unsent"]=0,
         };
 
         foreach (var status in statusesToFetch)
@@ -1075,6 +1078,15 @@ public class CampaignsController(
 
             foreach (var m in messagesArr.EnumerateArray())
             {
+                // Validación defensiva: UltraMsg a veces devuelve mensajes que no
+                // pertenecen al status pedido (bug del filtro). Verificamos el
+                // status declarado en el propio payload antes de procesar.
+                if (m.TryGetProperty("status", out var msgStatus)
+                    && !string.Equals(msgStatus.GetString(), status, StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
                 var extId = m.GetProperty("id").ToString();
                 if (!byExternalId.TryGetValue(extId, out var cc)) continue;
 
