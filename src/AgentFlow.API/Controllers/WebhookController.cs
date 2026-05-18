@@ -243,6 +243,40 @@ public class WebhookController(
 
             var wrapper = JsonSerializer.Deserialize<UltraMsgWebhookWrapper>(jsonToParse, opts);
 
+            // ── Branch por event_type ────────────────────────────────────────
+            // UltraMsg empuja varios tipos de eventos a la MISMA URL. Distinguimos
+            // por wrapper.EventType ANTES de procesar como mensaje entrante.
+            //
+            //   message_received   → mensaje entrante de cliente (flujo normal)
+            //   message_create     → confirmación de saliente que nosotros mismos
+            //                        creamos. Lo ignoramos para no duplicar.
+            //   message_ack        → cambio de delivery status (sent/delivered/
+            //                        read/invalid). Lo procesamos aparte para
+            //                        actualizar Message.DeliveryStatus y
+            //                        CampaignContact.DeliveryStatus.
+            //   message_reaction   → reacción con emoji (no usado).
+            //
+            // Si EventType no está presente (compat con webhook viejo), el
+            // flujo cae al procesamiento normal de mensaje entrante.
+            if (string.Equals(wrapper?.EventType, "message_ack", StringComparison.OrdinalIgnoreCase))
+            {
+                log.Status = "ack";
+                log.StatusReason = $"ack={wrapper?.Data?.Ack} status={wrapper?.Data?.Status}";
+                db.WebhookLogs.Add(log);
+                await HandleMessageAckAsync(wrapper!, ct);
+                await db.SaveChangesAsync(ct);
+                return Ok(new { status = "ack-processed", id = wrapper?.Data?.Id, deliveryStatus = wrapper?.Data?.Status });
+            }
+            if (string.Equals(wrapper?.EventType, "message_create", StringComparison.OrdinalIgnoreCase)
+                && wrapper?.Data?.FromMe == true)
+            {
+                // El propio saliente que creamos nosotros: UltraMsg lo eco. Ignorar.
+                log.Status = "ignored"; log.StatusReason = "self message_create";
+                db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+                return Ok(new { status = "ignored", reason = "self message_create" });
+            }
+            // ── /Branch ──────────────────────────────────────────────────────
+
             if (wrapper?.Data is not null)
             {
                 // Formato wrapeado: { data: {...}, instanceId: "instance140984" }
@@ -509,6 +543,91 @@ public class WebhookController(
     }
 
     /// <summary>
+    /// Procesa eventos message_ack de UltraMsg — actualiza el estado real de entrega
+    /// del mensaje en Message.DeliveryStatus y CampaignContact.DeliveryStatus.
+    ///
+    /// ACK transitions: 0 (queue) → 1 (sent) → 2 (delivered) → 3 (read)
+    /// ACK = -1 → invalid (cuenta restringida / número no existe en WhatsApp)
+    ///
+    /// El sistema ya no depende solo del HTTP 200 de UltraMsg para saber si un
+    /// mensaje "llegó". Ahora la BD refleja la verdad reportada por WhatsApp.
+    ///
+    /// Si llega status invalid|failed|expired|unsent, además marca el
+    /// CampaignContact como DispatchStatus=Error para que la próxima
+    /// ejecución de la campaña lo reintente (en vez de creer que ya se envió).
+    /// </summary>
+    private async Task HandleMessageAckAsync(
+        UltraMsgWebhookWrapper wrapper, CancellationToken ct)
+    {
+        var data = wrapper.Data;
+        if (data is null || string.IsNullOrEmpty(data.Id)) return;
+
+        var externalId = data.Id;
+        var ack        = data.Ack ?? 0;
+        // Status string normalizado a minúsculas para comparaciones estables
+        var status     = (data.Status ?? AckToStatusString(ack)).ToLowerInvariant();
+        var nowUtc     = DateTime.UtcNow;
+
+        // 1) Actualizar Message (conversaciones del monitor)
+        var msg = await db.Messages
+            .FirstOrDefaultAsync(m => m.ExternalMessageId == externalId, ct);
+        if (msg != null)
+        {
+            msg.DeliveryStatus    = status;
+            msg.LastAck           = ack;
+            msg.DeliveryUpdatedAt = nowUtc;
+            if (status == "delivered" && msg.DeliveredAt is null) msg.DeliveredAt = nowUtc;
+            if (status == "read"      && msg.ReadAt is null)      msg.ReadAt      = nowUtc;
+
+            // Espejo al enum interno MessageStatus para que el monitor legacy
+            // siga funcionando sin tocar UI:
+            msg.Status = status switch
+            {
+                "read"                                    => AgentFlow.Domain.Entities.MessageStatus.Read,
+                "delivered"                               => AgentFlow.Domain.Entities.MessageStatus.Delivered,
+                "sent"                                    => AgentFlow.Domain.Entities.MessageStatus.Sent,
+                "invalid" or "failed" or "expired" or "unsent"
+                                                          => AgentFlow.Domain.Entities.MessageStatus.Failed,
+                _                                         => msg.Status,
+            };
+        }
+
+        // 2) Actualizar CampaignContact (envíos masivos)
+        var cc = await db.CampaignContacts
+            .FirstOrDefaultAsync(c => c.ExternalMessageId == externalId, ct);
+        if (cc != null)
+        {
+            cc.DeliveryStatus = status;
+            if (status == "delivered" && cc.DeliveredAt is null) cc.DeliveredAt = nowUtc;
+            if (status == "read"      && cc.ReadAt is null)      cc.ReadAt      = nowUtc;
+
+            // Si UltraMsg confirma que NO se entregó, corregir la mentira de
+            // "Sent" en BD para que el dispatcher pueda reintentar y para que
+            // los reportes muestren la verdad.
+            if (status is "invalid" or "failed" or "expired" or "unsent")
+            {
+                cc.DispatchStatus  = AgentFlow.Domain.Enums.DispatchStatus.Error;
+                cc.DispatchError ??= $"UltraMsg ack={ack} status={status}";
+            }
+        }
+
+        // NOTA: SignalR push al monitor — el ConversationNotifier no expone
+        // un evento de status update en esta versión. Cuando se agregue, se
+        // dispara aquí: await notifier.NotifyMessageStatusAsync(msg, status).
+        // El monitor por ahora puede refrescar via polling o re-query.
+    }
+
+    private static string AckToStatusString(int ack) => ack switch
+    {
+        -1 => "invalid",
+         0 => "queue",
+         1 => "sent",
+         2 => "delivered",
+         3 => "read",
+         _ => "unknown",
+    };
+
+    /// <summary>
     /// Endpoint de diagnóstico — muestra los últimos 50 registros de la bitácora del webhook.
     /// Solo para uso interno. No requiere autenticación para facilitar el diagnóstico.
     /// </summary>
@@ -605,6 +724,10 @@ public class UltraMsgWebhookWrapper
     public UltraMsgWebhookPayload? Data { get; set; }
     public string? InstanceId { get; set; }
     public string? Token { get; set; }
+
+    // El JSON viene en snake_case ("event_type") y PropertyNameCaseInsensitive
+    // NO convierte snake_case → camelCase. Mapeo explícito.
+    [System.Text.Json.Serialization.JsonPropertyName("event_type")]
     public string? EventType { get; set; }
 }
 
@@ -631,4 +754,10 @@ public class UltraMsgWebhookPayload
     public string? Mimetype { get; set; }      // ej: "image/jpeg", "application/pdf"
     public string? Media { get; set; }         // URL del archivo en algunos formatos de UltraMsg
     public string? Filename { get; set; }      // nombre original del archivo (ej: "factura.pdf")
+
+    // ── Para eventos message_ack (delivery status) ─────────────────────────
+    // ack: -1=invalid | 0=queue/pending | 1=sent | 2=delivered | 3=read
+    // status: "queue" | "sent" | "delivered" | "read" | "invalid" | "failed" | "expired" | "unsent"
+    public int? Ack { get; set; }
+    public string? Status { get; set; }
 }

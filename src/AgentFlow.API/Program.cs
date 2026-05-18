@@ -565,6 +565,34 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DispatchError')
             BEGIN ALTER TABLE CampaignContacts ADD DispatchError nvarchar(2000) NULL; END");
+
+        // Delivery status real (UltraMsg webhook message_ack)
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DeliveryStatus')
+            BEGIN ALTER TABLE CampaignContacts ADD DeliveryStatus nvarchar(20) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'DeliveredAt')
+            BEGIN ALTER TABLE CampaignContacts ADD DeliveredAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignContacts') AND name = 'ReadAt')
+            BEGIN ALTER TABLE CampaignContacts ADD ReadAt datetime2 NULL; END");
+
+        // Delivery status real en Messages (UltraMsg webhook message_ack)
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'DeliveryStatus')
+            BEGIN ALTER TABLE Messages ADD DeliveryStatus nvarchar(20) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'LastAck')
+            BEGIN ALTER TABLE Messages ADD LastAck int NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'DeliveredAt')
+            BEGIN ALTER TABLE Messages ADD DeliveredAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'ReadAt')
+            BEGIN ALTER TABLE Messages ADD ReadAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'DeliveryUpdatedAt')
+            BEGIN ALTER TABLE Messages ADD DeliveryUpdatedAt datetime2 NULL; END");
     }
     catch { }
 

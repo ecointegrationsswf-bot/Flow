@@ -57,4 +57,14 @@ public class CampaignContact
     /// (ScheduledFor = mañana a las BusinessHoursStart del tenant).
     /// </summary>
     public DateTime? ScheduledFor { get; set; }
+
+    // ── Delivery status real reportado por UltraMsg vía webhook message_ack ──
+    // SentAt indica que dispatcher cree que envió. DeliveryStatus indica si
+    // realmente llegó (delivered/read) o si UltraMsg lo descartó (invalid/queue).
+    //
+    // Cuando DeliveryStatus IN ('invalid','failed','expired','unsent'), el
+    // handler del webhook fuerza DispatchStatus=Error para que la BD no mienta.
+    public string? DeliveryStatus { get; set; }       // queue|sent|delivered|read|invalid|failed|expired|unsent
+    public DateTime? DeliveredAt { get; set; }
+    public DateTime? ReadAt { get; set; }
 }
