@@ -110,28 +110,13 @@ public class CampaignDispatcherService(
             return new DispatchResult(0, 0, "Dispatch deshabilitado por tenant", DispatchStopReason.CampaignInactive);
         }
 
-        // ── 1.c Cool-down entre batches (Phase 3) ────────────────────────
-        // Si esta campaña terminó un batch hace poco, esperamos a que pase
-        // CampaignBatchCoolDownMinutes antes de tomar el siguiente lote.
-        // Esto evita ráfagas largas que disparan detección anti-spam de WhatsApp.
-        // El cool-down se setea al final de cada batch que envió al menos 1 msg.
-        if (campaign.NextBatchAfterUtc.HasValue && campaign.NextBatchAfterUtc.Value > DateTime.UtcNow)
-        {
-            var waitMin = (int)(campaign.NextBatchAfterUtc.Value - DateTime.UtcNow).TotalMinutes;
-            // Information (no Debug) — es información clave para soporte cuando un
-            // operador pregunta "¿por qué mi campaña no está enviando?". Sin esta
-            // línea visible, hay que mirar BD para entender el cool-down.
-            logger.LogInformation(
-                "Campaña {CampaignId}: en cool-down hasta {Until:o} (~{Min} min). Saltando este tick.",
-                campaignId, campaign.NextBatchAfterUtc.Value, waitMin);
-            return new DispatchResult(0, 0,
-                $"En cool-down entre batches ({waitMin} min restantes)",
-                DispatchStopReason.BatchCompleted);
-        }
-
-        // ── 2. Cierre temprano: si NO queda ningún contacto en estado in-flight, la
-        //      campaña ya terminó. Marcamos Completed independientemente del horario
-        //      de oficina — cerrar una campaña terminada no es lo mismo que enviar.
+        // ── 2. Cierre temprano: si NO queda ningún contacto in-flight, la
+        //      campaña ya terminó. Marcamos Completed independientemente del
+        //      horario o del cool-down — cerrar una campaña terminada no es
+        //      lo mismo que enviar. Esto DEBE ir ANTES del check de cool-down:
+        //      si lo dejamos al revés, una campaña con todos sus contactos
+        //      ya enviados queda como "Running" durante todo el cool-down
+        //      (20 min default) aunque ya no haya nada que hacer.
         var hasActive = await db.CampaignContacts.AnyAsync(cc => cc.CampaignId == campaignId
                             && (cc.DispatchStatus == DispatchStatus.Pending
                                 || cc.DispatchStatus == DispatchStatus.Queued
@@ -142,6 +127,10 @@ public class CampaignDispatcherService(
         {
             campaign.CompletedAt = DateTime.UtcNow;
             campaign.Status = CampaignStatus.Completed;
+            // Limpiamos NextBatchAfterUtc al cerrar — ya no aplica cool-down a
+            // una campaña Completed. Evita que el badge "⏸ Xm" del frontend
+            // siga apareciendo tras el cierre.
+            campaign.NextBatchAfterUtc = null;
             // IsActive se MANTIENE en true a propósito. "Completed" significa que
             // ya no hay mensajes iniciales por mandar, pero la campaña sigue VIVA
             // para que FollowUpSweep dispare los seguimientos parametrizados y
@@ -156,6 +145,23 @@ public class CampaignDispatcherService(
             catch (Exception ex) { logger.LogError(ex, "DispatchAsync CampaignFinished falló (continuamos)."); }
 
             return new DispatchResult(0, 0, "Campaña completada", DispatchStopReason.AllContactsProcessed);
+        }
+
+        // ── 1.c Cool-down entre batches (Phase 3) ────────────────────────
+        // Si esta campaña terminó un batch hace poco PERO todavía hay contactos
+        // pendientes, esperamos a que pase CampaignBatchCoolDownMinutes antes
+        // de tomar el siguiente lote. Esto evita ráfagas largas que disparan
+        // detección anti-spam de WhatsApp. (El cool-down NO aplica si ya no
+        // hay activos — eso ya se manejó en el check anterior.)
+        if (campaign.NextBatchAfterUtc.HasValue && campaign.NextBatchAfterUtc.Value > DateTime.UtcNow)
+        {
+            var waitMin = (int)(campaign.NextBatchAfterUtc.Value - DateTime.UtcNow).TotalMinutes;
+            logger.LogInformation(
+                "Campaña {CampaignId}: en cool-down hasta {Until:o} (~{Min} min). Saltando este tick.",
+                campaignId, campaign.NextBatchAfterUtc.Value, waitMin);
+            return new DispatchResult(0, 0,
+                $"En cool-down entre batches ({waitMin} min restantes)",
+                DispatchStopReason.BatchCompleted);
         }
 
         // ── 3. Verificar horario de envío (solo bloquea ENVÍO; el cierre ya pasó arriba) ──
@@ -309,6 +315,10 @@ public class CampaignDispatcherService(
             {
                 campaign.CompletedAt = DateTime.UtcNow;
                 campaign.Status = CampaignStatus.Completed;
+                // Limpiamos el cool-down al cerrar — coherencia con el cierre
+                // temprano arriba para que el frontend no siga mostrando
+                // "⏸ Xm" en una campaña ya completada.
+                campaign.NextBatchAfterUtc = null;
                 // IsActive se MANTIENE en true. Ver nota en el cierre temprano arriba —
                 // la transición a IsActive=false la hace AutoCloseSweep cuando se
                 // cumplan AutoCloseHours desde CompletedAt.
