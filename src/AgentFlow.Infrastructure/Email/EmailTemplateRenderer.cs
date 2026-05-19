@@ -137,7 +137,10 @@ public class EmailTemplateRenderer
         // Fallback para cliente.saldo: si ClienteSaldo no vino del CampaignContact
         // (PendingAmount null), sumamos los montos numéricos de los items.
         // Mantiene el formato del primer item (B/. 487.50 → "B/. 702.50").
-        var saldoFinal = ctx.ClienteSaldo;
+        // Normalizar el saldo del cliente con el mismo formateo de miles que
+        // los items. El CampaignContact.PendingAmount puede venir crudo del Excel
+        // ("10067.4") y queremos mostrarlo como "10,067.40" consistente.
+        var saldoFinal = FormatAmount(ctx.ClienteSaldo);
         if (string.IsNullOrWhiteSpace(saldoFinal) && items.Count > 0)
         {
             saldoFinal = ComputeTotalFromItems(items);
@@ -200,7 +203,10 @@ public class EmailTemplateRenderer
         item["titulo"]    = ResolveColumn(raw, cfg.TitleColumn);
         item["subtitulo"] = ResolveColumn(raw, cfg.SubtitleColumn);
         item["categoria"] = ResolveColumn(raw, cfg.CategoryColumn);
-        item["monto"]     = ResolveColumn(raw, cfg.AmountColumn);
+        // El monto principal SIEMPRE se trata como moneda → formato "1,234.56".
+        // El usuario reporto que algunos correos llegan con "10067.4" mientras
+        // otros con "6,279.00" (depende del Excel fuente). Normalizamos aquí.
+        item["monto"]     = FormatAmount(ResolveColumn(raw, cfg.AmountColumn));
 
         var detalles = new ScriptArray();
         foreach (var col in cfg.DetailColumns)
@@ -213,7 +219,9 @@ public class EmailTemplateRenderer
             if (IsNumericZero(v)) continue;
             var entry = new ScriptObject();
             entry["k"] = HumanizeLabel(col);
-            entry["v"] = FormatValue(col, v);
+            // Para columnas que parecen monto/saldo/suma, formatear como moneda.
+            // Para fechas y otros, dejar FormatValue (que ya maneja fechas).
+            entry["v"] = IsAmountColumnName(col) ? FormatAmount(v) : FormatValue(col, v);
             detalles.Add(entry);
         }
         item["detalles"] = detalles;
@@ -355,6 +363,105 @@ public class EmailTemplateRenderer
         }
 
         return value;
+    }
+
+    /// <summary>
+    /// Detecta si el nombre de columna sugiere que el valor es un monto/moneda.
+    /// Usado para decidir si formatear como "1,234.56" en el grid de detalles.
+    /// </summary>
+    private static bool IsAmountColumnName(string? column)
+    {
+        if (string.IsNullOrEmpty(column)) return false;
+        var c = column.ToLowerInvariant();
+        return c.Contains("saldo")
+            || c.Contains("monto")
+            || c.Contains("amount")
+            || c.Contains("total")
+            || c.Contains("balance")
+            || c.Contains("suma asegurada")
+            || c.Contains("pendiente")
+            || c.Contains("aseguradas")
+            || c.Contains("a30")
+            || c.Contains("a60")
+            || c.Contains("a90")
+            || c.Contains("a120");
+    }
+
+    /// <summary>
+    /// Formatea un valor numérico (posiblemente sin formato — "10067.4", "1500",
+    /// "B/. 487,50", "$1.234,56") como moneda estilo "10,067.40" o "1,500.00".
+    /// Si el valor no parsea como número, lo devuelve tal cual.
+    ///
+    /// Heurística para detectar formato:
+    /// 1. Si tiene coma + punto: asumir formato US (1,234.56) — coma=miles, punto=decimal.
+    /// 2. Si solo tiene coma (sin punto): la coma puede ser decimal LATAM (1234,56)
+    ///    o miles US sin decimales (1,234). Si la coma está seguida por 1-2 dígitos
+    ///    al final, asumir LATAM (decimal).
+    /// 3. Si solo tiene punto: el punto es decimal (1234.56) o miles europeo (1.234).
+    ///    Si el punto está seguido por exactamente 3 dígitos sin más caracteres,
+    ///    podría ser miles europeo — pero en práctica raro en Excel panameño,
+    ///    así que tratamos el punto como decimal.
+    /// 4. Conserva el prefijo de moneda original (B/., $, USD, etc.) si lo trae.
+    /// </summary>
+    private static string FormatAmount(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return value ?? string.Empty;
+
+        // Extraer prefijo de moneda (todo lo no-numérico al inicio) para conservarlo.
+        var trimmed = value.Trim();
+        var prefixEnd = 0;
+        while (prefixEnd < trimmed.Length
+               && !char.IsDigit(trimmed[prefixEnd])
+               && trimmed[prefixEnd] != '-'
+               && trimmed[prefixEnd] != '+')
+        {
+            prefixEnd++;
+        }
+        var prefix = prefixEnd > 0 ? trimmed[..prefixEnd] : string.Empty;
+        var body = prefixEnd > 0 ? trimmed[prefixEnd..] : trimmed;
+
+        // Normalizar a formato US ("1234.56") detectando formato fuente.
+        string normalized = body;
+        var hasComma = body.Contains(',');
+        var hasDot   = body.Contains('.');
+
+        if (hasComma && hasDot)
+        {
+            // Formato US: la coma es separador de miles, el punto es decimal.
+            normalized = body.Replace(",", "");
+        }
+        else if (hasComma && !hasDot)
+        {
+            // Solo coma: si está seguida por 1-2 dígitos al final, asumir decimal LATAM.
+            // Si está seguida por 3 dígitos, asumir separador de miles (US "1,234").
+            var lastComma = body.LastIndexOf(',');
+            var afterComma = body[(lastComma + 1)..];
+            if (afterComma.Length is 1 or 2 && afterComma.All(char.IsDigit))
+            {
+                // LATAM decimal: "1.234,56" → quitar puntos (miles), coma → punto (decimal)
+                normalized = body.Replace(".", "").Replace(",", ".");
+            }
+            else
+            {
+                // US miles sin decimales: "1,234" → "1234"
+                normalized = body.Replace(",", "");
+            }
+        }
+        // Si solo tiene punto o ninguno, asumir formato US válido tal cual.
+
+        if (!decimal.TryParse(
+                normalized,
+                System.Globalization.NumberStyles.Number | System.Globalization.NumberStyles.AllowLeadingSign,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out var num))
+        {
+            // No parseó como número — devolver original sin modificar.
+            return value;
+        }
+
+        // Formato final: "1,234.56" (en-US) con 2 decimales SIEMPRE.
+        var formatted = num.ToString("N2", System.Globalization.CultureInfo.GetCultureInfo("en-US"));
+        return string.IsNullOrEmpty(prefix) ? formatted : $"{prefix.TrimEnd()} {formatted}";
     }
 
     private static string ResolveColumn(Dictionary<string, string> raw, string? column)
