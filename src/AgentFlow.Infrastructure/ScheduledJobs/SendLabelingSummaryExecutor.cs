@@ -47,15 +47,28 @@ public class SendLabelingSummaryExecutor(
             .Select(s => s.Email)
             .ToListAsync(ct);
 
-        // 1. Detectar campañas con cambios desde el último envío.
-        // Una campaña tiene cambios si alguna de sus conversaciones tiene
-        // LabeledAt > LabelingSummarySentAt (o el timestamp es NULL = nunca enviado).
+        // 1. Detectar campañas que deben entrar al resumen de este corte.
+        // Reglas (deben coincidir con el filtro de `rows` más abajo):
+        //   CASO 1 — Primera vez (LabelingSummarySentAt es NULL): la campaña entra
+        //            si tiene AL MENOS una conversación etiquetada (esa es la base
+        //            del "primer reporte completo" de la campaña).
+        //   CASO 2 — Ya se reportó antes (LabelingSummarySentAt no es NULL): la
+        //            campaña entra SOLO si hay un mensaje Inbound del cliente con
+        //            SentAt > LabelingSummarySentAt. Esto evita arrastrar campañas
+        //            viejas cuando un proceso colateral (re-etiquetado, sweeper) toca
+        //            LabeledAt sin que el cliente realmente haya respondido tarde.
         var campaignsWithChanges = await db.Campaigns
             .Where(c => !string.IsNullOrEmpty(c.LaunchedByUserId)
-                        && db.Conversations.Any(conv =>
-                            conv.CampaignId == c.Id
-                            && conv.LabeledAt != null
-                            && (c.LabelingSummarySentAt == null || conv.LabeledAt > c.LabelingSummarySentAt)))
+                        && (
+                            // CASO 1: campaña nunca reportada con al menos una conv etiquetada.
+                            (c.LabelingSummarySentAt == null && db.Conversations.Any(conv =>
+                                conv.CampaignId == c.Id && conv.LabeledAt != null))
+                            // CASO 2: campaña ya reportada — solo entra si hubo respuesta nueva.
+                            || (c.LabelingSummarySentAt != null && db.Messages.Any(m =>
+                                m.Direction == MessageDirection.Inbound
+                                && m.SentAt > c.LabelingSummarySentAt
+                                && m.Conversation.CampaignId == c.Id))
+                        ))
             .Select(c => new { c.Id, c.Name, c.TenantId, c.LaunchedByUserId })
             .ToListAsync(ct);
 
@@ -299,7 +312,23 @@ public class SendLabelingSummaryExecutor(
             from agent in agentLeft.DefaultIfEmpty()
             where conv.CampaignId != null && campaignIds.Contains(conv.CampaignId.Value)
                && conv.LabeledAt != null
-               && (camp.LabelingSummarySentAt == null || conv.LabeledAt > camp.LabelingSummarySentAt)
+               // FIX 2026-05-19 (semántica anti-mezcla):
+               //   CASO 1 — Primer resumen de la campaña (LabelingSummarySentAt es NULL):
+               //     incluir TODAS las conversaciones etiquetadas, hayan respondido o no.
+               //     Eso es lo que ve el operador como "el lote completo de la campaña".
+               //
+               //   CASO 2 — Resúmenes posteriores (LabelingSummarySentAt no es NULL):
+               //     incluir SOLO las conversaciones donde el cliente respondió DESPUÉS
+               //     del último resumen. Lo demás ya se reportó y no queremos repetirlo.
+               //
+               // Esto evita que campañas viejas se "cuelen" en resúmenes nuevos cuando
+               // un proceso colateral (re-etiquetado, sweepers) toca LabeledAt sin que
+               // el cliente haya respondido. El criterio Inbound > LabelingSummarySentAt
+               // es el único que refleja "el cliente realmente respondió tarde".
+               && (camp.LabelingSummarySentAt == null
+                   || db.Messages.Any(m => m.ConversationId == conv.Id
+                                        && m.Direction == MessageDirection.Inbound
+                                        && m.SentAt > camp.LabelingSummarySentAt))
             select new
             {
                 CampaignName = camp.Name,
