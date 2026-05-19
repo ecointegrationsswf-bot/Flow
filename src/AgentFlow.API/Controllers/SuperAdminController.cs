@@ -1440,17 +1440,39 @@ public class SuperAdminController(
         var assignedIds = tenant.AssignedActionIds ?? [];
         if (assignedIds.Count == 0) return Ok(Array.Empty<object>());
 
-        var actions = await db.ActionDefinitions
+        // Cargar las actions asignadas (pueden ser globales o tenant-specific).
+        var globalOrAssigned = await db.ActionDefinitions
             .Where(a => a.IsActive && a.RequiresWebhook && assignedIds.Contains(a.Id))
             .OrderBy(a => a.Name)
-            .Select(a => new
-            {
-                a.Id, a.Name, a.Description,
-                a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess, a.IsDelinquencyDownload,
-                a.DefaultWebhookContract, a.DefaultTriggerConfig,
-                HasWebhookContract = a.DefaultWebhookContract != null
-            })
             .ToListAsync(ct);
+
+        // Para cada acción assigned que sea GLOBAL (TenantId=null), buscar si
+        // existe una copia tenant-specific con el mismo Name (Slug). Si existe,
+        // el contract real del tenant es el de la copia, no el de la global.
+        // Esto permite per-tenant override sin tocar el record global.
+        var globalNames = globalOrAssigned.Where(a => a.TenantId is null).Select(a => a.Name).ToList();
+        var tenantOverrides = globalNames.Count > 0
+            ? await db.ActionDefinitions
+                .Where(a => a.TenantId == tenantId && a.IsActive && globalNames.Contains(a.Name))
+                .ToDictionaryAsync(a => a.Name, a => a, ct)
+            : new Dictionary<string, AgentFlow.Domain.Entities.ActionDefinition>();
+
+        var actions = globalOrAssigned.Select(a =>
+        {
+            // Si hay override tenant-specific con mismo Name → usar ese contract.
+            var effective = (a.TenantId is null && tenantOverrides.TryGetValue(a.Name, out var ov))
+                ? ov
+                : a;
+            return new
+            {
+                a.Id, a.Name, a.Description,           // El Id que muestra la UI es el de la global (assigned)
+                a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.IsProcess, a.IsDelinquencyDownload,
+                // PERO el contract viene del override del tenant si existe.
+                DefaultWebhookContract = effective.DefaultWebhookContract,
+                DefaultTriggerConfig   = effective.DefaultTriggerConfig,
+                HasWebhookContract     = effective.DefaultWebhookContract != null
+            };
+        }).ToList();
 
         // Para acciones marcadas como descarga de morosidad, verificar si el tenant tiene
         // un ActionDelinquencyConfig con DownloadWebhookUrl configurado.
@@ -1541,7 +1563,67 @@ public class SuperAdminController(
         if (action is null)
             return NotFound(new { error = "Acción no encontrada." });
 
-        action.DefaultWebhookContract = string.IsNullOrWhiteSpace(req.Contract) ? null : req.Contract;
+        // ── Per-tenant override sin pisar la acción global ─────────────────
+        // Si la acción es GLOBAL (TenantId == null), NO la modificamos in-place
+        // porque eso afectaría a TODOS los tenants que la usen. En su lugar:
+        //   1. Buscamos si ya existe una copia tenant-specific con el mismo
+        //      Name (Slug). Si existe → editamos esa copia.
+        //   2. Si no existe → creamos una copia tenant-specific (mismo Name,
+        //      datos clonados de la global, TenantId del tenant actual).
+        // ActionExecutor.ResolveAction ya prefiere tenant-specific sobre global
+        // (línea 87-88 de ActionExecutorService.cs), así que esto activa el
+        // override automáticamente.
+        AgentFlow.Domain.Entities.ActionDefinition target;
+        bool createdClone = false;
+        if (action.TenantId is null)
+        {
+            // Buscar copia previa tenant-specific con mismo Name.
+            var clone = await db.ActionDefinitions
+                .FirstOrDefaultAsync(a => a.TenantId == tenantId && a.Name == action.Name, ct);
+
+            if (clone is null)
+            {
+                // No existe — crear copia con todos los campos heredados de la global.
+                clone = new AgentFlow.Domain.Entities.ActionDefinition
+                {
+                    Id                    = Guid.NewGuid(),
+                    TenantId              = tenantId,
+                    Name                  = action.Name,
+                    Description           = action.Description,
+                    RequiresWebhook       = action.RequiresWebhook,
+                    SendsEmail            = action.SendsEmail,
+                    SendsSms              = action.SendsSms,
+                    WebhookUrl            = action.WebhookUrl,
+                    WebhookMethod         = action.WebhookMethod,
+                    IsActive              = true,
+                    CreatedAt             = DateTime.UtcNow,
+                    ConversationImpact    = action.ConversationImpact,
+                    ExecutionMode         = action.ExecutionMode,
+                    ParamSource           = action.ParamSource,
+                    RequiredParams        = action.RequiredParams,
+                    DefaultTriggerConfig  = action.DefaultTriggerConfig,
+                    DefaultWebhookContract= action.DefaultWebhookContract,  // será sobreescrito abajo
+                    ScheduleConfig        = action.ScheduleConfig,
+                    IsProcess             = action.IsProcess,
+                    IsDelinquencyDownload = action.IsDelinquencyDownload,
+                };
+                db.ActionDefinitions.Add(clone);
+                createdClone = true;
+            }
+            target = clone;
+        }
+        else if (action.TenantId == tenantId)
+        {
+            // Ya es tenant-specific de este tenant — editar in-place.
+            target = action;
+        }
+        else
+        {
+            // Pertenece a OTRO tenant — no permitir editar.
+            return Forbid();
+        }
+
+        target.DefaultWebhookContract = string.IsNullOrWhiteSpace(req.Contract) ? null : req.Contract;
 
         // Sincronizar DefaultTriggerConfig si el contract trae triggerConfig.
         if (!string.IsNullOrWhiteSpace(req.Contract))
@@ -1552,16 +1634,24 @@ public class SuperAdminController(
                 if (doc.RootElement.TryGetProperty("triggerConfig", out var tc)
                     && tc.ValueKind == System.Text.Json.JsonValueKind.Object)
                 {
-                    action.DefaultTriggerConfig = tc.GetRawText();
+                    target.DefaultTriggerConfig = tc.GetRawText();
                 }
             }
             catch { /* contract inválido — no sincronizar */ }
         }
 
-        action.UpdatedAt = DateTime.UtcNow;
+        target.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct);
 
-        return Ok(new { action.Id, action.DefaultWebhookContract, action.DefaultTriggerConfig });
+        return Ok(new
+        {
+            target.Id, target.DefaultWebhookContract, target.DefaultTriggerConfig,
+            // Bandera diagnóstica útil: indica si se creó copia o se editó in-place.
+            ClonedFromGlobal = createdClone,
+            // El ID de la acción "padre" para que el frontend pueda seguir
+            // resolviendo por el ID original de la global si ya lo tiene cargado.
+            OriginalActionId = actionId,
+        });
     }
 
     // ───── Prompt Templates ─────
