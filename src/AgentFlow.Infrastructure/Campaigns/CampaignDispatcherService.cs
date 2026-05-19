@@ -118,7 +118,10 @@ public class CampaignDispatcherService(
         if (campaign.NextBatchAfterUtc.HasValue && campaign.NextBatchAfterUtc.Value > DateTime.UtcNow)
         {
             var waitMin = (int)(campaign.NextBatchAfterUtc.Value - DateTime.UtcNow).TotalMinutes;
-            logger.LogDebug(
+            // Information (no Debug) — es información clave para soporte cuando un
+            // operador pregunta "¿por qué mi campaña no está enviando?". Sin esta
+            // línea visible, hay que mirar BD para entender el cool-down.
+            logger.LogInformation(
                 "Campaña {CampaignId}: en cool-down hasta {Until:o} (~{Min} min). Saltando este tick.",
                 campaignId, campaign.NextBatchAfterUtc.Value, waitMin);
             return new DispatchResult(0, 0,

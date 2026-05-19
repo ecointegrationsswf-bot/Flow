@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Search, CalendarRange, X, MessageSquare, Mail, Smartphone, CheckCheck, Eye, Reply, XOctagon } from 'lucide-react'
+import { Search, CalendarRange, X, MessageSquare, Mail, Smartphone, CheckCheck, Check, Eye, Reply, XOctagon, HelpCircle } from 'lucide-react'
 import { differenceInMinutes } from 'date-fns'
 import type { ConversationSummary, ConversationStatus } from '@/shared/types'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
@@ -56,7 +56,7 @@ export function ConversationList({
   //   unread      → entregado pero no leído (al menos un mensaje en ese estado)
   //   responded   → cliente respondió DESPUÉS del último saliente
   //   undelivered → al menos un saliente NO se entregó (queue/invalid/...)
-  type DeliveryFilter = 'all' | 'read' | 'unread' | 'responded' | 'undelivered'
+  type DeliveryFilter = 'all' | 'read' | 'unread' | 'sent' | 'responded' | 'undelivered' | 'notracking'
   const [filterDelivery, setFilterDelivery] = useState<DeliveryFilter>('all')
 
   const agentNames = useMemo(() => {
@@ -113,8 +113,10 @@ export function ConversationList({
       all:         base.length,
       read:        base.filter(c => c.lastOutboundRead).length,
       unread:      base.filter(c => c.hasUnreadOutbound && !c.lastOutboundRead).length,
+      sent:        base.filter(c => c.lastOutboundSent).length,
       responded:   base.filter(c => c.clientResponded).length,
       undelivered: base.filter(c => c.hasUndelivered).length,
+      notracking:  base.filter(c => c.lastOutboundNoTracking).length,
     }
   }, [deduplicated, filterChannel])
 
@@ -134,8 +136,10 @@ export function ConversationList({
     // Filtro por delivery status — ortogonal al canal/status/agente.
     if (filterDelivery === 'read'        && !c.lastOutboundRead)                          return false
     if (filterDelivery === 'unread'      && (!c.hasUnreadOutbound || c.lastOutboundRead)) return false
+    if (filterDelivery === 'sent'        && !c.lastOutboundSent)                          return false
     if (filterDelivery === 'responded'   && !c.clientResponded)                           return false
     if (filterDelivery === 'undelivered' && !c.hasUndelivered)                            return false
+    if (filterDelivery === 'notracking'  && !c.lastOutboundNoTracking)                    return false
     return true
   })
 
@@ -259,6 +263,14 @@ export function ConversationList({
           onClick={() => setFilterDelivery('unread')}
         />
         <DeliveryTab
+          label="Enviado"
+          icon={<Check className="h-3 w-3 text-blue-500" />}
+          count={deliveryCounts.sent}
+          tone="blue"
+          active={filterDelivery === 'sent'}
+          onClick={() => setFilterDelivery('sent')}
+        />
+        <DeliveryTab
           label="Respondió"
           icon={<Reply className="h-3 w-3 text-emerald-500" />}
           count={deliveryCounts.responded}
@@ -274,6 +286,16 @@ export function ConversationList({
           active={filterDelivery === 'undelivered'}
           onClick={() => setFilterDelivery('undelivered')}
         />
+        {deliveryCounts.notracking > 0 && (
+          <DeliveryTab
+            label="Sin info"
+            icon={<HelpCircle className="h-3 w-3 text-gray-400" />}
+            count={deliveryCounts.notracking}
+            tone="gray"
+            active={filterDelivery === 'notracking'}
+            onClick={() => setFilterDelivery('notracking')}
+          />
+        )}
       </div>
 
       {/* Filters */}

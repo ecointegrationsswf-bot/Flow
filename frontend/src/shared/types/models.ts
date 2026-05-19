@@ -113,6 +113,11 @@ export interface ConversationSummary {
   clientResponded?: boolean
   /** true si hay al menos un saliente NO entregado (queue/invalid/etc). */
   hasUndelivered?: boolean
+  /** true si el último saliente quedó en DeliveryStatus='sent'
+   *  (servidor WhatsApp confirmó pero sin ACK de delivered/read). */
+  lastOutboundSent?: boolean
+  /** true si el último saliente no tiene info de delivery (NULL). */
+  lastOutboundNoTracking?: boolean
 }
 
 export interface Conversation {

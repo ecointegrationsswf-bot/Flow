@@ -54,7 +54,15 @@ public record ConversationSummary(
     /// <summary>true si HAY al menos un saliente que NO se entregó
     /// (DeliveryStatus IN queue/invalid/failed/expired/unsent — UltraMsg
     /// confirmó que WhatsApp no lo despachó).</summary>
-    bool HasUndelivered
+    bool HasUndelivered,
+    /// <summary>true si el ÚLTIMO saliente tiene DeliveryStatus='sent'
+    /// (confirmado por el servidor WhatsApp pero SIN confirmación de
+    /// entrega/lectura). Caso típico: mensajes enviados antes de activar
+    /// el webhook message_ack — no hay registro retroactivo de delivered/read.</summary>
+    bool LastOutboundSent,
+    /// <summary>true si el ÚLTIMO saliente tiene DeliveryStatus=NULL
+    /// (sin tracking — mensaje viejo previo al sistema delivery status).</summary>
+    bool LastOutboundNoTracking
 );
 
 public class GetActiveConversationsHandler(IConversationRepository repo)
@@ -129,6 +137,16 @@ public class GetActiveConversationsHandler(IConversationRepository repo)
             bool hasUndelivered = outbounds.Any(m =>
                 m.DeliveryStatus is "queue" or "invalid" or "failed" or "expired" or "unsent");
 
+            // "Enviado" = último saliente confirmado al servidor WhatsApp (sent)
+            // pero sin información de delivered/read (porque el webhook on_ack
+            // se activó después del envío, no hay historial retroactivo).
+            bool lastOutboundSent =
+                string.Equals(lastDeliveryStatus, "sent", StringComparison.OrdinalIgnoreCase);
+
+            // "Sin tracking" = último saliente sin info de delivery alguna.
+            // Casos: canal Email (no aplica), o mensajes pre-Phase 2.
+            bool lastOutboundNoTracking = lastOutbound != null && lastDeliveryStatus is null;
+
             return new ConversationSummary(
                 c.Id,
                 c.ClientPhone,
@@ -147,7 +165,9 @@ public class GetActiveConversationsHandler(IConversationRepository repo)
                 lastRead,
                 hasUnreadOutbound,
                 clientResponded,
-                hasUndelivered
+                hasUndelivered,
+                lastOutboundSent,
+                lastOutboundNoTracking
             );
         });
     }
