@@ -372,8 +372,11 @@ builder.Services.AddRateLimiter(options =>
             }));
 });
 
-// ── File upload limits (10 MB max) ──────────────────────
-builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 10 * 1024 * 1024);
+// ── File upload limits (100 MB techo global) ──────────────────────
+// Esto es el techo absoluto del servidor. Cada endpoint puede acotar más
+// con [RequestSizeLimit(...)]; los endpoints sin attr quedan limitados aquí.
+// El upload de PDFs de referencia usa el techo completo (100 MB).
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 100L * 1024 * 1024);
 
 builder.Services.AddControllers()
     .AddJsonOptions(o =>
@@ -593,6 +596,34 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Messages') AND name = 'DeliveryUpdatedAt')
             BEGIN ALTER TABLE Messages ADD DeliveryUpdatedAt datetime2 NULL; END");
+    }
+    catch { }
+
+    // Cooldown de TRANSFER_CHAT — evita que se notifique al ejecutivo más de una
+    // vez por la misma conversación. Lo setea TransferChatService la primera vez
+    // que escala; las siguientes escalaciones lo respetan y no spamean.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'LastTransferChatSentAt')
+            BEGIN ALTER TABLE Conversations ADD LastTransferChatSentAt datetime2 NULL; END");
+    }
+    catch { }
+
+    // Monitor diario de salud de líneas WhatsApp (job WHATSAPP_LINE_HEALTH_CHECK).
+    // Persiste el último estado pingeado para que la UI muestre el badge real
+    // sin tener que llamar a UltraMsg en cada render.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('WhatsAppLines') AND name = 'LastStatus')
+            BEGIN ALTER TABLE WhatsAppLines ADD LastStatus nvarchar(40) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('WhatsAppLines') AND name = 'LastStatusCheckedAt')
+            BEGIN ALTER TABLE WhatsAppLines ADD LastStatusCheckedAt datetime2 NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('WhatsAppLines') AND name = 'ConsecutivePingFailures')
+            BEGIN ALTER TABLE WhatsAppLines ADD ConsecutivePingFailures int NOT NULL DEFAULT 0; END");
     }
     catch { }
 

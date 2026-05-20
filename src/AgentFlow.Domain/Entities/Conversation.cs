@@ -54,6 +54,13 @@ public class Conversation
     // El envío del webhook de resultado al cliente NO se persiste aquí: es una
     // ActionDefinition programada que se audita en ScheduledWebhookJobExecutions.
 
+    /// <summary>
+    /// UTC. Última vez que TransferChatService notificó al ejecutivo (WhatsApp + email)
+    /// por esta conversación. Si != NULL, futuras escalaciones NO renotifican
+    /// (cooldown de 1-por-conversación). El ejecutivo gestiona desde el portal.
+    /// </summary>
+    public DateTime? LastTransferChatSentAt { get; set; }
+
     public ICollection<Message> Messages { get; set; } = [];
     public ICollection<GestionEvent> GestionEvents { get; set; } = [];
 }

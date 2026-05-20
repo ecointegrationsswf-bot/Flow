@@ -45,6 +45,10 @@ public static class CampaignAutomationSeeder
                 "SEND_LABELING_SUMMARY",
                 "Acción interna del job que genera el reporte Excel de etiquetado y lo envía por email al usuario que cargó las campañas. Sube el archivo al container 'sumary' de Azure Blob. Programar 1 hora después del job de etiquetado."
             ),
+            (
+                "WHATSAPP_LINE_HEALTH_CHECK",
+                "Verifica cada día a las 6am Panamá el estado de TODAS las líneas UltraMsg activas. Notifica caídas: 1 correo consolidado a SuperAdmins + 1 correo por tenant afectado a sus usuarios Admin/Supervisor listando agentes IA que quedan inactivos."
+            ),
         };
 
         var existingActions = await db.ActionDefinitions
@@ -102,6 +106,14 @@ public static class CampaignAutomationSeeder
             actionName: "AUTO_CLOSE_CAMPAIGN_SWEEP",
             cron: "*/30 * * * *",
             description: "Cierra campañas que excedieron AutoCloseHours.",
+            ct);
+
+        // Monitor diario de líneas WhatsApp — 6am hora Panamá (la expresión cron
+        // se interpreta en TZ Panamá por el ScheduledWebhookWorker via cronos).
+        await EnsureGlobalCronJobAsync(db, logger,
+            actionName: "WHATSAPP_LINE_HEALTH_CHECK",
+            cron: "0 6 * * *",
+            description: "Pingea todas las líneas UltraMsg, reporta caídas por email a SuperAdmins y a los Admin/Supervisor del tenant.",
             ct);
     }
 

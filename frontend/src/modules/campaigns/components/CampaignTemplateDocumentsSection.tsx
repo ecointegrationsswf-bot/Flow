@@ -109,7 +109,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
     <div>
       <h2 className="mb-4 text-sm font-semibold text-gray-900">Documentos de referencia</h2>
       <p className="mb-3 text-xs text-gray-500">
-        Sube archivos PDF que el agente usara como contexto para responder en esta campaña. Maximo 10 MB por archivo · 5 documentos · 20 MB totales.
+        Sube archivos PDF que el agente usara como contexto para responder en esta campaña. Maximo 100 MB por archivo · 20 documentos · 100 MB totales.
       </p>
 
       {/* Banner de estado del feature flag */}
@@ -157,7 +157,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
           <p className="text-sm text-gray-600">
             Arrastra archivos PDF aquí o <span className="font-medium text-blue-600">selecciona</span>
           </p>
-          <p className="text-xs text-gray-400">Solo archivos PDF, maximo 10 MB</p>
+          <p className="text-xs text-gray-400">Solo archivos PDF, maximo 100 MB</p>
           <input
             ref={fileRef}
             type="file"
@@ -251,7 +251,7 @@ export function CampaignTemplateDocumentsSection({ templateId }: { templateId: s
       {uploadMutation.isError && (
         <div className="mt-3 flex items-center gap-1.5 text-xs text-red-600">
           <AlertCircle className="h-3.5 w-3.5" />
-          <span>Error al subir el documento. Verifica que sea un PDF valido de menos de 10 MB.</span>
+          <span>Error al subir el documento. Verifica que sea un PDF valido de menos de 100 MB.</span>
         </div>
       )}
 

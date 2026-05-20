@@ -14,6 +14,7 @@ public class WhatsAppLineConfiguration : IEntityTypeConfiguration<WhatsAppLine>
         b.Property(l => l.InstanceId).HasMaxLength(200).IsRequired();
         b.Property(l => l.ApiToken).HasMaxLength(500).IsRequired();
         b.Property(l => l.Provider).HasConversion<string>().HasMaxLength(50);
+        b.Property(l => l.LastStatus).HasMaxLength(40);
 
         b.HasOne(l => l.Tenant)
             .WithMany(t => t.WhatsAppLines)

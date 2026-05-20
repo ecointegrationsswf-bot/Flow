@@ -2,6 +2,7 @@ using AgentFlow.Application.Modules.Campaigns;
 using AgentFlow.Application.Modules.Campaigns.LaunchV2;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Channels.UltraMsg;
 using AgentFlow.Infrastructure.Storage;
 using Hangfire;
 using MediatR;
@@ -43,7 +44,8 @@ public class CampaignsController(
     ICampaignRepository campaignRepo,
     AgentFlowDbContext db,
     IConfiguration cfg,
-    IHttpClientFactory httpClientFactory) : ControllerBase
+    IHttpClientFactory httpClientFactory,
+    IUltraMsgInstanceService ultraMsg) : ControllerBase
 {
     // Devuelve el nombre completo del usuario autenticado (claim full_name),
     // con fallback a email y luego a "system".
@@ -133,6 +135,10 @@ public class CampaignsController(
     [HttpPost("{id:guid}/launch-v2")]
     public async Task<IActionResult> LaunchV2(Guid id, [FromBody] LaunchV2Request? body, CancellationToken ct)
     {
+        var lineCheck = await ValidateWhatsAppLineForLaunchAsync(id, tenantCtx.TenantId, ct);
+        if (lineCheck is not null)
+            return BadRequest(new { error = lineCheck });
+
         var phone = User.FindFirst("phone")?.Value;
         var result = await mediator.Send(new LaunchCampaignV2Command(
             CampaignId: id,
@@ -156,6 +162,10 @@ public class CampaignsController(
         [FromQuery] int warmupDay = 0,
         CancellationToken ct = default)
     {
+        var lineCheck = await ValidateWhatsAppLineForLaunchAsync(id, tenantCtx.TenantId, ct);
+        if (lineCheck is not null)
+            return BadRequest(new { error = lineCheck });
+
         var phone = User.FindFirst("phone")?.Value;
         var result = await mediator.Send(new LaunchCampaignV2Command(
             CampaignId: id,
@@ -166,6 +176,81 @@ public class CampaignsController(
         ), ct);
 
         return result.Success ? Ok(result) : BadRequest(result);
+    }
+
+    /// <summary>
+    /// Validación previa al lanzamiento para campañas de canal WhatsApp:
+    /// el agente DEBE tener una WhatsAppLine vinculada, esa línea debe estar
+    /// IsActive=true y el ping en vivo a UltraMsg debe devolver "authenticated".
+    /// Si todo OK devuelve null. Si no, devuelve el mensaje para mostrar al usuario
+    /// en el modal de validaciones del frontend.
+    ///
+    /// El ping en vivo es importante: el job diario WHATSAPP_LINE_HEALTH_CHECK
+    /// corre solo a las 6am, así que <c>LastStatus</c> cacheado puede estar
+    /// desactualizado hasta 24h. Para una operación crítica como lanzar campaña
+    /// vale 1-2 segundos extra para validar el estado real.
+    ///
+    /// De paso refrescamos <c>LastStatus</c>/<c>LastStatusCheckedAt</c> con el
+    /// resultado del ping — beneficia a la próxima ejecución del job diario.
+    /// </summary>
+    private async Task<string?> ValidateWhatsAppLineForLaunchAsync(
+        Guid campaignId, Guid tenantId, CancellationToken ct)
+    {
+        var campaign = await db.Campaigns
+            .Where(c => c.Id == campaignId && c.TenantId == tenantId)
+            .Select(c => new { c.Channel, c.AgentDefinitionId })
+            .FirstOrDefaultAsync(ct);
+
+        if (campaign is null) return null; // El handler maneja el 404
+        if (campaign.Channel != ChannelType.WhatsApp) return null; // Email/SMS no requieren línea
+
+        var agent = await db.AgentDefinitions
+            .Where(a => a.Id == campaign.AgentDefinitionId)
+            .Select(a => new { a.Name, a.AvatarName, a.WhatsAppLineId })
+            .FirstOrDefaultAsync(ct);
+
+        var agentLabel = agent?.AvatarName ?? agent?.Name ?? "el agente";
+
+        if (agent is null || !agent.WhatsAppLineId.HasValue)
+            return $"No se puede lanzar la campaña: {agentLabel} no tiene una línea de WhatsApp asociada. Vincula una línea desde Agentes IA → Editar agente.";
+
+        var line = await db.Set<Domain.Entities.WhatsAppLine>()
+            .FirstOrDefaultAsync(l => l.Id == agent.WhatsAppLineId.Value, ct);
+
+        if (line is null)
+            return $"La línea de WhatsApp asociada a {agentLabel} no existe. Revisa la configuración del agente.";
+
+        if (!line.IsActive)
+            return $"La línea de WhatsApp \"{line.DisplayName}\" está deshabilitada. Actívala en Configuración → WhatsApp antes de lanzar la campaña.";
+
+        // Ping en vivo (5s de timeout máximo).
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cts.CancelAfter(TimeSpan.FromSeconds(5));
+
+        string status;
+        try
+        {
+            var result = await ultraMsg.GetStatusAsync(line.InstanceId, line.ApiToken, cts.Token);
+            status = string.IsNullOrWhiteSpace(result.Status) ? "unknown" : result.Status.ToLowerInvariant();
+        }
+        catch
+        {
+            // Timeout o error de red — bloqueamos y no marcamos failure persistente
+            // (un flake puntual no debe contaminar el contador del job diario).
+            return $"No fue posible verificar el estado de la línea \"{line.DisplayName}\" en UltraMsg. Intenta de nuevo en unos segundos o reconecta desde Configuración → WhatsApp.";
+        }
+
+        // Refresca el cache para el job diario.
+        line.LastStatus = status;
+        line.LastStatusCheckedAt = DateTime.UtcNow;
+        if (string.Equals(status, "authenticated", StringComparison.OrdinalIgnoreCase))
+            line.ConsecutivePingFailures = 0;
+        await db.SaveChangesAsync(ct);
+
+        if (!string.Equals(status, "authenticated", StringComparison.OrdinalIgnoreCase))
+            return $"La línea \"{line.DisplayName}\" no está conectada (estado: {status}). Reconéctala desde Configuración → WhatsApp antes de lanzar la campaña.";
+
+        return null;
     }
 
     /// <summary>
@@ -832,6 +917,10 @@ public class CampaignsController(
     [HttpPost("{id:guid}/launch")]
     public async Task<IActionResult> Launch(Guid id, CancellationToken ct)
     {
+        var lineCheck = await ValidateWhatsAppLineForLaunchAsync(id, tenantCtx.TenantId, ct);
+        if (lineCheck is not null)
+            return BadRequest(new { error = lineCheck });
+
         var userIdStr = User.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
                      ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
         string? launcherPhone = null;

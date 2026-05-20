@@ -26,10 +26,12 @@ public class CampaignTemplateDocumentsController(
     IDocumentRetriever ragRetriever) : ControllerBase
 {
     // Límites duros por maestro — se aplican al subir. Defensivo ante context window
-    // y costos de Anthropic. Alineado con Fase 3 del plan de Referencia Documents.
-    private const int MaxDocumentsPerTemplate = 5;
-    private const long MaxTotalBytesPerTemplate = 20L * 1024 * 1024; // 20 MB
-    private const long MaxBytesPerDocument = 10L * 1024 * 1024;      // 10 MB (ya validado vía RequestSizeLimit)
+    // y costos de Anthropic. Los topes son intencionalmente generosos: el verdadero
+    // candado de costos es el RAG (chunking + embeddings + retrieval limita lo que
+    // entra al prompt, no el PDF crudo).
+    private const int MaxDocumentsPerTemplate = 20;
+    private const long MaxTotalBytesPerTemplate = 100L * 1024 * 1024; // 100 MB
+    private const long MaxBytesPerDocument = 100L * 1024 * 1024;      // 100 MB
 
 
     [HttpGet]
@@ -56,7 +58,7 @@ public class CampaignTemplateDocumentsController(
     }
 
     [HttpPost]
-    [RequestSizeLimit(10 * 1024 * 1024)] // 10 MB
+    [RequestSizeLimit(100L * 1024 * 1024)] // 100 MB
     public async Task<IActionResult> Upload(
         Guid templateId,
         IFormFile file,

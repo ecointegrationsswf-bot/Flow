@@ -23,6 +23,7 @@ export const ACTION_FRIENDLY_NAMES: Record<string, string> = {
   LABEL_CONVERSATIONS: 'Etiquetar conversaciones',
   SEND_LABELING_SUMMARY: 'Enviar resumen etiquetado',
   DOWNLOAD_DELINQUENCY_DATA: 'Descargar datos de morosidad',
+  WHATSAPP_LINE_HEALTH_CHECK: 'Verificar estado de líneas WhatsApp',
 }
 
 export function getActionFriendlyName(slug: string | null | undefined): string {

@@ -581,9 +581,16 @@ public class WebhookController(
         if (data is null || string.IsNullOrEmpty(data.Id)) return;
 
         var externalId = data.Id;
-        var ack        = data.Ack ?? 0;
-        // Status string normalizado a minúsculas para comparaciones estables
-        var status     = (data.Status ?? AckToStatusString(ack)).ToLowerInvariant();
+        // Ack puede venir como número ("1", "2"...) o como string ("pending", "sent"...).
+        // Si parsea a int, usamos el numérico; si no, intentamos resolver el status
+        // desde el propio string y dejamos ack=0 como "desconocido".
+        var ack        = int.TryParse(data.Ack, out var ackInt) ? ackInt : 0;
+        // Status string normalizado a minúsculas para comparaciones estables.
+        // Prioridad: data.Status (explícito) → data.Ack (si vino como string) → mapeo ack→string.
+        var status     = (data.Status
+                          ?? (ackInt == 0 && !string.IsNullOrEmpty(data.Ack) ? data.Ack : null)
+                          ?? AckToStatusString(ack))
+                         .ToLowerInvariant();
         var nowUtc     = DateTime.UtcNow;
 
         // 1) Actualizar Message — SIEMPRE filtrar por TenantId para evitar
@@ -804,6 +811,13 @@ public class UltraMsgWebhookPayload
     // ── Para eventos message_ack (delivery status) ─────────────────────────
     // ack: -1=invalid | 0=queue/pending | 1=sent | 2=delivered | 3=read
     // status: "queue" | "sent" | "delivered" | "read" | "invalid" | "failed" | "expired" | "unsent"
-    public int? Ack { get; set; }
+    //
+    // OJO: UltraMsg envía "ack" con dos semánticas según el event_type:
+    //   - message_ack       → numérico ("1", "2", "3"...)
+    //   - message_received  → string ("pending", "sent", "delivered", "read")
+    // Por eso tipamos como string? y parseamos a int en el handler de ack
+    // cuando lo necesitamos. Si lo tipamos como int? el deserializador rompe
+    // todos los message_received con parse error y los inbound se pierden.
+    public string? Ack { get; set; }
     public string? Status { get; set; }
 }

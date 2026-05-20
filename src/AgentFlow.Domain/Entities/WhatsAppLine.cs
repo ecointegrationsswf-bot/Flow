@@ -20,5 +20,13 @@ public class WhatsAppLine
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
 
+    // Monitor diario de salud (job WHATSAPP_LINE_HEALTH_CHECK a las 6am Panamá).
+    // LastStatus: "authenticated" | "disconnected" | "qr" | "loading" | "unknown".
+    // Una línea se considera caída cuando LastStatus != "authenticated"
+    // Y ConsecutivePingFailures >= 2 (tolerancia a flake puntual de red).
+    public string? LastStatus { get; set; }
+    public DateTime? LastStatusCheckedAt { get; set; }
+    public int ConsecutivePingFailures { get; set; }
+
     public Tenant? Tenant { get; set; }
 }

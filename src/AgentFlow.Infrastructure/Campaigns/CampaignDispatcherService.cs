@@ -454,25 +454,74 @@ public class CampaignDispatcherService(
                         if (string.IsNullOrWhiteSpace(contact.PhoneNumber)) continue;
 
                         string? message = null;
+                        string? generationError = null;
                         if (messageGenerator is not null)
                         {
                             try { message = await messageGenerator.GenerateAsync(campaign, contact, ct); }
                             catch (Exception exGen)
                             {
-                                logger.LogWarning(exGen, "Campaña {CampaignId}: generación con Claude falló para {Phone}, uso template.",
+                                generationError = exGen.Message;
+                                logger.LogWarning(exGen, "Campaña {CampaignId}: generación con Claude falló para {Phone}.",
                                     campaignId, contact.PhoneNumber);
                             }
                         }
-                        message ??= BuildInitialMessage(contact, campaign);
-                        var waResult = await waProvider.SendMessageAsync(
-                            new SendMessageRequest(contact.PhoneNumber, message), ct);
-                        attempt = new DispatchAttemptResult(
-                            Success: waResult.Success,
-                            ExternalId: waResult.ExternalMessageId,
-                            Error: waResult.Error,
-                            SentContent: message,
-                            Subject: null,
-                            Recipient: contact.PhoneNumber);
+
+                        // Guardrail post-LLM: detectar "output meta" (alertas técnicas, refusal,
+                        // referencias al prompt) que el LLM emite a veces cuando se confunde con
+                        // datos inconsistentes del contacto. Sin este check el cliente recibiría
+                        // texto interno tipo "# ALERTA: CLIENTE FUERA DE SCOPE" en su WhatsApp.
+                        // Si se detecta, forzamos message=null para que caiga al bloqueo de
+                        // abajo con un detail específico que apunta al SystemPrompt del template.
+                        if (!string.IsNullOrWhiteSpace(message))
+                        {
+                            var metaReason = DetectMetaOutput(message);
+                            if (metaReason is not null)
+                            {
+                                logger.LogError(
+                                    "Campaña {CampaignId}: el LLM emitió output META para {Phone} (no apto para cliente). Razón: {Reason}. Output (primeros 500 chars): {Output}",
+                                    campaignId, contact.PhoneNumber, metaReason, Truncate(message, 500));
+                                generationError = $"El LLM emitió un mensaje meta no apto para enviar al cliente ({metaReason}). " +
+                                                  "Esto suele indicar un prompt sin reglas claras de formato/identidad. " +
+                                                  "Revisar el SystemPrompt del template de campaña.";
+                                message = null;
+                            }
+                        }
+
+                        if (string.IsNullOrWhiteSpace(message))
+                        {
+                            // No mandamos mensaje "basura" hardcodeado al cliente cuando el
+                            // generador IA no produjo nada. Antes caíamos a un texto fijo de
+                            // "le saluda el equipo de cobros" — peligroso para tenants que no
+                            // son de cobros (ej. Internacional de Seguros / Ventas / Reclamos).
+                            // Marcamos el contacto como Error con un mensaje claro para que el
+                            // admin contacte al equipo de TI a revisar la parametrización del LLM
+                            // (LlmApiKey del tenant, SystemPrompt del template, etc.).
+                            var detail = generationError is not null
+                                ? $"Excepción del LLM: {Truncate(generationError, 300)}"
+                                : "El generador IA no produjo mensaje. Posibles causas: tenant sin LlmApiKey, template sin SystemPrompt, contacto sin ContactDataJson, o respuesta vacía de Claude.";
+                            attempt = new DispatchAttemptResult(
+                                Success: false,
+                                ExternalId: null,
+                                Error: $"No se envió el mensaje a este contacto: revisar con el equipo de TI la parametrización del LLM. {detail}",
+                                SentContent: null,
+                                Subject: null,
+                                Recipient: contact.PhoneNumber);
+                            logger.LogError(
+                                "Campaña {CampaignId}: NO se envió mensaje a {Phone} — generador IA retornó vacío. {Detail}",
+                                campaignId, contact.PhoneNumber, detail);
+                        }
+                        else
+                        {
+                            var waResult = await waProvider.SendMessageAsync(
+                                new SendMessageRequest(contact.PhoneNumber, message), ct);
+                            attempt = new DispatchAttemptResult(
+                                Success: waResult.Success,
+                                ExternalId: waResult.ExternalMessageId,
+                                Error: waResult.Error,
+                                SentContent: message,
+                                Subject: null,
+                                Recipient: contact.PhoneNumber);
+                        }
                     }
                     else
                     {
@@ -766,31 +815,65 @@ por el sistema de protección anti-restricción.</p>
         s is null ? null : s.Length <= max ? s : s[..max];
 
     /// <summary>
-    /// Construye el mensaje inicial personalizado para un contacto.
-    /// Usa los datos del contacto (nombre, póliza, monto) para personalizar.
-    /// En el futuro, el agente IA generará este mensaje con su system prompt.
+    /// Patrones que indican que el LLM emitió un mensaje "meta" — dirigido al
+    /// desarrollador/admin o auto-referencial al prompt — en vez de un mensaje
+    /// conversacional para el cliente final. Mantener conservador: solo frases
+    /// de muy alta señal que NUNCA aparecen en mensajes legítimos a clientes
+    /// de campañas comerciales o de cobros.
     /// </summary>
-    private static string BuildInitialMessage(CampaignContact contact, Campaign campaign)
+    private static readonly string[] MetaOutputPhrases =
     {
-        // Mensaje template básico — será reemplazado por generación del LLM
-        var name = contact.ClientName ?? "Estimado cliente";
-        var parts = new List<string>
+        "estimado desarrollador",
+        "estimado admin",
+        "estimado developer",
+        "alerta: cliente",
+        "alerta cliente fuera",
+        "según mi identidad",
+        "segun mi identidad",
+        "según mi prompt",
+        "segun mi prompt",
+        "según el prompt",
+        "segun el prompt",
+        "según mi system prompt",
+        "según mi rol",
+        "no puedo redactar este mensaje",
+        "no puedo redactar el mensaje",
+        "fuera de scope",
+        "fuera del scope",
+        "sección 1 del prompt",
+        "seccion 1 del prompt",
+        "sección 2 del prompt",
+        "seccion 2 del prompt",
+        "acciones recomendadas:",
+        "## el problema:",
+    };
+
+    /// <summary>
+    /// Devuelve null si el mensaje parece OK para enviar al cliente.
+    /// Devuelve la razón si detecta un output meta que NO debe ser enviado.
+    /// </summary>
+    private static string? DetectMetaOutput(string content)
+    {
+        if (string.IsNullOrWhiteSpace(content)) return null;
+
+        // Encabezado Markdown al inicio (#, ##, ###) — los mensajes de WhatsApp
+        // legítimos no empiezan con encabezados Markdown técnicos.
+        var trimmed = content.TrimStart();
+        if (trimmed.StartsWith("# ", StringComparison.Ordinal)
+            || trimmed.StartsWith("## ", StringComparison.Ordinal)
+            || trimmed.StartsWith("### ", StringComparison.Ordinal))
         {
-            $"Hola {name}, le saluda el equipo de cobros."
-        };
+            return "el mensaje empieza con encabezado Markdown (#, ##, ###) — patrón típico de output meta, no de mensaje conversacional";
+        }
 
-        if (!string.IsNullOrEmpty(contact.PolicyNumber))
-            parts.Add($"Nos comunicamos respecto a su póliza {contact.PolicyNumber}");
+        var lower = content.ToLowerInvariant();
+        foreach (var phrase in MetaOutputPhrases)
+        {
+            if (lower.Contains(phrase))
+                return $"contiene frase reservada para output interno: '{phrase}'";
+        }
 
-        if (contact.PendingAmount.HasValue && contact.PendingAmount > 0)
-            parts.Add($"con un saldo pendiente de ${contact.PendingAmount:N2}");
-
-        if (!string.IsNullOrEmpty(contact.InsuranceCompany))
-            parts.Add($"en {contact.InsuranceCompany}");
-
-        parts.Add("¿Podría indicarnos cuándo realizará el pago? Quedamos atentos.");
-
-        return string.Join(". ", parts) + ".";
+        return null;
     }
 
     /// <summary>

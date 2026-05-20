@@ -253,6 +253,13 @@ builder.Services.AddScoped<IScheduledJobExecutor,
 // Slug DOWNLOAD_DELINQUENCY_DATA
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.DelinquencyDownloadExecutor>();
+// Slug WHATSAPP_LINE_HEALTH_CHECK — monitor diario de líneas UltraMsg (6am Panamá).
+builder.Services.AddScoped<IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.WhatsAppLineHealthCheckExecutor>();
+// UltraMsg /instance/status — usado por el executor de salud diaria.
+builder.Services.AddHttpClient<
+    AgentFlow.Infrastructure.Channels.UltraMsg.IUltraMsgInstanceService,
+    AgentFlow.Infrastructure.Channels.UltraMsg.UltraMsgInstanceService>();
 
 // BackgroundService: tick cada 60s.
 builder.Services.AddHostedService<
