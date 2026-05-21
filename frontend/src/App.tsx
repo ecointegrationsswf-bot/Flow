@@ -42,6 +42,7 @@ import { MorosidadPage } from '@/modules/morosidad/components/MorosidadPage'
 import { ForgotPasswordPage } from '@/modules/auth/components/ForgotPasswordPage'
 import { ResetPasswordPage } from '@/modules/auth/components/ResetPasswordPage'
 import { DialogHost } from '@/shared/components/dialog'
+import { NewVersionBanner } from '@/shared/components/NewVersionBanner'
 
 export default function App() {
   const hydrate = useAuthStore((s) => s.hydrate)
@@ -56,6 +57,9 @@ export default function App() {
   return (
     <>
     <DialogHost />
+    {/* Detecta deploys del frontend y muestra banner "Recargar ahora" cuando
+        el bundle del servidor difiere del cargado en memoria. */}
+    <NewVersionBanner />
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />

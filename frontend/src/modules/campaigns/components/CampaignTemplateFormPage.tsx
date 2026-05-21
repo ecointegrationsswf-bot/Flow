@@ -1,17 +1,7 @@
 import { useState, useEffect } from 'react'
-
-const ACTION_FRIENDLY_NAMES: Record<string, string> = {
-  'SEND_EMAIL_RESUME': 'Enviar email con resumen',
-  'TRANSFER_CHAT': 'Escalar a humano',
-  'SEND_MESSAGE': 'Enviar mensaje',
-  'SEND_RESUME': 'Enviar resumen',
-  'PREMIUM': 'Premium',
-  'CLOSE_CONVERSATION': 'Cerrar conversación',
-  'ESCALATE_TO_HUMAN': 'Escalar a ejecutivo',
-  'SEND_PAYMENT_LINK': 'Enviar enlace de pago',
-  'SEND_DOCUMENT': 'Enviar documento',
-}
-const getFriendlyName = (name: string) => ACTION_FRIENDLY_NAMES[name] ?? name
+// Mapeo unificado slug → nombre amigable vive en @/shared/actionLabels.
+// Cualquier acción nueva se registra ahí — NO duplicar mappings locales.
+import { getActionFriendlyName } from '@/shared/actionLabels'
 
 import { useTenant } from '@/shared/hooks/useTenant'
 import { useNavigate, useParams } from 'react-router-dom'
@@ -578,10 +568,10 @@ export function CampaignTemplateFormPage() {
   // marcar el tab "General" con indicador rojo cuando el form falla validación.
   const hasGeneralErrors = !!(errors.name || errors.agentDefinitionId || errors.sendFrom || errors.sendUntil)
 
-  // Tab "Acciones" oculto a usuarios — la asignación de acciones a maestros
-  // se hace desde Admin → Editar Cliente → "Acciones asignadas". Acá solo
-  // confundía porque el cliente final no debería tocar webhooks.
-
+  // Tab "Acciones" — el usuario del tenant elige qué acciones de las habilitadas
+  // por el super admin (Tenant.AssignedActionIds) se activan en ESTE maestro.
+  // Va como último tab para que el flujo natural sea: configurar general → labels
+  // → prompt → documentos → correo → y finalmente decidir qué acciones se disparan.
   const tabs = [
     { key: 'general' as const, label: 'General', icon: Globe, hasError: hasGeneralErrors },
     { key: 'labels' as const, label: 'Etiquetas', icon: Tag, badge: selectedLabelIds.length },
@@ -590,6 +580,12 @@ export function CampaignTemplateFormPage() {
     ...(hasEmailChannel
       ? [{ key: 'email' as const, label: 'Correo', icon: Mail, badge: localEmailBodyHtml ? 1 : 0 }]
       : []),
+    // Badge: solo contamos las acciones que ESTÁN en availableActions (las asignadas
+    // al tenant). Si selectedActionIds tiene Ids huérfanos (acciones borradas o
+    // desasignadas del tenant), no se muestran en la lista pero quedarían contados
+    // por error. El filtro garantiza que el badge refleje el número real de checks.
+    { key: 'actions' as const, label: 'Acciones', icon: Zap,
+      badge: selectedActionIds.filter(id => availableActions?.some(a => a.id === id)).length },
   ]
 
   return (
@@ -921,7 +917,7 @@ export function CampaignTemplateFormPage() {
                       <Zap className="h-4 w-4 shrink-0 text-amber-500" />
                       <div className="flex-1">
                         <div className="flex items-center gap-2">
-                          <span className="text-sm font-medium text-gray-900">{getFriendlyName(action.name)}</span>
+                          <span className="text-sm font-medium text-gray-900">{getActionFriendlyName(action.name)}</span>
                           <div className="flex gap-1">
                             {action.requiresWebhook && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">Webhook</span>}
                             {action.sendsEmail && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">Email</span>}
@@ -1374,6 +1370,11 @@ export function CampaignTemplateFormPage() {
           <WebhookBuilderModal
             initial={initial}
             actionName={action?.name ?? ''}
+            // El editor de maestro de campaña permite ver el contrato vigente de la acción
+            // pero NO editarlo desde el lado del tenant. La edición del contrato se hace
+            // exclusivamente desde "Editar Cliente → Webhooks" (panel del super admin).
+            // El backend también bloquea con 403 si llega un PUT desde el tenant.
+            readOnly
             onClose={() => setWebhookBuilderActionId(null)}
             onSave={(bundle) => {
               // Mergear el bundle dentro del actionConfigs[actionId] existente

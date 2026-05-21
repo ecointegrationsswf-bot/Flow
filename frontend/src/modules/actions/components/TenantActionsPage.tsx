@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Webhook, Mail, MessageSquare, Loader2, Zap, CheckCircle, AlertCircle } from 'lucide-react'
-import { useTenantActions, useUpdateWebhookContract, type TenantAction } from '../hooks/useTenantActions'
+import { Webhook, Mail, MessageSquare, Loader2, Zap, CheckCircle, AlertCircle, Eye } from 'lucide-react'
+import { useTenantActions, type TenantAction } from '../hooks/useTenantActions'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
 import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
 
@@ -21,26 +21,13 @@ const FRIENDLY_NAMES: Record<string, string> = {
 
 export function TenantActionsPage() {
   const { data: actions = [], isLoading } = useTenantActions()
-  const updateContract = useUpdateWebhookContract()
+  // Modo solo-consulta para el tenant: el contrato del webhook lo configura
+  // EXCLUSIVAMENTE el super admin desde "Editar Cliente → Webhooks". Esta
+  // pantalla solo permite VER el contrato actual sin posibilidad de modificarlo.
+  // El backend (TenantActionsController) también devuelve 403 si recibe un PUT.
   const [wizardActionId, setWizardActionId] = useState<string | null>(null)
-  const [successId, setSuccessId] = useState<string | null>(null)
 
   const wizardAction = actions.find(a => a.id === wizardActionId)
-
-  const handleSaveContract = (bundle: WebhookContractBundle) => {
-    if (!wizardActionId) return
-    const contract = JSON.stringify(bundle)
-    updateContract.mutate(
-      { id: wizardActionId, contract },
-      {
-        onSuccess: () => {
-          setWizardActionId(null)
-          setSuccessId(wizardActionId)
-          setTimeout(() => setSuccessId(null), 3000)
-        },
-      },
-    )
-  }
 
   if (isLoading) {
     return (
@@ -55,7 +42,8 @@ export function TenantActionsPage() {
       <div className="mb-6">
         <h1 className="text-xl font-bold text-gray-900">Acciones</h1>
         <p className="text-sm text-gray-500">
-          Configura el webhook default de cada acción. Todos los maestros de campaña que usen la acción heredan esta configuración automáticamente.
+          Consulta las acciones disponibles y el webhook default que configuró el administrador.
+          Si necesitas modificar el contrato de alguna, solicítaselo al super admin.
         </p>
       </div>
 
@@ -71,32 +59,32 @@ export function TenantActionsPage() {
             <ActionCard
               key={action.id}
               action={action}
-              onConfigure={() => setWizardActionId(action.id)}
-              isSaving={updateContract.isPending && wizardActionId === action.id}
-              justSaved={successId === action.id}
+              onView={() => setWizardActionId(action.id)}
             />
           ))}
         </div>
       )}
 
-      {/* Webhook Builder Modal */}
+      {/* Webhook Builder Modal — modo solo consulta (readOnly).
+          El tenant solo puede ver el contrato. La edición está bloqueada
+          en frontend (botón "Cerrar" en vez de "Guardar") y en backend
+          (TenantActionsController.UpdateWebhookContract devuelve 403). */}
       {wizardAction && (
         <WebhookBuilderModal
           initial={parseContract(wizardAction.defaultWebhookContract)}
           actionName={wizardAction.name}
           onClose={() => setWizardActionId(null)}
-          onSave={handleSaveContract}
+          onSave={() => setWizardActionId(null) /* no-op en readOnly */}
+          readOnly
         />
       )}
     </div>
   )
 }
 
-function ActionCard({ action, onConfigure, isSaving, justSaved }: {
+function ActionCard({ action, onView }: {
   action: TenantAction
-  onConfigure: () => void
-  isSaving: boolean
-  justSaved: boolean
+  onView: () => void
 }) {
   const friendly = FRIENDLY_NAMES[action.name] ?? action.name
 
@@ -142,24 +130,21 @@ function ActionCard({ action, onConfigure, isSaving, justSaved }: {
             </span>
           ) : null}
 
-          {action.requiresWebhook && (
+          {action.requiresWebhook && action.hasWebhookContract ? (
             <button
-              onClick={onConfigure}
-              disabled={isSaving}
-              className="flex items-center gap-1.5 rounded-lg bg-purple-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-purple-700 disabled:opacity-50 transition-colors"
+              onClick={onView}
+              className="flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 transition-colors"
             >
-              {isSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Zap className="h-3.5 w-3.5" />}
-              {action.hasWebhookContract ? 'Editar contrato' : 'Configurar webhook'}
+              <Eye className="h-3.5 w-3.5" />
+              Ver contrato
             </button>
-          )}
+          ) : action.requiresWebhook ? (
+            <span className="text-[11px] text-gray-400 italic">
+              Solicita configuración al administrador
+            </span>
+          ) : null}
         </div>
       </div>
-
-      {justSaved && (
-        <div className="mt-3 rounded-lg bg-green-50 border border-green-200 px-3 py-2 text-xs text-green-700">
-          Contrato guardado. Todos los maestros que usen esta acción lo heredan automáticamente.
-        </div>
-      )}
     </div>
   )
 }

@@ -760,6 +760,54 @@ public class SuperAdminController(
         }
 
         tenant.AssignedActionIds = ids;
+
+        // ── Aislamiento por tenant para contratos webhook ───────────────────
+        // Cada acción global webhook que se asigne a un tenant debe tener un clon
+        // tenant-specific (con TenantId del tenant), copiando todos los campos
+        // de la global. Sin esto, dos tenants que tengan la misma acción global
+        // asignada comparten el DefaultWebhookContract — cuando uno edita el
+        // contrato, afecta a todos. ResolveAction en ActionExecutorService prefiere
+        // tenant-specific sobre global por Name match, así que el clon se activa
+        // automáticamente sin tocar AssignedActionIds (que mantiene el Id global).
+        if (ids.Count > 0)
+        {
+            var assignedActions = await db.ActionDefinitions
+                .Where(a => ids.Contains(a.Id))
+                .ToListAsync(ct);
+
+            foreach (var globalAction in assignedActions
+                         .Where(a => a.TenantId is null && a.RequiresWebhook))
+            {
+                var existingClone = await db.ActionDefinitions
+                    .AnyAsync(a => a.TenantId == tenantId && a.Name == globalAction.Name, ct);
+                if (existingClone) continue;
+
+                db.ActionDefinitions.Add(new AgentFlow.Domain.Entities.ActionDefinition
+                {
+                    Id                    = Guid.NewGuid(),
+                    TenantId              = tenantId,
+                    Name                  = globalAction.Name,
+                    Description           = globalAction.Description,
+                    RequiresWebhook       = globalAction.RequiresWebhook,
+                    SendsEmail            = globalAction.SendsEmail,
+                    SendsSms              = globalAction.SendsSms,
+                    WebhookUrl            = globalAction.WebhookUrl,
+                    WebhookMethod         = globalAction.WebhookMethod,
+                    IsActive              = true,
+                    CreatedAt             = DateTime.UtcNow,
+                    ConversationImpact    = globalAction.ConversationImpact,
+                    ExecutionMode         = globalAction.ExecutionMode,
+                    ParamSource           = globalAction.ParamSource,
+                    RequiredParams        = globalAction.RequiredParams,
+                    DefaultTriggerConfig  = globalAction.DefaultTriggerConfig,
+                    DefaultWebhookContract= globalAction.DefaultWebhookContract,
+                    ScheduleConfig        = globalAction.ScheduleConfig,
+                    IsProcess             = globalAction.IsProcess,
+                    IsDelinquencyDownload = globalAction.IsDelinquencyDownload,
+                });
+            }
+        }
+
         await db.SaveChangesAsync(ct);
 
         return Ok(new { assignedActionIds = tenant.AssignedActionIds });

@@ -24,6 +24,11 @@ public class TenantActionsController(ITenantContext tenantCtx, AgentFlowDbContex
     /// <summary>
     /// Lista las acciones activas visibles para este tenant — las asignadas por el
     /// super admin (Tenant.AssignedActionIds), con su estado de configuración webhook.
+    ///
+    /// AISLAMIENTO por tenant: cuando una acción asignada es global y existe un clon
+    /// tenant-specific con el mismo Name, devolvemos el contract/triggerConfig del
+    /// CLON (no del global). Así el tenant ve y edita SU contrato, sin afectar a
+    /// otros tenants que tengan la misma acción asignada.
     /// </summary>
     [HttpGet]
     public async Task<IActionResult> GetAll(CancellationToken ct)
@@ -39,10 +44,30 @@ public class TenantActionsController(ITenantContext tenantCtx, AgentFlowDbContex
         if (assignedIds.Count == 0)
             return Ok(Array.Empty<object>());
 
-        var actions = await db.ActionDefinitions
+        // Cargar las acciones asignadas (pueden ser globales o tenant-specific del tenant).
+        var assignedActions = await db.ActionDefinitions
             .Where(a => a.IsActive && assignedIds.Contains(a.Id))
             .OrderBy(a => a.Name)
-            .Select(a => new
+            .ToListAsync(ct);
+        if (assignedActions.Count == 0)
+            return Ok(Array.Empty<object>());
+
+        // Cargar TODOS los clones tenant-specific del tenant con los Names asignados
+        // en UN solo round-trip. Usamos esto para sobreescribir contract/triggerConfig
+        // cuando la fila asignada es global y existe un clon.
+        var assignedNames = assignedActions.Select(a => a.Name).Distinct().ToList();
+        var clonesByName = await db.ActionDefinitions
+            .Where(a => a.TenantId == tenantId && a.IsActive && assignedNames.Contains(a.Name))
+            .ToDictionaryAsync(a => a.Name, ct);
+
+        var result = assignedActions.Select(a =>
+        {
+            // Si la asignada es global y existe clon tenant-specific con mismo Name,
+            // tomamos contract/triggerConfig del clon (el resolver runtime también lo prefiere).
+            var effective = (a.TenantId is null && clonesByName.TryGetValue(a.Name, out var clone))
+                ? clone
+                : a;
+            return new
             {
                 a.Id,
                 a.Name,
@@ -51,65 +76,31 @@ public class TenantActionsController(ITenantContext tenantCtx, AgentFlowDbContex
                 a.SendsEmail,
                 a.SendsSms,
                 a.IsDelinquencyDownload,
-                a.DefaultWebhookContract,
-                a.DefaultTriggerConfig,
-                HasWebhookContract = a.DefaultWebhookContract != null
-            })
-            .ToListAsync(ct);
+                DefaultWebhookContract = effective.DefaultWebhookContract,
+                DefaultTriggerConfig   = effective.DefaultTriggerConfig,
+                HasWebhookContract     = effective.DefaultWebhookContract != null,
+            };
+        });
 
-        return Ok(actions);
+        return Ok(result);
     }
 
     /// <summary>
-    /// Actualiza el DefaultWebhookContract de una acción visible para el tenant.
-    /// Solo se permite si la acción está asignada al tenant (Tenant.AssignedActionIds).
-    /// NOTA: como las acciones son globales, el contract se comparte entre tenants que
-    /// tengan la misma acción asignada. El override per-maestro se hace en CampaignTemplate.ActionConfigs.
+    /// DESHABILITADO (mayo-2026): el contrato del webhook lo gestiona EXCLUSIVAMENTE
+    /// el super admin desde "/api/admin/tenants/{id}/actions/{actionId}/webhook-contract".
+    /// El tenant solo puede CONSULTAR el contrato desde el panel del cliente, no
+    /// modificarlo. Si tu UI todavía consume este endpoint, actualizá a llamar al
+    /// admin endpoint o quitá la opción del frontend del tenant.
     /// </summary>
     [HttpPut("{id:guid}/webhook-contract")]
-    public async Task<IActionResult> UpdateWebhookContract(
-        Guid id, [FromBody] UpdateWebhookContractRequest req, CancellationToken ct)
+    public IActionResult UpdateWebhookContract(Guid id, [FromBody] UpdateWebhookContractRequest req)
     {
-        var tenantId = tenantCtx.TenantId;
-
-        var tenant = await db.Tenants
-            .Where(t => t.Id == tenantId)
-            .Select(t => new { t.AssignedActionIds })
-            .FirstOrDefaultAsync(ct);
-
-        var assignedIds = tenant?.AssignedActionIds ?? [];
-        if (!assignedIds.Contains(id))
-            return NotFound(new { error = "Acción no asignada a este tenant." });
-
-        var action = await db.ActionDefinitions.FirstOrDefaultAsync(a => a.Id == id, ct);
-        if (action is null)
-            return NotFound(new { error = "Acción no encontrada." });
-
-        action.DefaultWebhookContract = req.Contract;
-
-        // Si el contract tiene triggerConfig, sincronizar DefaultTriggerConfig para retrocompat
-        if (!string.IsNullOrWhiteSpace(req.Contract))
+        _ = id; _ = req;
+        return StatusCode(403, new
         {
-            try
-            {
-                using var doc = System.Text.Json.JsonDocument.Parse(req.Contract);
-                if (doc.RootElement.TryGetProperty("triggerConfig", out var tc)
-                    && tc.ValueKind == System.Text.Json.JsonValueKind.Object)
-                {
-                    action.DefaultTriggerConfig = tc.GetRawText();
-                }
-            }
-            catch { /* si el JSON es inválido, no sincronizar */ }
-        }
-        else
-        {
-            action.DefaultWebhookContract = null;
-        }
-
-        action.UpdatedAt = DateTime.UtcNow;
-        await db.SaveChangesAsync(ct);
-
-        return Ok(new { action.Id, action.DefaultWebhookContract, action.DefaultTriggerConfig });
+            error = "El contrato del webhook lo configura el administrador. " +
+                    "Solicítale al super admin que lo edite desde el panel de cliente."
+        });
     }
 
     public record UpdateWebhookContractRequest(string? Contract);
