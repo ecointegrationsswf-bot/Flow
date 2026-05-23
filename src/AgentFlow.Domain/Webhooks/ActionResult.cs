@@ -2,8 +2,11 @@ namespace AgentFlow.Domain.Webhooks;
 
 /// <summary>
 /// Resultado de ejecutar una acción con webhook.
+///
+/// Es un record class para permitir `result with { RawResponseJson = ... }`
+/// desde el orquestador, sin romper el patrón de fábricas estáticas.
 /// </summary>
-public class ActionResult
+public record ActionResult
 {
     public bool Success { get; init; }
 
@@ -17,6 +20,14 @@ public class ActionResult
     public string? ErrorMessage { get; init; }
 
     public int HttpStatusCode { get; init; }
+
+    /// <summary>
+    /// JSON crudo de la respuesta HTTP (body sin parsear). Lo usa el motor
+    /// de auto-encadenamiento (ChainRule) para evaluar condiciones sobre el
+    /// response sin tener que pasar por el OutputSchema parseado.
+    /// Null cuando no hay body o cuando el call fue NoOp.
+    /// </summary>
+    public string? RawResponseJson { get; init; }
 
     /// <summary>Resultado neutro — no se ejecutó nada (sin schema configurado o acción deshabilitada).</summary>
     public static ActionResult NoOp() => new() { Success = true };

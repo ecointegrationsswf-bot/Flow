@@ -316,6 +316,9 @@ builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IOutputInterpreter,
 builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ActionConfigReader>();
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionExecutorService,
     AgentFlow.Infrastructure.Webhooks.ActionExecutorService>();
+// Auto-encadenamiento server-side de acciones (Paso 5 del Webhook Builder).
+builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionChainResolver,
+    AgentFlow.Infrastructure.Webhooks.ActionChainResolver>();
 // Action Trigger Protocol — Fase 0 (NoOp). En Fase 2 se reemplaza la implementación.
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionPromptBuilder,
     AgentFlow.Infrastructure.Webhooks.ActionPromptBuilder>();

@@ -124,12 +124,28 @@ public class ActionConfigReader(ILogger<ActionConfigReader> logger)
                 }
             }
 
+            // ChainRules opcionales — auto-encadenamiento server-side (Paso 5 del wizard).
+            List<ChainRule>? chainRules = null;
+            if (actionEl.TryGetProperty("chainRules", out var chainEl) && chainEl.ValueKind == JsonValueKind.Array)
+            {
+                try
+                {
+                    chainRules = JsonSerializer.Deserialize<List<ChainRule>>(chainEl.GetRawText(), JsonOpts);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning("[ActionConfigReader] chainRules inválido para action {ActionId}: {Message}",
+                        actionId, ex.Message);
+                }
+            }
+
             return new ActionConfigBundle
             {
                 EndpointConfig = endpointConfig,
                 InputSchema = inputSchema,
                 OutputSchema = outputSchema,
-                TriggerConfig = triggerConfig
+                TriggerConfig = triggerConfig,
+                ChainRules = chainRules
             };
         }
         catch (Exception ex)
@@ -172,6 +188,14 @@ public class ActionConfigBundle
     /// las keys manualmente al JSON ActionConfigs.
     /// </summary>
     public TriggerConfig? TriggerConfig { get; init; }
+
+    /// <summary>
+    /// Reglas de auto-encadenamiento (Paso 5 del Webhook Builder). Si después de
+    /// ejecutar la acción la primera regla matchea contra el JSON response,
+    /// el orquestador dispara inmediatamente la acción referenciada sin pasar
+    /// por el LLM. Null/empty = sin encadenamiento.
+    /// </summary>
+    public List<ChainRule>? ChainRules { get; init; }
 }
 
 /// <summary>
@@ -193,4 +217,6 @@ public class ActionConfigBundleJson
     public InputSchema? InputSchema { get; init; }
     public OutputSchema? OutputSchema { get; init; }
     public TriggerConfig? TriggerConfig { get; init; }
+    /// <summary>Reglas de auto-encadenamiento (Paso 5 del Webhook Builder).</summary>
+    public List<ChainRule>? ChainRules { get; init; }
 }

@@ -145,7 +145,8 @@ public class ActionExecutorService(
                         },
                         InputSchema = defaultBundle.InputSchema,
                         OutputSchema = defaultBundle.OutputSchema,
-                        TriggerConfig = defaultBundle.TriggerConfig
+                        TriggerConfig = defaultBundle.TriggerConfig,
+                        ChainRules = defaultBundle.ChainRules
                     };
                     logger.LogDebug("[ActionExecutor] Usando DefaultWebhookContract para {Action}", actionSlug);
                 }
@@ -243,7 +244,10 @@ public class ActionExecutorService(
         if (bundle.OutputSchema is null || bundle.OutputSchema.Fields.Count == 0)
         {
             logger.LogDebug("[ActionExecutor] Sin OutputSchema, respuesta ignorada");
-            return ActionResult.Ok(httpStatus: httpResult.StatusCode);
+            // Devolvemos RawResponseJson aunque no haya schema — lo necesita el
+            // motor de ChainRule (auto-encadenamiento server-side) para evaluar
+            // condiciones sobre la respuesta sin depender del OutputSchema.
+            return ActionResult.Ok(httpStatus: httpResult.StatusCode) with { RawResponseJson = httpResult.Body };
         }
 
         var outputCtx = new OutputContext
@@ -255,7 +259,11 @@ public class ActionExecutorService(
             ActionName = actionSlug
         };
 
-        return await outputInterpreter.InterpretAsync(httpResult.Body, bundle.OutputSchema, outputCtx, ct);
+        var interpreted = await outputInterpreter.InterpretAsync(httpResult.Body, bundle.OutputSchema, outputCtx, ct);
+        // Adjuntar el body crudo al resultado interpretado para que el orquestador
+        // pueda evaluar ChainRules contra el JSON original (independiente del
+        // OutputSchema parseado, que puede ocultar campos como `status`).
+        return interpreted with { RawResponseJson = httpResult.Body };
     }
 
     // ── Circuit Breaker ──

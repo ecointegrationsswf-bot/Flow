@@ -93,6 +93,11 @@ export function TenantActionsConfigTab({ tenantId }: Props) {
         <WebhookBuilderModal
           initial={parseContract(wizardAction.defaultWebhookContract)}
           actionName={wizardAction.name}
+          // Slugs disponibles para encadenar = otras acciones webhook del mismo tenant.
+          // Excluimos la propia para evitar auto-referencias (anti-ciclo a nivel UX).
+          availableSlugs={actions
+            .filter((a) => a.requiresWebhook && a.id !== wizardAction.id)
+            .map((a) => a.name)}
           onClose={() => setWizardActionId(null)}
           onSave={handleSaveContract}
         />

@@ -1305,6 +1305,9 @@ export function CampaignTemplateFormPage() {
           <WebhookBuilderModal
             initial={initial}
             actionName={action?.name ?? ''}
+            availableSlugs={(availableActions ?? [])
+              .filter((a) => a.requiresWebhook && a.id !== webhookBuilderActionId)
+              .map((a) => a.name)}
             // El editor de maestro de campaña permite ver el contrato vigente de la acción
             // pero NO editarlo desde el lado del tenant. La edición del contrato se hace
             // exclusivamente desde "Editar Cliente → Webhooks" (panel del super admin).

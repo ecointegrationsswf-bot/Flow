@@ -73,6 +73,9 @@ export function TenantActionsPage() {
         <WebhookBuilderModal
           initial={parseContract(wizardAction.defaultWebhookContract)}
           actionName={wizardAction.name}
+          availableSlugs={actions
+            .filter((a) => a.requiresWebhook && a.id !== wizardAction.id)
+            .map((a) => a.name)}
           onClose={() => setWizardActionId(null)}
           onSave={() => setWizardActionId(null) /* no-op en readOnly */}
           readOnly

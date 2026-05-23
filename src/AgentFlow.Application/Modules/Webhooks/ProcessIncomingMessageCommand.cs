@@ -59,6 +59,7 @@ public class ProcessIncomingMessageHandler(
     IAgentRegistry agentRegistry,
     ICampaignRepository campaignRepo,
     AgentFlow.Domain.Webhooks.IActionExecutorService actionExecutor,
+    AgentFlow.Domain.Webhooks.IActionChainResolver actionChainResolver,
     AgentFlow.Domain.Webhooks.IActionPromptBuilder actionPromptBuilder,
     IDocumentReferencePromptBuilder documentReferencePromptBuilder,
     IWebhookEventDispatcher eventDispatcher,
@@ -815,32 +816,67 @@ public class ProcessIncomingMessageHandler(
 
                         if (shouldExecute)
                         {
-                            try
+                            // ── Loop de auto-encadenamiento (ChainRules, Paso 5 del wizard) ──
+                            // Ejecuta la acción A, evalúa sus chainRules contra el response,
+                            // si matchea encadena la acción B (mismos tenant params, sin LLM en medio).
+                            // Guards: max depth=3, sin repetir slugs (anti-ciclo).
+                            //
+                            // El LLM solo redacta UNA vez al cliente, con el LastActionResult
+                            // del ÚLTIMO eslabón del chain. Las acciones intermedias quedan
+                            // en WebhookDispatchLogs + GestionEvent para auditoría.
+                            const int MaxChainDepth = 3;
+                            var executedSlugs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                            var currentSlug = actionSlug;
+                            var currentParams = parsedParams;
+                            // chainOverrides contiene los campos del JSON response del eslabón anterior,
+                            // aplanados como "lastActionResult.<key>". El PayloadBuilder los leerá cuando
+                            // un InputField declare sourceType=lastActionResult. Para el PRIMER eslabón
+                            // queda vacío (no hay acción previa en el mismo turno).
+                            IReadOnlyDictionary<string, string?>? chainOverrides = null;
+                            var depth = 0;
+
+                            while (!string.IsNullOrEmpty(currentSlug) && depth < MaxChainDepth)
                             {
-                                var collectedParams = new AgentFlow.Domain.Webhooks.CollectedParams
+                                if (!executedSlugs.Add(currentSlug))
                                 {
-                                    Values = parsedParams
-                                };
+                                    logger.LogWarning("[ATP-Chain] Ciclo detectado: {Slug} ya se ejecutó en este turno. Cortando chain.", currentSlug);
+                                    break;
+                                }
 
-                                var actionResult = await actionExecutor.ExecuteAsync(
-                                    actionSlug: actionSlug,
-                                    tenantId: cmd.TenantId,
-                                    campaignTemplateId: brainCampaignTemplateId
-                                        ?? (campaignTemplate?.Id),
-                                    contactPhone: cmd.FromPhone,
-                                    conversationId: conversation.Id,
-                                    collectedParams: collectedParams,
-                                    agentSlug: agent.Name,
-                                    ct: ct);
+                                AgentFlow.Domain.Webhooks.ActionResult actionResult;
+                                try
+                                {
+                                    var collectedParams = new AgentFlow.Domain.Webhooks.CollectedParams
+                                    {
+                                        Values = currentParams
+                                    };
 
-                                // Si la acción devolvió datos para el agente, apendicarlos al replyText
+                                    actionResult = await actionExecutor.ExecuteAsync(
+                                        actionSlug: currentSlug,
+                                        tenantId: cmd.TenantId,
+                                        campaignTemplateId: brainCampaignTemplateId
+                                            ?? (campaignTemplate?.Id),
+                                        contactPhone: cmd.FromPhone,
+                                        conversationId: conversation.Id,
+                                        collectedParams: collectedParams,
+                                        agentSlug: agent.Name,
+                                        systemContextOverrides: chainOverrides,
+                                        ct: ct);
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogError(ex, "[ATP] Error ejecutando acción {ActionSlug} (depth={Depth})", currentSlug, depth);
+                                    break;
+                                }
+
+                                // Mensajes para el cliente: solo apendear DataForAgent/ErrorMessage del
+                                // ÚLTIMO eslabón (las acciones intermedias son transparentes).
                                 if (actionResult.Success && !string.IsNullOrEmpty(actionResult.DataForAgent))
                                 {
                                     replyText = string.IsNullOrEmpty(replyText)
                                         ? actionResult.DataForAgent
                                         : $"{replyText}\n\n{actionResult.DataForAgent}";
                                 }
-                                // Si falló con mensaje controlado, usarlo como respuesta
                                 else if (!actionResult.Success && !string.IsNullOrEmpty(actionResult.ErrorMessage))
                                 {
                                     replyText = string.IsNullOrEmpty(replyText)
@@ -848,25 +884,23 @@ public class ProcessIncomingMessageHandler(
                                         : $"{replyText}\n\n{actionResult.ErrorMessage}";
                                 }
 
-                                // Si la acción pidió escalar, forzar ShouldEscalate en la respuesta
                                 if (actionResult.ShouldEscalate)
                                 {
                                     agentResponse = agentResponse with { ShouldEscalate = true };
                                 }
 
-                                // Action Trigger Protocol Fase 4: si la acción se ejecutó con éxito,
-                                // persistir el resultado en Redis para que esté disponible en el
-                                // siguiente turno (Flujo D) y auditar la ejecución con GestionEvent.
                                 if (actionResult.Success)
                                 {
+                                    // LastActionResult SIEMPRE refleja el último eslabón ejecutado:
+                                    // si la chain encadenó B después de A, el LLM ve el resultado de B.
                                     lastActionForPersist = new AgentFlow.Domain.Webhooks.LastActionResult(
-                                        Slug: actionSlug,
+                                        Slug: currentSlug,
                                         DataForAgent: actionResult.DataForAgent,
                                         ExecutedAt: DateTime.UtcNow);
 
                                     try
                                     {
-                                        var notes = actionResult.DataForAgent ?? $"Acción {actionSlug} ejecutada.";
+                                        var notes = actionResult.DataForAgent ?? $"Acción {currentSlug} ejecutada.";
                                         if (notes.Length > 400) notes = notes[..400];
 
                                         await conversations.AddGestionEventAsync(new AgentFlow.Domain.Entities.GestionEvent
@@ -874,20 +908,59 @@ public class ProcessIncomingMessageHandler(
                                             Id = Guid.NewGuid(),
                                             ConversationId = conversation.Id,
                                             Result = AgentFlow.Domain.Enums.GestionResult.Pending,
-                                            Origin = $"agent:action:{actionSlug.ToLowerInvariant()}",
+                                            Origin = $"agent:action:{currentSlug.ToLowerInvariant()}",
                                             Notes = notes,
                                             OccurredAt = DateTime.UtcNow
                                         }, ct);
                                     }
                                     catch (Exception ex)
                                     {
-                                        logger.LogWarning(ex, "[ATP] No se pudo registrar GestionEvent para {ActionSlug}", actionSlug);
+                                        logger.LogWarning(ex, "[ATP] No se pudo registrar GestionEvent para {ActionSlug}", currentSlug);
                                     }
                                 }
+                                else
+                                {
+                                    // Si falló, NO encadenamos (el chain solo continúa tras success).
+                                    break;
+                                }
+
+                                // ── Resolver siguiente acción del chain ──
+                                // Lee chainRules del contract de currentSlug y evalúa contra el JSON crudo
+                                // del response. Si matchea, devuelve el slug de la siguiente acción.
+                                string? nextSlug = null;
+                                try
+                                {
+                                    nextSlug = await actionChainResolver.GetNextActionAsync(
+                                        executedSlug: currentSlug,
+                                        tenantId: cmd.TenantId,
+                                        rawResponseJson: actionResult.RawResponseJson,
+                                        ct: ct);
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogWarning(ex, "[ATP-Chain] Error resolviendo siguiente acción tras {Slug}", currentSlug);
+                                }
+
+                                if (string.IsNullOrEmpty(nextSlug))
+                                    break;
+
+                                // Aplanar el JSON response del eslabón actual a un Dictionary<string,string?>
+                                // con keys "lastActionResult.<campo>" para que el PayloadBuilder del siguiente
+                                // eslabón lo pueda leer (sourceType=lastActionResult).
+                                chainOverrides = FlattenJsonForChain(actionResult.RawResponseJson);
+
+                                // La acción encadenada toma sus inputs del lastActionResult del eslabón
+                                // anterior (sourceType=lastActionResult en su InputSchema). No heredamos
+                                // [PARAM:...] del LLM — solo aplican al primer eslabón.
+                                currentSlug = nextSlug;
+                                currentParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                                depth++;
                             }
-                            catch (Exception ex)
+
+                            if (depth >= MaxChainDepth)
                             {
-                                logger.LogError(ex, "[ATP] Error ejecutando acción {ActionSlug}", actionSlug);
+                                logger.LogWarning("[ATP-Chain] Límite de profundidad {Max} alcanzado. Slugs ejecutados: [{Chain}]",
+                                    MaxChainDepth, string.Join(" → ", executedSlugs));
                             }
                         }
                     }
@@ -943,6 +1016,19 @@ public class ProcessIncomingMessageHandler(
                         ct: ct);
                 }
 
+                // ── Salvavidas del historial Anthropic ──
+                // Si el LLM emitió solo [ACTION:...] sin texto y la(s) acción(es) del chain
+                // no produjeron DataForAgent visible, replyText queda en string.Empty tras
+                // limpiar los tags. Persistir Content="" rompe el siguiente turno (Anthropic
+                // rechaza "messages: text content blocks must be non-empty"). Marcamos
+                // este turno como "técnico": persistimos en BD un placeholder para mantener
+                // el historial válido, pero NO se notifica al monitor ni se envía por WhatsApp.
+                var hasVisibleReply = !string.IsNullOrWhiteSpace(replyText);
+                if (!hasVisibleReply)
+                {
+                    replyText = "[turno técnico — acción ejecutada sin texto al cliente]";
+                }
+
                 // Persistir respuesta
                 var outbound = new Message
                 {
@@ -962,32 +1048,43 @@ public class ProcessIncomingMessageHandler(
                 conversation.LastActivityAt = DateTime.UtcNow;
                 await conversations.SaveChangesAsync(ct);
 
-                try
+                // Solo notificar al monitor / enviar por WhatsApp si HUBO texto visible.
+                // Cuando hasVisibleReply=false el outbound persistido es el placeholder
+                // "[turno técnico ...]" — útil para mantener el historial Anthropic válido
+                // pero NO debe llegarle al cliente ni al ejecutivo en el monitor.
+                if (hasVisibleReply)
                 {
-                    await notifier.NotifyMessageAsync(cmd.TenantId.ToString(), new
+                    try
                     {
-                        Type = "outbound", ConversationId = conversation.Id,
-                        Body = replyText, AgentName = agent.AvatarName ?? agent.Name,
-                        Intent = agentResponse.DetectedIntent, Timestamp = DateTime.UtcNow
-                    });
-                }
-                catch { }
+                        await notifier.NotifyMessageAsync(cmd.TenantId.ToString(), new
+                        {
+                            Type = "outbound", ConversationId = conversation.Id,
+                            Body = replyText, AgentName = agent.AvatarName ?? agent.Name,
+                            Intent = agentResponse.DetectedIntent, Timestamp = DateTime.UtcNow
+                        });
+                    }
+                    catch { }
 
-                // Enviar por WhatsApp
-                try
-                {
-                    var provider = await channelFactory.GetProviderAsync(cmd.TenantId, ct);
-                    if (provider is not null)
+                    // Enviar por WhatsApp
+                    try
                     {
-                        var sendResult = await provider.SendMessageAsync(
-                            new SendMessageRequest(cmd.FromPhone, replyText), ct);
-                        outbound.ExternalMessageId = sendResult.ExternalMessageId;
-                        outbound.Status = sendResult.Success ? MessageStatus.Sent : MessageStatus.Failed;
+                        var provider = await channelFactory.GetProviderAsync(cmd.TenantId, ct);
+                        if (provider is not null)
+                        {
+                            var sendResult = await provider.SendMessageAsync(
+                                new SendMessageRequest(cmd.FromPhone, replyText), ct);
+                            outbound.ExternalMessageId = sendResult.ExternalMessageId;
+                            outbound.Status = sendResult.Success ? MessageStatus.Sent : MessageStatus.Failed;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[WhatsApp] Error enviando respuesta: {ex.Message}");
                     }
                 }
-                catch (Exception ex)
+                else
                 {
-                    Console.WriteLine($"[WhatsApp] Error enviando respuesta: {ex.Message}");
+                    logger.LogInformation("[Chain] Turno técnico para conv {ConvId}: acciones ejecutadas sin texto visible al cliente.", conversation.Id);
                 }
 
                 // Escalado — solo si NO es controlado por el Cerebro (evitar doble escalado)
@@ -1125,5 +1222,47 @@ public class ProcessIncomingMessageHandler(
         var noAction = ActionTagRegex.Replace(text, "");
         var noParams = ParamTagRegex.Replace(noAction, "");
         return noParams.Trim();
+    }
+
+    /// <summary>
+    /// Aplana un JSON crudo (response de la acción anterior del chain) a un diccionario
+    /// con keys "lastActionResult.&lt;campo&gt;". Solo procesa el primer nivel del objeto raíz
+    /// (no anida); valores complejos se serializan a string. Devuelve null si el input
+    /// no es un JSON object válido — el orquestador trata null como "sin overrides".
+    ///
+    /// Estos overrides los aplica el ActionExecutorService al SystemContext, permitiendo
+    /// que InputSchema fields con sourceType=lastActionResult.sourceKey resuelvan al valor
+    /// real del eslabón anterior (ej: SEND_2FA_CODE_EMAIL leyendo "correoDestino" de la
+    /// respuesta de INSURED_INITIATE).
+    /// </summary>
+    private static IReadOnlyDictionary<string, string?>? FlattenJsonForChain(string? rawJson)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson)) return null;
+
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(rawJson);
+            if (doc.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+
+            var flat = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in doc.RootElement.EnumerateObject())
+            {
+                var value = prop.Value.ValueKind switch
+                {
+                    System.Text.Json.JsonValueKind.String => prop.Value.GetString(),
+                    System.Text.Json.JsonValueKind.Null => null,
+                    System.Text.Json.JsonValueKind.Undefined => null,
+                    System.Text.Json.JsonValueKind.True => "true",
+                    System.Text.Json.JsonValueKind.False => "false",
+                    _ => prop.Value.ToString()
+                };
+                flat[$"lastActionResult.{prop.Name}"] = value;
+            }
+            return flat.Count > 0 ? flat : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 }

@@ -5,13 +5,16 @@ import { Step1Connection } from './Step1Connection'
 import { Step2TestEndpoint } from './Step2TestEndpoint'
 import { Step3InputSchema } from './Step3InputSchema'
 import { Step4OutputSchema } from './Step4OutputSchema'
-import type { WebhookContractBundle, DetectedFieldDto, InputSchema, OutputSchema } from '../types'
+import { Step5Chaining } from './Step5Chaining'
+import type { WebhookContractBundle, DetectedFieldDto, InputSchema, OutputSchema, ChainRule } from '../types'
 
 interface Props {
   /** Bundle inicial (si ya existe config) */
   initial?: Partial<WebhookContractBundle>
   /** Nombre de la acción para mostrar en el header */
   actionName: string
+  /** Lista de slugs de OTRAS acciones del tenant con contract — para el dropdown del Paso 5. */
+  availableSlugs?: string[]
   /** Callback al guardar — recibe el bundle completo. No se invoca cuando readOnly=true. */
   onSave: (bundle: WebhookContractBundle) => void
   /** Callback al cerrar sin guardar */
@@ -38,7 +41,7 @@ const DEFAULT_BUNDLE: WebhookContractBundle = {
   outputSchema: undefined,
 }
 
-export function WebhookBuilderModal({ initial, actionName, onSave, onClose, readOnly = false }: Props) {
+export function WebhookBuilderModal({ initial, actionName, availableSlugs = [], onSave, onClose, readOnly = false }: Props) {
   // Action Trigger Protocol (Fase 5): el wizard arranca en el Paso 0 (Trigger),
   // opcional pero recomendado antes de la Conexión.
   const [step, setStep] = useState(0)
@@ -54,7 +57,9 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose, read
     { num: 2, label: 'Prueba' },
     { num: 3, label: 'Input Schema' },
     { num: 4, label: 'Output Schema' },
+    { num: 5, label: 'Encadenamiento' },
   ]
+  const lastStep = 5
 
   const canContinue = () => {
     // Paso 0 es opcional — siempre se puede avanzar. Si hay requiresConfirmation
@@ -71,6 +76,10 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose, read
 
   const handleOutputSchemaChange = (outputSchema: OutputSchema) => {
     setBundle({ ...bundle, outputSchema })
+  }
+
+  const handleChainRulesChange = (chainRules: ChainRule[]) => {
+    setBundle({ ...bundle, chainRules })
   }
 
   const handleSave = () => {
@@ -152,6 +161,14 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose, read
               readOnly={readOnly}
             />
           )}
+          {step === 5 && (
+            <Step5Chaining
+              bundle={bundle}
+              availableSlugs={availableSlugs}
+              onChange={handleChainRulesChange}
+              readOnly={readOnly}
+            />
+          )}
         </div>
 
         {/* Footer */}
@@ -166,9 +183,9 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose, read
           </button>
 
           <div className="flex items-center gap-2">
-            {step < 4 ? (
+            {step < lastStep ? (
               <button
-                onClick={() => setStep((s) => Math.min(4, s + 1))}
+                onClick={() => setStep((s) => Math.min(lastStep, s + 1))}
                 disabled={!canContinue()}
                 className="flex items-center gap-1 rounded-lg bg-blue-600 px-4 py-1.5 text-xs font-medium text-white hover:bg-blue-700 disabled:opacity-50"
               >

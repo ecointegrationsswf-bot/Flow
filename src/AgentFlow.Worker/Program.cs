@@ -126,6 +126,8 @@ builder.Services.AddScoped<IOutputInterpreter,
 builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ActionConfigReader>();
 builder.Services.AddScoped<IActionExecutorService,
     AgentFlow.Infrastructure.Webhooks.ActionExecutorService>();
+builder.Services.AddScoped<IActionChainResolver,
+    AgentFlow.Infrastructure.Webhooks.ActionChainResolver>();
 builder.Services.AddScoped<IActionPromptBuilder,
     AgentFlow.Infrastructure.Webhooks.ActionPromptBuilder>();
 

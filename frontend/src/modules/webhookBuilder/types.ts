@@ -75,6 +75,28 @@ export interface TriggerConfig {
 }
 
 /**
+ * Auto-encadenamiento server-side. Si después de ejecutar esta acción la
+ * primera regla matchea contra el JSON response, el orquestador dispara
+ * inmediatamente la acción referenciada sin pasar por el LLM.
+ *
+ * MVP: operador `equals` case-insensitive. Path con dot-notation sobre el JSON.
+ * `then.actionSlug` debe ser una acción asignada al mismo tenant.
+ * `then: null` = rama terminal documentada (no encadena nada).
+ */
+export interface ChainCondition {
+  path: string
+  operator: 'equals'
+  value?: string
+}
+export interface ChainTarget {
+  actionSlug: string
+}
+export interface ChainRule {
+  when: ChainCondition
+  then?: ChainTarget | null
+}
+
+/**
  * Bundle completo de configuración de una acción.
  * Se guarda dentro del JSON CampaignTemplates.ActionConfigs[actionId].
  * Coexiste con los campos legacy (webhookUrl, webhookMethod, etc.) que
@@ -87,6 +109,8 @@ export interface WebhookContractBundle extends WebhookEndpointConfig {
   outputSchema?: OutputSchema
   /** Action Trigger Protocol (Fase 5) — opcional, define cuándo el agente puede disparar la acción. */
   triggerConfig?: TriggerConfig
+  /** Reglas de auto-encadenamiento (Paso 5 del wizard). */
+  chainRules?: ChainRule[]
 }
 
 // ── Test endpoint ──

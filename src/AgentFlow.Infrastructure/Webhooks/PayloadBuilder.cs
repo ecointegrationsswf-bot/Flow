@@ -64,6 +64,16 @@ public class PayloadBuilder : IPayloadBuilder
                     : $"result.{field.SourceKey}")
                 : null,
 
+            // lastActionResult — datos del JSON response del eslabón anterior del chain.
+            // El handler (ProcessIncomingMessageCommand) aplana ese JSON en SystemContext
+            // con prefijo "lastActionResult." antes de ejecutar la acción encadenada.
+            // El usuario tipea el nombre corto (ej: "correoDestino") y aquí prefijamos.
+            "lastactionresult" => !string.IsNullOrEmpty(field.SourceKey)
+                ? systemContext.Get(field.SourceKey.StartsWith("lastActionResult.")
+                    ? field.SourceKey
+                    : $"lastActionResult.{field.SourceKey}")
+                : null,
+
             // Para conversation: intentar sourceKey primero, luego fieldPath como fallback.
             // El agent emite [PARAM:fieldPath=valor], pero el schema puede tener un sourceKey diferente.
             "conversation" => !string.IsNullOrEmpty(field.SourceKey)
