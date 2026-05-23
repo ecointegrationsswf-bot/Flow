@@ -143,12 +143,13 @@ export function WebhookBuilderModal({ initial, actionName, onSave, onClose, read
           {step === 0 && <Step0TriggerConfig bundle={bundle} onChange={setBundle} actionName={actionName} />}
           {step === 1 && <Step1Connection bundle={bundle} onChange={setBundle} />}
           {step === 2 && <Step2TestEndpoint bundle={bundle} onDetectedFields={setDetectedFields} />}
-          {step === 3 && <Step3InputSchema bundle={bundle} onChange={handleInputSchemaChange} />}
+          {step === 3 && <Step3InputSchema bundle={bundle} onChange={handleInputSchemaChange} readOnly={readOnly} />}
           {step === 4 && (
             <Step4OutputSchema
               bundle={bundle}
               detectedFields={detectedFields}
               onChange={handleOutputSchemaChange}
+              readOnly={readOnly}
             />
           )}
         </div>

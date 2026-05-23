@@ -5,6 +5,12 @@ interface Props {
   bundle: WebhookContractBundle
   detectedFields: DetectedFieldDto[]
   onChange: (outputSchema: OutputSchema) => void
+  /**
+   * Modo solo-consulta — oculta los botones "Eliminar" de cada campo,
+   * "Agregar campo" y "Pre-llenar con campos detectados". El tenant no puede
+   * modificar el schema; solo consultarlo.
+   */
+  readOnly?: boolean
 }
 
 const DEFAULT_FIELD: OutputField = {
@@ -15,7 +21,7 @@ const DEFAULT_FIELD: OutputField = {
   required: true,
 }
 
-export function Step4OutputSchema({ bundle, detectedFields, onChange }: Props) {
+export function Step4OutputSchema({ bundle, detectedFields, onChange, readOnly = false }: Props) {
   const schema = bundle.outputSchema ?? { fields: [] }
 
   const updateFields = (fields: OutputField[]) => {
@@ -56,7 +62,7 @@ export function Step4OutputSchema({ bundle, detectedFields, onChange }: Props) {
         </p>
       </div>
 
-      {detectedFields.length > 0 && schema.fields.length === 0 && (
+      {!readOnly && detectedFields.length > 0 && schema.fields.length === 0 && (
         <button
           type="button"
           onClick={prefillFromDetected}
@@ -83,13 +89,15 @@ export function Step4OutputSchema({ bundle, detectedFields, onChange }: Props) {
                 placeholder="fieldPath (ej: link_pago)"
                 className="flex-1 rounded border border-gray-300 px-2 py-1.5 text-xs font-mono"
               />
-              <button
-                type="button"
-                onClick={() => removeField(idx)}
-                className="rounded p-1 text-red-500 hover:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={() => removeField(idx)}
+                  className="rounded p-1 text-red-500 hover:bg-red-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
             </div>
 
             <div>
@@ -168,14 +176,16 @@ export function Step4OutputSchema({ bundle, detectedFields, onChange }: Props) {
           </div>
         ))}
 
-        <button
-          type="button"
-          onClick={addField}
-          className="flex w-full items-center justify-center gap-1 rounded-lg border-2 border-dashed border-gray-300 py-2 text-xs font-medium text-gray-600 hover:border-blue-400 hover:text-blue-600"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Agregar campo
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={addField}
+            className="flex w-full items-center justify-center gap-1 rounded-lg border-2 border-dashed border-gray-300 py-2 text-xs font-medium text-gray-600 hover:border-blue-400 hover:text-blue-600"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Agregar campo
+          </button>
+        )}
       </div>
     </div>
   )

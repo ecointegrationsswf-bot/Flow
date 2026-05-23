@@ -5,6 +5,11 @@ import { SYSTEM_SOURCE_KEYS } from '../types'
 interface Props {
   bundle: WebhookContractBundle
   onChange: (inputSchema: InputSchema) => void
+  /**
+   * Modo solo-consulta — oculta el botón "Eliminar" de cada campo y el botón
+   * "Agregar campo". El tenant no puede modificar el schema; solo consultarlo.
+   */
+  readOnly?: boolean
 }
 
 const DEFAULT_FIELD: InputField = {
@@ -15,7 +20,7 @@ const DEFAULT_FIELD: InputField = {
   required: true,
 }
 
-export function Step3InputSchema({ bundle, onChange }: Props) {
+export function Step3InputSchema({ bundle, onChange, readOnly = false }: Props) {
   const schema = bundle.inputSchema ?? {
     contentType: bundle.contentType,
     httpMethod: bundle.webhookMethod,
@@ -67,13 +72,15 @@ export function Step3InputSchema({ bundle, onChange }: Props) {
                 placeholder="Nombre destino (ej: cliente.cedula)"
                 className="flex-1 rounded border border-gray-300 px-2 py-1.5 text-xs font-mono"
               />
-              <button
-                type="button"
-                onClick={() => removeField(idx)}
-                className="rounded p-1 text-red-500 hover:bg-red-50"
-              >
-                <Trash2 className="h-4 w-4" />
-              </button>
+              {!readOnly && (
+                <button
+                  type="button"
+                  onClick={() => removeField(idx)}
+                  className="rounded p-1 text-red-500 hover:bg-red-50"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
             </div>
 
             <div className="grid grid-cols-3 gap-2">
@@ -192,14 +199,16 @@ export function Step3InputSchema({ bundle, onChange }: Props) {
           </div>
         ))}
 
-        <button
-          type="button"
-          onClick={addField}
-          className="flex w-full items-center justify-center gap-1 rounded-lg border-2 border-dashed border-gray-300 py-2 text-xs font-medium text-gray-600 hover:border-blue-400 hover:text-blue-600"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Agregar campo
-        </button>
+        {!readOnly && (
+          <button
+            type="button"
+            onClick={addField}
+            className="flex w-full items-center justify-center gap-1 rounded-lg border-2 border-dashed border-gray-300 py-2 text-xs font-medium text-gray-600 hover:border-blue-400 hover:text-blue-600"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Agregar campo
+          </button>
+        )}
       </div>
     </div>
   )
