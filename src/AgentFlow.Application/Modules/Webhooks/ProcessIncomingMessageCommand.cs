@@ -831,8 +831,20 @@ public class ProcessIncomingMessageHandler(
                             // chainOverrides contiene los campos del JSON response del eslabón anterior,
                             // aplanados como "lastActionResult.<key>". El PayloadBuilder los leerá cuando
                             // un InputField declare sourceType=lastActionResult. Para el PRIMER eslabón
-                            // queda vacío (no hay acción previa en el mismo turno).
-                            IReadOnlyDictionary<string, string?>? chainOverrides = null;
+                            // sembramos con el RawResponseJson del LastActionResult del TURNO previo
+                            // (persistido en Redis): así una acción puede leer datos del turno anterior
+                            // sin que el LLM tenga que pasárselos vía [PARAM:...].
+                            IReadOnlyDictionary<string, string?>? chainOverrides =
+                                FlattenJsonForChain(lastActionForPrompt?.RawResponseJson);
+                            // Snapshot del RawResponseJson del PRIMER eslabón — lo que vamos a persistir
+                            // en Redis al final del turno. Las acciones encadenadas suelen ser "puente"
+                            // sin response útil; el dato relevante para el siguiente turno está en la
+                            // acción que el LLM invocó (la origen).
+                            string? firstChainRawResponse = null;
+                            // Acumulador del successMessage del último ChainTarget que matcheó (con
+                            // placeholders ya interpolados contra el response del eslabón ORIGEN).
+                            // Se apendica al replyText al cerrar el loop.
+                            string? chainSuccessMessage = null;
                             var depth = 0;
 
                             while (!string.IsNullOrEmpty(currentSlug) && depth < MaxChainDepth)
@@ -891,12 +903,23 @@ public class ProcessIncomingMessageHandler(
 
                                 if (actionResult.Success)
                                 {
-                                    // LastActionResult SIEMPRE refleja el último eslabón ejecutado:
-                                    // si la chain encadenó B después de A, el LLM ve el resultado de B.
+                                    // Snapshot del response del PRIMER eslabón (depth=0). Lo usaremos al
+                                    // final del turno como base del LastActionResult persistido en Redis,
+                                    // y para interpolar el successMessage de las ChainRules.
+                                    if (depth == 0)
+                                        firstChainRawResponse = actionResult.RawResponseJson;
+
+                                    // LastActionResult persistido refleja el PRIMER eslabón (la acción
+                                    // que el LLM invocó). Razón: las acciones encadenadas suelen ser
+                                    // "puente" con response vacío (ej: SEND_2FA_CODE_EMAIL); los datos
+                                    // útiles para el próximo turno viven en el response de la origen.
+                                    var persistSlug = depth == 0 ? currentSlug : (lastActionForPersist?.Slug ?? currentSlug);
+                                    var persistData = depth == 0 ? actionResult.DataForAgent : (lastActionForPersist?.DataForAgent);
                                     lastActionForPersist = new AgentFlow.Domain.Webhooks.LastActionResult(
-                                        Slug: currentSlug,
-                                        DataForAgent: actionResult.DataForAgent,
-                                        ExecutedAt: DateTime.UtcNow);
+                                        Slug: persistSlug,
+                                        DataForAgent: persistData,
+                                        ExecutedAt: DateTime.UtcNow,
+                                        RawResponseJson: firstChainRawResponse);
 
                                     try
                                     {
@@ -926,11 +949,11 @@ public class ProcessIncomingMessageHandler(
 
                                 // ── Resolver siguiente acción del chain ──
                                 // Lee chainRules del contract de currentSlug y evalúa contra el JSON crudo
-                                // del response. Si matchea, devuelve el slug de la siguiente acción.
-                                string? nextSlug = null;
+                                // del response. Si matchea, devuelve la decisión: slug + successMessage opcional.
+                                AgentFlow.Domain.Webhooks.ChainDecision? decision = null;
                                 try
                                 {
-                                    nextSlug = await actionChainResolver.GetNextActionAsync(
+                                    decision = await actionChainResolver.GetNextActionAsync(
                                         executedSlug: currentSlug,
                                         tenantId: cmd.TenantId,
                                         rawResponseJson: actionResult.RawResponseJson,
@@ -941,8 +964,18 @@ public class ProcessIncomingMessageHandler(
                                     logger.LogWarning(ex, "[ATP-Chain] Error resolviendo siguiente acción tras {Slug}", currentSlug);
                                 }
 
-                                if (string.IsNullOrEmpty(nextSlug))
+                                if (decision is null)
                                     break;
+
+                                // Interpolar successMessage contra el JSON del eslabón ORIGEN (el que tenía
+                                // la regla). Lo guardamos para apendar al cerrar el loop — así si el chain
+                                // tiene varios eslabones, gana el del último matching rule.
+                                if (!string.IsNullOrWhiteSpace(decision.SuccessMessageTemplate))
+                                {
+                                    chainSuccessMessage = InterpolateTemplate(
+                                        decision.SuccessMessageTemplate,
+                                        actionResult.RawResponseJson);
+                                }
 
                                 // Aplanar el JSON response del eslabón actual a un Dictionary<string,string?>
                                 // con keys "lastActionResult.<campo>" para que el PayloadBuilder del siguiente
@@ -952,7 +985,7 @@ public class ProcessIncomingMessageHandler(
                                 // La acción encadenada toma sus inputs del lastActionResult del eslabón
                                 // anterior (sourceType=lastActionResult en su InputSchema). No heredamos
                                 // [PARAM:...] del LLM — solo aplican al primer eslabón.
-                                currentSlug = nextSlug;
+                                currentSlug = decision.NextSlug;
                                 currentParams = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
                                 depth++;
                             }
@@ -961,6 +994,16 @@ public class ProcessIncomingMessageHandler(
                             {
                                 logger.LogWarning("[ATP-Chain] Límite de profundidad {Max} alcanzado. Slugs ejecutados: [{Chain}]",
                                     MaxChainDepth, string.Join(" → ", executedSlugs));
+                            }
+
+                            // Apendar el successMessage del chain (si hubo) al replyText. Así el
+                            // cliente recibe en el MISMO mensaje del agente la confirmación de que
+                            // se ejecutó la acción encadenada. Ej: "Te envié un código a j****@...".
+                            if (!string.IsNullOrWhiteSpace(chainSuccessMessage))
+                            {
+                                replyText = string.IsNullOrEmpty(replyText)
+                                    ? chainSuccessMessage
+                                    : $"{replyText}\n\n{chainSuccessMessage}";
                             }
                         }
                     }
@@ -1235,6 +1278,72 @@ public class ProcessIncomingMessageHandler(
     /// real del eslabón anterior (ej: SEND_2FA_CODE_EMAIL leyendo "correoDestino" de la
     /// respuesta de INSURED_INITIATE).
     /// </summary>
+    /// <summary>
+    /// Reemplaza placeholders `{path}` en un template por valores del JSON crudo.
+    /// El path soporta dot-notation simple (case-insensitive). Placeholders sin
+    /// match se sustituyen por string.Empty. Si rawJson es null/invalido devuelve
+    /// el template tal cual (sin interpolar).
+    ///
+    /// Ejemplo: "Te envié un código a {correoEnmascarado}" con
+    ///          rawJson={"correoEnmascarado":"j****@hotmail.com"}
+    ///          → "Te envié un código a j****@hotmail.com"
+    /// </summary>
+    private static string InterpolateTemplate(string template, string? rawJson)
+    {
+        if (string.IsNullOrEmpty(template)) return template;
+        if (string.IsNullOrWhiteSpace(rawJson)) return template;
+
+        System.Text.Json.JsonDocument doc;
+        try { doc = System.Text.Json.JsonDocument.Parse(rawJson); }
+        catch { return template; }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            return System.Text.RegularExpressions.Regex.Replace(template, @"\{([^{}]+)\}", m =>
+            {
+                var path = m.Groups[1].Value.Trim();
+                var value = ResolveJsonPath(root, path);
+                return value ?? string.Empty;
+            });
+        }
+    }
+
+    /// <summary>Resuelve un path dot-notation sobre un JsonElement (case-insensitive). Mismo helper
+    /// que ActionChainResolver — duplicado adrede para no agregar acoplamiento entre Application e
+    /// Infrastructure por algo trivial.</summary>
+    private static string? ResolveJsonPath(System.Text.Json.JsonElement root, string path)
+    {
+        var parts = path.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        var current = root;
+        foreach (var part in parts)
+        {
+            if (current.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+            System.Text.Json.JsonElement next = default;
+            bool found = false;
+            foreach (var prop in current.EnumerateObject())
+            {
+                if (prop.Name.Equals(part, StringComparison.OrdinalIgnoreCase))
+                {
+                    next = prop.Value;
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return null;
+            current = next;
+        }
+        return current.ValueKind switch
+        {
+            System.Text.Json.JsonValueKind.String => current.GetString(),
+            System.Text.Json.JsonValueKind.Null => null,
+            System.Text.Json.JsonValueKind.Undefined => null,
+            System.Text.Json.JsonValueKind.True => "true",
+            System.Text.Json.JsonValueKind.False => "false",
+            _ => current.ToString()
+        };
+    }
+
     private static IReadOnlyDictionary<string, string?>? FlattenJsonForChain(string? rawJson)
     {
         if (string.IsNullOrWhiteSpace(rawJson)) return null;

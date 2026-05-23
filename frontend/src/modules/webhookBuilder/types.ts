@@ -90,6 +90,13 @@ export interface ChainCondition {
 }
 export interface ChainTarget {
   actionSlug: string
+  /**
+   * Mensaje opcional que se apendica al replyText del agente cuando el chain
+   * ejecuta exitosamente. Soporta `{path}` con dot-notation case-insensitive
+   * sobre el JSON response del eslabón ORIGEN (la acción que disparó la regla).
+   * Ej: "Te envié un código al correo {correoEnmascarado}".
+   */
+  successMessage?: string
 }
 export interface ChainRule {
   when: ChainCondition

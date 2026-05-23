@@ -27,7 +27,7 @@ public class ActionChainResolver(
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { PropertyNameCaseInsensitive = true };
 
-    public async Task<string?> GetNextActionAsync(
+    public async Task<ChainDecision?> GetNextActionAsync(
         string executedSlug,
         Guid tenantId,
         string? rawResponseJson,
@@ -99,7 +99,7 @@ public class ActionChainResolver(
                     }
                     logger.LogInformation("[ChainResolver] {Slug} → {Next} via {Path}={Value}",
                         executedSlug, nextSlug, rule.When.Path, observed ?? "(null)");
-                    return nextSlug;
+                    return new ChainDecision(nextSlug, rule.Then?.SuccessMessage);
                 }
             }
         }

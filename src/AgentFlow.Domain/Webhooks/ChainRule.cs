@@ -54,4 +54,19 @@ public class ChainTarget
 {
     /// <summary>Slug de la acción a encadenar (debe estar asignada al mismo tenant).</summary>
     public string ActionSlug { get; init; } = string.Empty;
+
+    /// <summary>
+    /// Mensaje opcional que se apendica al replyText del agente cuando el chain
+    /// ejecuta exitosamente. Soporta interpolación de placeholders `{path}` que
+    /// se resuelven contra el JSON response del eslabón ORIGEN (la acción que
+    /// disparó la regla, NO la encadenada).
+    ///
+    /// Ejemplo para 2FA:
+    ///   "Te envié un código de 6 dígitos al correo {correoEnmascarado}.
+    ///    Por favor ingrésalo aquí en este chat."
+    ///
+    /// El path es case-insensitive, dot-notation simple (`status`, `data.code`).
+    /// Placeholders no encontrados se sustituyen por string.Empty.
+    /// </summary>
+    public string? SuccessMessage { get; init; }
 }

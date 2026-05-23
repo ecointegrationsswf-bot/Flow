@@ -133,7 +133,11 @@ export function Step5Chaining({ bundle, availableSlugs, onChange, readOnly = fal
                 value={rule.then?.actionSlug ?? ''}
                 onChange={(e) => {
                   const slug = e.target.value
-                  updateRule(idx, { then: slug ? { actionSlug: slug } : null })
+                  updateRule(idx, {
+                    then: slug
+                      ? { actionSlug: slug, successMessage: rule.then?.successMessage }
+                      : null,
+                  })
                 }}
                 className="w-full rounded border border-gray-300 px-2 py-1 text-xs font-mono"
               >
@@ -149,6 +153,31 @@ export function Step5Chaining({ bundle, availableSlugs, onChange, readOnly = fal
                   ⚠ La acción <strong>{rule.then.actionSlug}</strong> no aparece en la lista de acciones
                   asignadas al tenant. Verifica que esté asignada o el chain no se ejecutará.
                 </p>
+              )}
+
+              {rule.then?.actionSlug && (
+                <div className="pt-1">
+                  <label className="block text-[10px] font-medium text-gray-600 mb-0.5">
+                    Mensaje al cliente cuando se ejecute (opcional)
+                  </label>
+                  <textarea
+                    value={rule.then.successMessage ?? ''}
+                    onChange={(e) =>
+                      updateRule(idx, {
+                        then: { actionSlug: rule.then!.actionSlug, successMessage: e.target.value },
+                      })
+                    }
+                    placeholder="Te envié un código de 6 dígitos al correo {correoEnmascarado}. Por favor ingrésalo aquí."
+                    rows={2}
+                    className="w-full rounded border border-gray-300 px-2 py-1 text-xs"
+                  />
+                  <p className="mt-1 text-[10px] text-gray-500">
+                    Usa <code className="px-1 rounded bg-gray-100">{'{campo}'}</code> para insertar valores del
+                    response de <strong>esta</strong> acción (no la encadenada). Ej:{' '}
+                    <code className="px-1 rounded bg-gray-100">{'{correoEnmascarado}'}</code>,{' '}
+                    <code className="px-1 rounded bg-gray-100">{'{nombreAsegurado}'}</code>.
+                  </p>
+                </div>
               )}
             </div>
           </div>
