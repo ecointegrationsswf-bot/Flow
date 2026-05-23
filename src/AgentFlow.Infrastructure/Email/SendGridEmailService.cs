@@ -27,10 +27,16 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         await SendAsync(toEmail, fullName, subject, html, ct, bccEmails);
     }
 
-    public async Task SendTwoFactorCodeAsync(string toEmail, string fullName, string code, CancellationToken ct = default)
+    public async Task SendTwoFactorCodeAsync(
+        string toEmail, string fullName, string code,
+        string? tenantName = null, string? tenantLogoUrl = null,
+        CancellationToken ct = default)
     {
-        var subject = "Codigo de verificacion - TalkIA";
-        var html = Build2FATemplate(fullName, code);
+        // Si el caller pasó tenantName usamos el branding del corredor; sino,
+        // TalkIA genérico (compatibilidad con el login 2FA del portal).
+        var brandName = !string.IsNullOrWhiteSpace(tenantName) ? tenantName : "TalkIA";
+        var subject = $"Codigo de verificacion - {brandName}";
+        var html = Build2FATemplate(fullName, code, brandName, tenantLogoUrl);
         await SendAsync(toEmail, fullName, subject, html, ct);
     }
 
@@ -416,8 +422,15 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
         """;
     }
 
-    private string Build2FATemplate(string fullName, string code)
+    private string Build2FATemplate(string fullName, string code, string brandName, string? tenantLogoUrl)
     {
+        // El header del email muestra: (a) la imagen del logo del corredor si
+        // tenantLogoUrl tiene valor, o (b) el brandName como texto si no.
+        // Outlook NO soporta gradient → uso color sólido oscuro azul corporativo.
+        var headerInner = !string.IsNullOrWhiteSpace(tenantLogoUrl)
+            ? $"""<img src="{tenantLogoUrl}" alt="{brandName}" style="max-height:48px;display:inline-block;border:0;" />"""
+            : $"""<h1 style="margin:0;color:#f59e0b;font-size:24px;font-weight:700;">{brandName}</h1>""";
+
         return $"""
         <!DOCTYPE html>
         <html>
@@ -427,24 +440,24 @@ public class SendGridEmailService(IConfiguration config) : IEmailService
             <tr><td align="center">
               <table width="480" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
                 <tr>
-                  <td style="background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);padding:28px 40px;text-align:center;">
-                    <h1 style="margin:0;color:#f59e0b;font-size:24px;font-weight:700;">TalkIA</h1>
+                  <td bgcolor="#0f172a" style="background:#0f172a;padding:28px 40px;text-align:center;">
+                    {headerInner}
                   </td>
                 </tr>
                 <tr>
                   <td style="padding:40px;text-align:center;">
                     <p style="margin:0 0 8px;color:#64748b;font-size:14px;">Hola, {fullName}</p>
-                    <p style="margin:0 0 28px;color:#1e293b;font-size:16px;">Tu codigo de verificacion es:</p>
+                    <p style="margin:0 0 28px;color:#1e293b;font-size:16px;">Tu codigo de verificacion para acceder a tu informacion en <strong>{brandName}</strong> es:</p>
                     <div style="display:inline-block;background-color:#f8fafc;border:2px solid #e2e8f0;border-radius:12px;padding:20px 40px;margin-bottom:28px;">
                       <span style="font-size:36px;font-weight:700;letter-spacing:8px;color:#1e293b;font-family:'Courier New',monospace;">{code}</span>
                     </div>
-                    <p style="margin:0 0 8px;color:#94a3b8;font-size:13px;">Este codigo expira en <strong>5 minutos</strong>.</p>
+                    <p style="margin:0 0 8px;color:#94a3b8;font-size:13px;">Este codigo expira en <strong>24 horas</strong>.</p>
                     <p style="margin:0;color:#94a3b8;font-size:13px;">Si no solicitaste este codigo, ignora este mensaje.</p>
                   </td>
                 </tr>
                 <tr>
                   <td style="background-color:#f8fafc;padding:16px 40px;border-top:1px solid #e2e8f0;text-align:center;">
-                    <p style="margin:0;color:#94a3b8;font-size:11px;">&copy; 2026 TalkIA. Todos los derechos reservados.</p>
+                    <p style="margin:0;color:#94a3b8;font-size:11px;">&copy; 2026 {brandName}. Todos los derechos reservados.</p>
                   </td>
                 </tr>
               </table>

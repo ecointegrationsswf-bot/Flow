@@ -21,7 +21,7 @@ public class InternalEmailController(IEmailService email) : ControllerBase
 {
     public record WelcomeAdminBody(string ToEmail, string FullName, string Password, List<string>? BccEmails);
     public record WelcomeTenantBody(string ToEmail, string FullName, string Password, string TenantName, List<string>? BccEmails);
-    public record TwoFactorBody(string ToEmail, string FullName, string Code);
+    public record TwoFactorBody(string ToEmail, string FullName, string Code, string? TenantName = null, string? TenantLogoUrl = null);
     public record PasswordResetBody(string ToEmail, string FullName, string ResetToken);
     public record ConversationResumeBody(
         string ToEmail, string? CcEmail, string ClientName, string ClientPhone,
@@ -51,7 +51,9 @@ public class InternalEmailController(IEmailService email) : ControllerBase
     [HttpPost("2fa")]
     public async Task<IActionResult> TwoFactor([FromBody] TwoFactorBody b, CancellationToken ct)
     {
-        await email.SendTwoFactorCodeAsync(b.ToEmail, b.FullName, b.Code, ct);
+        // TenantName/TenantLogoUrl son opcionales — si vienen, el email usa el
+        // branding del corredor; si no, fallback al branding TalkIA (login del portal).
+        await email.SendTwoFactorCodeAsync(b.ToEmail, b.FullName, b.Code, b.TenantName, b.TenantLogoUrl, ct);
         return Ok();
     }
 

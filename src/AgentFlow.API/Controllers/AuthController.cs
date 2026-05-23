@@ -117,7 +117,7 @@ public class AuthController(
             user.TwoFactorExpiry = DateTime.UtcNow.AddMinutes(5);
             await db.SaveChangesAsync(ct);
 
-            _ = emailService.SendTwoFactorCodeAsync(user.Email, user.FullName, code, ct);
+            _ = emailService.SendTwoFactorCodeAsync(user.Email, user.FullName, code, ct: ct);
 
             var twoFaToken = GenerateTempToken(user.Id.ToString(), "2fa");
             return Ok(new { requires2FA = true, tempToken = twoFaToken, email = MaskEmail(user.Email) });
@@ -151,7 +151,7 @@ public class AuthController(
         user.TwoFactorExpiry = DateTime.UtcNow.AddMinutes(5);
         await db.SaveChangesAsync(ct);
 
-        _ = emailService.SendTwoFactorCodeAsync(user.Email, user.FullName, code, ct);
+        _ = emailService.SendTwoFactorCodeAsync(user.Email, user.FullName, code, ct: ct);
 
         var twoFaToken = GenerateTempToken(userId, "2fa");
         return Ok(new { requires2FA = true, tempToken = twoFaToken, email = MaskEmail(user.Email) });
@@ -207,7 +207,7 @@ public class AuthController(
         user.TwoFactorExpiry = DateTime.UtcNow.AddMinutes(5);
         await db.SaveChangesAsync(ct);
 
-        _ = emailService.SendTwoFactorCodeAsync(user.Email, user.FullName, code, ct);
+        _ = emailService.SendTwoFactorCodeAsync(user.Email, user.FullName, code, ct: ct);
 
         return Ok(new { message = "Codigo reenviado." });
     }

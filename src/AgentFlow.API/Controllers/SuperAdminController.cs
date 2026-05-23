@@ -99,7 +99,7 @@ public class SuperAdminController(
             admin.TwoFactorExpiry = DateTime.UtcNow.AddMinutes(5);
             await db.SaveChangesAsync(ct);
 
-            _ = emailService.SendTwoFactorCodeAsync(admin.Email, admin.FullName, code, ct);
+            _ = emailService.SendTwoFactorCodeAsync(admin.Email, admin.FullName, code, ct: ct);
 
             var twoFaToken = GenerateTempToken(admin.Id.ToString(), "admin-2fa");
             return Ok(new { requires2FA = true, tempToken = twoFaToken, email = AuthController.MaskEmail(admin.Email) });
@@ -132,7 +132,7 @@ public class SuperAdminController(
         admin.TwoFactorExpiry = DateTime.UtcNow.AddMinutes(5);
         await db.SaveChangesAsync(ct);
 
-        _ = emailService.SendTwoFactorCodeAsync(admin.Email, admin.FullName, code, ct);
+        _ = emailService.SendTwoFactorCodeAsync(admin.Email, admin.FullName, code, ct: ct);
 
         var twoFaToken = GenerateTempToken(adminId, "admin-2fa");
         return Ok(new { requires2FA = true, tempToken = twoFaToken, email = AuthController.MaskEmail(admin.Email) });
@@ -172,7 +172,7 @@ public class SuperAdminController(
         admin.TwoFactorExpiry = DateTime.UtcNow.AddMinutes(5);
         await db.SaveChangesAsync(ct);
 
-        _ = emailService.SendTwoFactorCodeAsync(admin.Email, admin.FullName, code, ct);
+        _ = emailService.SendTwoFactorCodeAsync(admin.Email, admin.FullName, code, ct: ct);
         return Ok(new { message = "Codigo reenviado." });
     }
 

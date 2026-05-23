@@ -4,7 +4,15 @@ public interface IEmailService
 {
     Task SendWelcomeAdminEmailAsync(string toEmail, string fullName, string password, IEnumerable<string>? bccEmails = null, CancellationToken ct = default);
     Task SendWelcomeTenantEmailAsync(string toEmail, string fullName, string password, string tenantName, IEnumerable<string>? bccEmails = null, CancellationToken ct = default);
-    Task SendTwoFactorCodeAsync(string toEmail, string fullName, string code, CancellationToken ct = default);
+    /// <summary>
+    /// Envía el código 2FA. Si se pasan tenantName/tenantLogoUrl, la plantilla
+    /// usa el branding del corredor (logo en el header + nombre en subject/body).
+    /// Si no, fallback al branding genérico "TalkIA".
+    /// </summary>
+    Task SendTwoFactorCodeAsync(
+        string toEmail, string fullName, string code,
+        string? tenantName = null, string? tenantLogoUrl = null,
+        CancellationToken ct = default);
     Task SendPasswordResetAsync(string toEmail, string fullName, string resetToken, CancellationToken ct = default);
 
     Task SendConversationResumeAsync(

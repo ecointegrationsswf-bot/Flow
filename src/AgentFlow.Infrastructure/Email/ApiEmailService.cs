@@ -36,8 +36,12 @@ public class ApiEmailService(
         => PostAsync("/api/internal/email/welcome-tenant",
             new { toEmail, fullName, password, tenantName, bccEmails = bccEmails?.ToList() }, ct);
 
-    public Task SendTwoFactorCodeAsync(string toEmail, string fullName, string code, CancellationToken ct = default)
-        => PostAsync("/api/internal/email/2fa", new { toEmail, fullName, code }, ct);
+    public Task SendTwoFactorCodeAsync(
+        string toEmail, string fullName, string code,
+        string? tenantName = null, string? tenantLogoUrl = null,
+        CancellationToken ct = default)
+        => PostAsync("/api/internal/email/2fa",
+            new { toEmail, fullName, code, tenantName, tenantLogoUrl }, ct);
 
     public Task SendPasswordResetAsync(string toEmail, string fullName, string resetToken, CancellationToken ct = default)
         => PostAsync("/api/internal/email/password-reset", new { toEmail, fullName, resetToken }, ct);

@@ -20,7 +20,9 @@ import { useEffect, useState } from 'react'
  * NO hace polling agresivo (60s es conservador). El usuario puede seguir trabajando
  * y el banner aparece cuando quiera; nunca se interrumpe lo que estaba haciendo.
  */
-const POLL_INTERVAL_MS = 60_000
+// Polling de 30s: balance entre responsividad y costo (1 fetch a /index.html
+// ~2 KB cada 30 segundos por sesión).
+const POLL_INTERVAL_MS = 30_000
 
 function extractScriptSrcFromHtml(html: string): string | null {
   // El index.html generado por Vite contiene exactamente UN <script type="module" src="/assets/index-XXXX.js">.

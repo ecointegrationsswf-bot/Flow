@@ -30,7 +30,7 @@ public class SystemContextBuilder(AgentFlowDbContext db, ILogger<SystemContextBu
         // ── Tenant ──
         var tenant = await db.Tenants
             .Where(t => t.Id == tenantId)
-            .Select(t => new { t.Id, t.Name, t.Slug })
+            .Select(t => new { t.Id, t.Name, t.Slug, t.LogoUrl })
             .FirstOrDefaultAsync(ct);
 
         if (tenant is not null)
@@ -38,6 +38,11 @@ public class SystemContextBuilder(AgentFlowDbContext db, ILogger<SystemContextBu
             ctx.Set("tenant.id", tenant.Id.ToString());
             ctx.Set("tenant.name", tenant.Name);
             ctx.Set("tenant.slug", tenant.Slug);
+            // tenant.logoUrl es URL absoluta a Azure Blob (puede ser null si el
+            // tenant no subió logo desde el panel admin). Útil para que las
+            // plantillas de email usen el branding del corredor.
+            if (!string.IsNullOrWhiteSpace(tenant.LogoUrl))
+                ctx.Set("tenant.logoUrl", tenant.LogoUrl);
         }
 
         // ── Conversation (si hay ID) ──

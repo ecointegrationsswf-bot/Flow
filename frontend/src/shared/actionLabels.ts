@@ -28,6 +28,10 @@ export const ACTION_FRIENDLY_NAMES: Record<string, string> = {
   GENERATE_TEST_PDF: 'Generar PDF de prueba',
   SEND_TEST_EMAIL: 'Enviar email de prueba',
   VALIDATE_IDENTITY: 'Validar identidad',
+  // Flujo 2FA del API broker (PASESA y otros corredores)
+  INSURED_INITIATE: 'Identificar asegurado',
+  INSURED_VALIDATE: 'Validar código 2FA',
+  SEND_2FA_CODE_EMAIL: 'Enviar código 2FA por email',
 }
 
 export function getActionFriendlyName(slug: string | null | undefined): string {
