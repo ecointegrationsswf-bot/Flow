@@ -30,6 +30,21 @@ public class ChainRule
     /// explícitamente para que el admin marque que esa respuesta termina ahí).
     /// </summary>
     public ChainTarget? Then { get; init; }
+
+    /// <summary>
+    /// Si true, después de que el chain termine exitosamente el orquestador
+    /// hace una SEGUNDA invocación al LLM con el LastActionResult inyectado y
+    /// una directiva "POST_CHAIN: redactá la respuesta final al cliente sin
+    /// emitir más [ACTION:...]". Reemplaza el replyText preliminar del primer
+    /// turno ("validando...") por uno natural que responde a la pregunta
+    /// original con los datos en mano.
+    ///
+    /// Costo: 1 round-trip extra al LLM (~2s latencia, tokens adicionales).
+    /// Usar para acciones cuya respuesta debe presentarse al cliente
+    /// inmediatamente (validación de identidad exitosa → mostrar pólizas;
+    /// consulta de saldo; etc.). Funciona también con `Then = null`.
+    /// </summary>
+    public bool RegenerateReply { get; init; }
 }
 
 /// <summary>

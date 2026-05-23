@@ -845,6 +845,10 @@ public class ProcessIncomingMessageHandler(
                             // placeholders ya interpolados contra el response del eslabón ORIGEN).
                             // Se apendica al replyText al cerrar el loop.
                             string? chainSuccessMessage = null;
+                            // Si alguna regla del chain tiene RegenerateReply=true, recordamos el flag
+                            // para hacer una SEGUNDA invocación al LLM tras cerrar el loop, descartando
+                            // el "validando..." preliminar.
+                            bool chainRegenerateReply = false;
                             var depth = 0;
 
                             while (!string.IsNullOrEmpty(currentSlug) && depth < MaxChainDepth)
@@ -977,6 +981,16 @@ public class ProcessIncomingMessageHandler(
                                         actionResult.RawResponseJson);
                                 }
 
+                                // Si la regla pide regenerate, lo marcamos. El handler hará la 2da invocación
+                                // al LLM al cerrar el loop. Esto puede coexistir con SuccessMessage (ej:
+                                // "Identidad confirmada" como mensaje fijo + respuesta natural del LLM).
+                                if (decision.RegenerateReply)
+                                    chainRegenerateReply = true;
+
+                                // Si no hay próxima acción (rama documental con regenerate=true), cortamos.
+                                if (string.IsNullOrEmpty(decision.NextSlug))
+                                    break;
+
                                 // Aplanar el JSON response del eslabón actual a un Dictionary<string,string?>
                                 // con keys "lastActionResult.<campo>" para que el PayloadBuilder del siguiente
                                 // eslabón lo pueda leer (sourceType=lastActionResult).
@@ -994,6 +1008,43 @@ public class ProcessIncomingMessageHandler(
                             {
                                 logger.LogWarning("[ATP-Chain] Límite de profundidad {Max} alcanzado. Slugs ejecutados: [{Chain}]",
                                     MaxChainDepth, string.Join(" → ", executedSlugs));
+                            }
+
+                            // ── POST-CHAIN — regenerar replyText con el LLM ──────────────────
+                            // Si alguna ChainRule tenía RegenerateReply=true, hacemos UNA segunda
+                            // invocación al LLM con el LastActionResult ya populado. El runner
+                            // añade una directiva POST_CHAIN al system prompt que le dice al LLM
+                            // que la acción ya corrió y debe redactar la respuesta final SIN
+                            // emitir más [ACTION:...]. Reemplaza el "validando..." preliminar
+                            // por una respuesta natural que vuelve a la pregunta original.
+                            //
+                            // Costo: 1 round-trip extra al LLM por turno con regenerate. Solo
+                            // se invoca cuando se configuró explícitamente en una ChainRule.
+                            if (chainRegenerateReply && lastActionForPersist is not null)
+                            {
+                                try
+                                {
+                                    var regenRequest = runRequest with
+                                    {
+                                        LastActionResult = lastActionForPersist,
+                                        PostChainRegeneration = true
+                                    };
+                                    var regenerated = await agentRunner.RunAsync(regenRequest, ct);
+                                    var newText = RemoveAllActionTags(regenerated.ReplyText ?? string.Empty);
+                                    if (!string.IsNullOrWhiteSpace(newText))
+                                    {
+                                        replyText = newText;
+                                        logger.LogInformation("[ATP-Chain] Reply regenerado tras chain ({Len} chars)", newText.Length);
+                                    }
+                                    else
+                                    {
+                                        logger.LogWarning("[ATP-Chain] Regeneración devolvió vacío — conservo el reply preliminar.");
+                                    }
+                                }
+                                catch (Exception ex)
+                                {
+                                    logger.LogWarning(ex, "[ATP-Chain] Regeneración del reply falló — conservo el reply preliminar.");
+                                }
                             }
 
                             // Apendar el successMessage del chain (si hubo) al replyText. Así el

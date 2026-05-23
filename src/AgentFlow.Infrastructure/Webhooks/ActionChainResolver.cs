@@ -91,15 +91,21 @@ public class ActionChainResolver(
                 if (Matches(observed, rule.When.Operator, rule.When.Value))
                 {
                     var nextSlug = rule.Then?.ActionSlug;
-                    if (string.IsNullOrWhiteSpace(nextSlug))
+                    // Si NO hay next slug Y NO se pide regenerar reply, la regla es puramente
+                    // documental ("esta respuesta termina acá") y devolvemos null para que el
+                    // orquestador no haga nada extra.
+                    if (string.IsNullOrWhiteSpace(nextSlug) && !rule.RegenerateReply)
                     {
-                        logger.LogDebug("[ChainResolver] Match en {Slug} para path={Path} pero `then` es null (rama terminal documentada)",
+                        logger.LogDebug("[ChainResolver] Match en {Slug} para path={Path} pero `then` es null y sin regenerate — rama terminal documentada",
                             executedSlug, rule.When.Path);
                         return null;
                     }
-                    logger.LogInformation("[ChainResolver] {Slug} → {Next} via {Path}={Value}",
-                        executedSlug, nextSlug, rule.When.Path, observed ?? "(null)");
-                    return new ChainDecision(nextSlug, rule.Then?.SuccessMessage);
+                    logger.LogInformation("[ChainResolver] {Slug} → Next={Next} Regenerate={Regen} via {Path}={Value}",
+                        executedSlug, nextSlug ?? "(none)", rule.RegenerateReply, rule.When.Path, observed ?? "(null)");
+                    return new ChainDecision(
+                        NextSlug: string.IsNullOrWhiteSpace(nextSlug) ? null : nextSlug,
+                        SuccessMessageTemplate: rule.Then?.SuccessMessage,
+                        RegenerateReply: rule.RegenerateReply);
                 }
             }
         }

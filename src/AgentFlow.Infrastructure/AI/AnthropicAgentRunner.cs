@@ -177,16 +177,41 @@ public class AnthropicAgentRunner(
         }
 
         // ── Action Trigger Protocol Fase 4 — resultado de acción previa ────
-        // Si en el turno anterior se ejecutó una acción y devolvió datos útiles
-        // (link de pago generado, datos del cliente consultados, etc.), el
-        // handler los pasa aquí para que el agente los incluya en su respuesta.
-        // El handler ya valida freshness, así que si llega, se inyecta sin más.
-        if (req.LastActionResult is { DataForAgent: { Length: > 0 } data } last)
+        // Si en el turno anterior (o en este, vía chain) se ejecutó una acción y
+        // devolvió datos, el handler los pasa aquí para que el agente los incluya
+        // en su respuesta. El handler ya valida freshness, así que si llega, se inyecta.
+        //
+        // Dos modalidades:
+        //  - DataForAgent (texto formateado por OutputInterpreter, solo si hay campos
+        //    con outputAction=send_to_agent).
+        //  - RawResponseJson (JSON crudo completo del response, útil cuando el
+        //    OutputSchema no tiene send_to_agent o cuando estamos en POST_CHAIN).
+        if (req.LastActionResult is { } last && (
+            (last.DataForAgent is { Length: > 0 }) || !string.IsNullOrWhiteSpace(last.RawResponseJson)))
         {
             sb.AppendLine();
             sb.AppendLine("## RESULTADO DE ACCIÓN EJECUTADA");
-            sb.AppendLine($"{last.Slug}: {data}");
-            sb.AppendLine("Usa esta información en tu respuesta al cliente si es relevante. No repitas todo el bloque, solo el dato útil.");
+            sb.AppendLine($"Acción: {last.Slug}");
+
+            if (!string.IsNullOrEmpty(last.DataForAgent))
+            {
+                sb.AppendLine("Datos formateados:");
+                sb.AppendLine(last.DataForAgent);
+            }
+
+            // Inyectar el JSON crudo cuando exista. Es la única fuente que tiene
+            // TODOS los campos del response (incluso los no marcados como send_to_agent),
+            // crítico para POST_CHAIN donde el LLM debe redactar la respuesta final
+            // con datos como "polizas[]", "nombreAsegurado", etc.
+            if (!string.IsNullOrWhiteSpace(last.RawResponseJson))
+            {
+                sb.AppendLine("Datos crudos del response (JSON):");
+                sb.AppendLine("```json");
+                sb.AppendLine(last.RawResponseJson);
+                sb.AppendLine("```");
+            }
+
+            sb.AppendLine("Usa esta información en tu respuesta al cliente si es relevante. No expongas el JSON crudo — formatea de forma natural.");
         }
 
         // ── Action Trigger Protocol — bloque ACCIONES DISPONIBLES ──────────
@@ -231,6 +256,37 @@ public class AnthropicAgentRunner(
             sb.AppendLine("confiable\", \"no cuento con esos datos\" o \"te recomiendo verificar");
             sb.AppendLine("directamente\" cuando la respuesta efectivamente está en un documento");
             sb.AppendLine("adjunto. Esa falla genera desconfianza inmediata en el cliente.");
+        }
+
+        // ── POST_CHAIN — directiva del orquestador tras chain exitoso ──────
+        // Se inyecta al FINAL del system prompt (después de todo lo demás) para
+        // tener máxima salience. El handler la setea en la SEGUNDA invocación al
+        // runner cuando una ChainRule tiene regenerateReply=true.
+        //
+        // Objetivo: el LLM ya emitió la acción en la primera invocación; ahora
+        // debe redactar la respuesta FINAL al cliente usando el LastActionResult
+        // (que ya está en "RESULTADO DE ACCIÓN EJECUTADA" arriba). Sin esta
+        // directiva el LLM tiende a re-emitir [ACTION:...] o a repetir el
+        // "validando..." preliminar.
+        if (req.PostChainRegeneration)
+        {
+            sb.AppendLine();
+            sb.AppendLine("### MODO POST-ACCIÓN — REDACTA LA RESPUESTA FINAL");
+            sb.AppendLine("Una acción acaba de ejecutarse exitosamente y su resultado está arriba en");
+            sb.AppendLine("\"RESULTADO DE ACCIÓN EJECUTADA\". Tu tarea AHORA es redactar la respuesta");
+            sb.AppendLine("FINAL al cliente usando esos datos. Reglas estrictas para este turno:");
+            sb.AppendLine();
+            sb.AppendLine("1. NO emitas ningún tag [ACTION:...] ni [PARAM:...]. La acción ya corrió.");
+            sb.AppendLine("2. Responde directamente a la PREGUNTA ORIGINAL del cliente (mirá su mensaje");
+            sb.AppendLine("   más reciente y el historial reciente para entender qué quería).");
+            sb.AppendLine("3. Si los datos del resultado responden su pregunta, mostralos formateados");
+            sb.AppendLine("   de forma natural, no como JSON crudo.");
+            sb.AppendLine("4. Si los datos son una validación de identidad, NO digas \"validando...\" ni");
+            sb.AppendLine("   \"acabo de validar tu identidad\" como mensaje principal — eso ya pasó.");
+            sb.AppendLine("   Avanzá directo a responder lo que el cliente preguntó originalmente.");
+            sb.AppendLine("5. Si el resultado contiene una lista (pólizas, productos, etc.), enumeralos");
+            sb.AppendLine("   con bullets o numeración clara.");
+            sb.AppendLine("6. Mantené el tono y estilo del agente — corto, cálido, sin Markdown pesado.");
         }
 
         return sb.ToString();

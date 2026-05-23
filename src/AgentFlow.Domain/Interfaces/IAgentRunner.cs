@@ -27,7 +27,16 @@ public record AgentRunRequest(
     string? ActionsBlock = null,                        // Action Trigger Protocol — bloque "ACCIONES DISPONIBLES" preconstruido por IActionPromptBuilder
     LastActionResult? LastActionResult = null,          // Action Trigger Protocol Fase 4 — resultado de acción previa para inyectar al prompt
     List<ReferenceDocument>? ReferenceDocuments = null, // PDFs del maestro de campaña que el agente usa como contexto
-    string? ReferenceDocumentsBlock = null              // Bloque "DOCUMENTOS DE REFERENCIA" (texto) con las 8 reglas; se concatena al final del system prompt
+    string? ReferenceDocumentsBlock = null,             // Bloque "DOCUMENTOS DE REFERENCIA" (texto) con las 8 reglas; se concatena al final del system prompt
+    /// <summary>
+    /// Cuando es true, el runner añade una directiva POST_CHAIN al final del system
+    /// prompt para indicar al LLM que una acción ya se ejecutó y debe redactar la
+    /// respuesta final al cliente USANDO el LastActionResult, sin emitir nuevos
+    /// [ACTION:...]. Se usa para el patrón "tool use" estándar: el primer turno
+    /// emite la acción + texto preliminar, y el handler re-invoca con este flag
+    /// para obtener la respuesta natural respondiendo a la pregunta original.
+    /// </summary>
+    bool PostChainRegeneration = false
 );
 
 /// <summary>

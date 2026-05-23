@@ -101,6 +101,17 @@ export interface ChainTarget {
 export interface ChainRule {
   when: ChainCondition
   then?: ChainTarget | null
+  /**
+   * Si true, tras ejecutar el chain (o tras matchear la regla, si then=null)
+   * el orquestador hace una SEGUNDA invocación al LLM con el LastActionResult
+   * inyectado y una directiva POST_CHAIN para redactar la respuesta final
+   * sin emitir más [ACTION:...]. Útil para que el agente responda naturalmente
+   * con los datos en mano (ej: tras validar identidad, mostrar las pólizas y
+   * responder la pregunta original del cliente).
+   *
+   * Costo: 1 round-trip extra al LLM (~2s latencia, tokens adicionales).
+   */
+  regenerateReply?: boolean
 }
 
 /**

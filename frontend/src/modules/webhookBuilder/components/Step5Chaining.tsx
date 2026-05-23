@@ -180,6 +180,29 @@ export function Step5Chaining({ bundle, availableSlugs, onChange, readOnly = fal
                 </div>
               )}
             </div>
+
+            <div className="rounded bg-white border border-gray-200 p-2.5 space-y-1">
+              <label className="flex items-start gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={!!rule.regenerateReply}
+                  onChange={(e) => updateRule(idx, { regenerateReply: e.target.checked })}
+                  className="mt-0.5"
+                />
+                <div className="flex-1">
+                  <p className="text-[11px] font-medium text-gray-700">
+                    Regenerar respuesta del agente con los datos de la acción
+                  </p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    Tras ejecutar el chain, vuelve a invocar al LLM para que redacte la respuesta
+                    final al cliente usando el resultado. Útil cuando la acción devuelve datos que
+                    el cliente espera ver de inmediato (validación + pólizas, consulta de saldo, etc.).
+                    El agente respondería a la <strong>pregunta original</strong> con los datos en mano.
+                    <span className="text-amber-700"> Cuesta ~2s extra de latencia y tokens adicionales.</span>
+                  </p>
+                </div>
+              </label>
+            </div>
           </div>
         ))}
 

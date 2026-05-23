@@ -33,5 +33,8 @@ public interface IActionChainResolver
 /// acción y opcionalmente un texto a apendar al replyText del agente cuando
 /// el chain ejecute exitosamente (placeholders ya pueden estar interpolados o
 /// no — depende de quién haga la interpolación; en el MVP el handler lo hace).
+///
+/// `NextSlug` puede ser null cuando la regla matcheó con `then=null` y solo
+/// quería marcar la rama (por ejemplo para activar RegenerateReply sin cadenar).
 /// </summary>
-public record ChainDecision(string NextSlug, string? SuccessMessageTemplate);
+public record ChainDecision(string? NextSlug, string? SuccessMessageTemplate, bool RegenerateReply);
