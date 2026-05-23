@@ -18,6 +18,7 @@ import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { useToast, ToastContainer } from '@/shared/components/Toast'
 import { MessageDialog, type MessageDialogKind } from '@/shared/components/MessageDialog'
 import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
+import { parseContract } from '@/shared/utils/parseContract'
 import {
   useCampaignTemplate,
   useCreateCampaignTemplate,
@@ -922,7 +923,7 @@ export function CampaignTemplateFormPage() {
                             {action.requiresWebhook && <span className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700">Webhook</span>}
                             {action.sendsEmail && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">Email</span>}
                             {action.sendsSms && <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">SMS</span>}
-                            {action.defaultWebhookContract && <span className="rounded bg-indigo-100 px-1.5 py-0.5 text-[10px] font-medium text-indigo-700">Default ⚡</span>}
+                            {action.defaultWebhookContract && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">Configurado ✓</span>}
                           </div>
                         </div>
                         {action.description && <p className="text-xs text-gray-500">{action.description}</p>}
@@ -942,95 +943,41 @@ export function CampaignTemplateFormPage() {
                     {selected && needsConfig && expanded && (
                       <div className="border-t border-amber-200 bg-amber-50/50 px-4 py-4 space-y-4">
 
-                        {/* Webhook config */}
+                        {/* Webhook config — modo SOLO LECTURA desde el tenant.
+                            Si la acción tiene DefaultWebhookContract significa que el super admin
+                            ya configuró este webhook para el cliente. El tenant solo puede VER el
+                            contrato (botón "Ver contrato configurado") nunca modificarlo.
+                            Si no hay default contract (caso raro: acción asignada pero sin configurar),
+                            mostramos un aviso para que solicite al admin la configuración. */}
                         {action.requiresWebhook && (
                           <div className="space-y-3">
-                            <div className="flex items-center gap-1.5 text-xs font-semibold text-purple-700 uppercase tracking-wider">
-                              <Webhook className="h-3.5 w-3.5" /> Configuración de Webhook
-                            </div>
-                            <div className="grid grid-cols-3 gap-3">
-                              <div className="col-span-2">
-                                <label className="mb-1 block text-xs font-medium text-gray-600">URL del webhook *</label>
-                                <input
-                                  value={config.webhookUrl ?? ''}
-                                  onChange={e => updateActionConfig(action.id, 'webhookUrl', e.target.value)}
-                                  placeholder="https://api.ejemplo.com/webhook"
-                                  className={actionErrs.webhookUrl ? inputErrClass : inputClass}
-                                />
-                                {actionErrs.webhookUrl && <p className="mt-1 text-xs text-red-600">{actionErrs.webhookUrl}</p>}
-                              </div>
-                              <div>
-                                <label className="mb-1 block text-xs font-medium text-gray-600">Metodo *</label>
-                                <select
-                                  value={config.webhookMethod ?? 'POST'}
-                                  onChange={e => updateActionConfig(action.id, 'webhookMethod', e.target.value)}
-                                  className={actionErrs.webhookMethod ? inputErrClass : inputClass}
-                                >
-                                  <option value="POST">POST</option>
-                                  <option value="GET">GET</option>
-                                  <option value="PUT">PUT</option>
-                                </select>
-                                {actionErrs.webhookMethod && <p className="mt-1 text-xs text-red-600">{actionErrs.webhookMethod}</p>}
-                              </div>
-                            </div>
-                            {!(config.inputSchema || config.outputSchema) && (
+                            {action.defaultWebhookContract ? (
                               <>
-                                <div>
-                                  <label className="mb-1 block text-xs font-medium text-gray-600"><Globe className="inline h-3 w-3 mr-1" />Headers (JSON)</label>
-                                  <textarea
-                                    value={config.webhookHeaders ?? ''}
-                                    onChange={e => updateActionConfig(action.id, 'webhookHeaders', e.target.value)}
-                                    rows={2}
-                                    placeholder={'{\n  "Authorization": "Bearer token..."\n}'}
-                                    className={`${inputClass} font-mono text-xs`}
-                                  />
-                                </div>
-                                <div>
-                                  <label className="mb-1 block text-xs font-medium text-gray-600">Plantilla JSON del payload</label>
-                                  <textarea
-                                    value={config.webhookPayload ?? ''}
-                                    onChange={e => updateActionConfig(action.id, 'webhookPayload', e.target.value)}
-                                    rows={3}
-                                    placeholder={'{\n  "conversationId": "{{conversationId}}",\n  "clientPhone": "{{clientPhone}}"\n}'}
-                                    className={`${inputClass} font-mono text-xs`}
-                                  />
-                                  <p className="mt-1 text-xs text-gray-400">Usa {'{{variable}}'} para campos dinamicos.</p>
-                                </div>
-                              </>
-                            )}
-
-                            {/* Webhook Contract System — Builder avanzado (Fase 5) */}
-                            <div className="mt-3 pt-3 border-t border-amber-200">
-                              {/* Badge de herencia: si la acción tiene DefaultWebhookContract pero este template no tiene override */}
-                              {action.defaultWebhookContract && !(config.inputSchema || config.outputSchema) && (
-                                <div className="mb-2 flex items-center gap-1.5 rounded-lg bg-purple-50 border border-purple-200 px-3 py-2 text-[11px] text-purple-800">
-                                  <Webhook className="h-3.5 w-3.5 flex-shrink-0" />
+                                <div className="flex items-center gap-2 rounded-lg bg-green-50 border border-green-200 px-3 py-2.5 text-xs text-green-800">
+                                  <Webhook className="h-4 w-4 flex-shrink-0 text-green-600" />
                                   <span>
-                                    <strong>Hereda contrato default</strong> de la acción. Si necesitas configuración diferente para este maestro, usa el boton de abajo.
+                                    <strong>Configurado por el administrador.</strong> Este webhook fue parametrizado en el panel de administración para este cliente.
+                                    Si necesitas cambios, contactá al super administrador.
                                   </span>
                                 </div>
-                              )}
-                              <button
-                                type="button"
-                                onClick={() => setWebhookBuilderActionId(action.id)}
-                                className="flex items-center gap-2 rounded-lg bg-indigo-600 px-3 py-2 text-xs font-medium text-white hover:bg-indigo-700"
-                              >
-                                <Webhook className="h-3.5 w-3.5" />
-                                {(config.inputSchema || config.outputSchema)
-                                  ? 'Editar contrato de este maestro'
-                                  : 'Personalizar contrato para este maestro'}
-                                {(config.inputSchema || config.outputSchema) && (
-                                  <span className="rounded-full bg-white/20 px-1.5 py-0.5 text-[10px]">
-                                    Override
-                                  </span>
-                                )}
-                              </button>
-                              <p className="mt-1 text-[10px] text-gray-500">
-                                {(config.inputSchema || config.outputSchema)
-                                  ? 'Este maestro tiene su propia configuración de webhook (override del default de la acción).'
-                                  : 'Define un contrato especifico para este maestro. Si no lo configuras, se usa el default de la acción.'}
-                              </p>
-                            </div>
+                                <button
+                                  type="button"
+                                  onClick={() => setWebhookBuilderActionId(action.id)}
+                                  className="flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                                >
+                                  <Webhook className="h-3.5 w-3.5" />
+                                  Ver contrato configurado
+                                </button>
+                              </>
+                            ) : (
+                              <div className="flex items-center gap-2 rounded-lg bg-amber-50 border border-amber-200 px-3 py-2.5 text-xs text-amber-800">
+                                <Webhook className="h-4 w-4 flex-shrink-0 text-amber-600" />
+                                <span>
+                                  <strong>Sin configurar.</strong> Esta acción aún no tiene el webhook configurado.
+                                  Solicita al super administrador que lo configure desde el panel de administración antes de usarla.
+                                </span>
+                              </div>
+                            )}
                           </div>
                         )}
 
@@ -1345,26 +1292,14 @@ export function CampaignTemplateFormPage() {
         </div>
       </form>
 
-      {/* Webhook Contract Builder Modal (Fase 5) */}
+      {/* Webhook Contract Builder Modal (modo solo-consulta desde el tenant).
+          MISMA FUENTE de datos que el panel del super admin (TenantActionsConfigTab)
+          y la lista del tenant (TenantActionsPage): usa el helper compartido
+          `parseContract` para deserializar `action.defaultWebhookContract`. Sin esto,
+          los campos saldrían vacíos aunque el admin haya configurado todo. */}
       {webhookBuilderActionId && (() => {
         const action = availableActions?.find(a => a.id === webhookBuilderActionId)
-        const currentConfig = actionConfigs[webhookBuilderActionId] ?? {}
-
-        const initial: Partial<WebhookContractBundle> = {
-          webhookUrl: currentConfig.webhookUrl ?? '',
-          webhookMethod: (currentConfig.webhookMethod as WebhookContractBundle['webhookMethod']) ?? 'POST',
-          contentType: (currentConfig.contentType as WebhookContractBundle['contentType']) ?? 'application/json',
-          structure: (currentConfig.structure as WebhookContractBundle['structure']) ?? 'flat',
-          authType: (currentConfig.authType as WebhookContractBundle['authType']) ?? 'None',
-          authValue: currentConfig.authValue,
-          apiKeyHeaderName: currentConfig.apiKeyHeaderName,
-          webhookHeaders: currentConfig.webhookHeaders,
-          timeoutSeconds: currentConfig.timeoutSeconds ?? 10,
-          inputSchema: currentConfig.inputSchema,
-          outputSchema: currentConfig.outputSchema,
-          // Action Trigger Protocol (Fase 5) — cargar TriggerConfig si ya existe
-          triggerConfig: currentConfig.triggerConfig,
-        }
+        const initial: Partial<WebhookContractBundle> = parseContract(action?.defaultWebhookContract)
 
         return (
           <WebhookBuilderModal

@@ -8,6 +8,7 @@ import {
 } from '@/modules/admin/hooks/useAdminTenantActionsConfig'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
 import { getActionFriendlyName } from '@/shared/actionLabels'
+import { parseContract } from '@/shared/utils/parseContract'
 import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
 
 interface Props {
@@ -183,15 +184,6 @@ function ActionCard({
       )}
     </div>
   )
-}
-
-function parseContract(json: string | null): Partial<WebhookContractBundle> {
-  if (!json) return {}
-  try {
-    return JSON.parse(json)
-  } catch {
-    return {}
-  }
 }
 
 /**

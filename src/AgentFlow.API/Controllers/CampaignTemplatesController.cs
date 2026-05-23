@@ -442,6 +442,12 @@ public class CampaignTemplatesController(
     /// (Tenant.AssignedActionIds). Sin fallback: si el admin no asignó nada, devuelve vacío.
     /// La validación 409 al desasignar (SuperAdminController) protege el caso de maestros
     /// en uso, así que en flujo normal nunca habrá un template referenciando un ID no asignado.
+    ///
+    /// AISLAMIENTO por tenant (mayo-2026): si una acción asignada es GLOBAL (TenantId=NULL)
+    /// y existe un clon tenant-specific con el mismo Name, devolvemos DefaultWebhookContract
+    /// y DefaultTriggerConfig del clon (no de la global). Así el editor del maestro ve el
+    /// contract REAL que va a ejecutar el runtime — sino mostraría vacío cuando los contracts
+    /// están en el clon. Coherente con TenantActionsController.GetAll.
     /// </summary>
     [HttpGet("available-actions")]
     public async Task<IActionResult> AvailableActions(CancellationToken ct)
@@ -457,13 +463,42 @@ public class CampaignTemplatesController(
         if (assignedIds.Count == 0)
             return Ok(Array.Empty<object>());
 
-        var actions = await db.Set<ActionDefinition>()
+        // Cargar las acciones asignadas (pueden ser globales o tenant-specific).
+        var assignedActions = await db.Set<ActionDefinition>()
             .Where(a => a.IsActive && assignedIds.Contains(a.Id))
             .OrderBy(a => a.Name)
-            .Select(a => new { a.Id, a.Name, a.Description, a.RequiresWebhook, a.SendsEmail, a.SendsSms, a.DefaultTriggerConfig, a.DefaultWebhookContract })
             .ToListAsync(ct);
+        if (assignedActions.Count == 0)
+            return Ok(Array.Empty<object>());
 
-        return Ok(actions);
+        // Cargar TODOS los clones tenant-specific en UN solo round-trip para sobreescribir
+        // contract/triggerConfig cuando la fila asignada es global y existe un clon.
+        var assignedNames = assignedActions.Select(a => a.Name).Distinct().ToList();
+        var clonesByName = await db.Set<ActionDefinition>()
+            .Where(a => a.TenantId == tenantId && a.IsActive && assignedNames.Contains(a.Name))
+            .ToDictionaryAsync(a => a.Name, ct);
+
+        var result = assignedActions.Select(a =>
+        {
+            // Si la asignada es global y hay clon tenant-specific con mismo Name,
+            // tomamos contract/triggerConfig del clon (lo que ejecuta el runtime).
+            var effective = (a.TenantId is null && clonesByName.TryGetValue(a.Name, out var clone))
+                ? clone
+                : a;
+            return new
+            {
+                a.Id,
+                a.Name,
+                a.Description,
+                a.RequiresWebhook,
+                a.SendsEmail,
+                a.SendsSms,
+                DefaultTriggerConfig   = effective.DefaultTriggerConfig,
+                DefaultWebhookContract = effective.DefaultWebhookContract,
+            };
+        });
+
+        return Ok(result);
     }
 
     /// <summary>

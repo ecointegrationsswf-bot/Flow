@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Webhook, Mail, MessageSquare, Loader2, Zap, CheckCircle, AlertCircle, Eye } from 'lucide-react'
 import { useTenantActions, type TenantAction } from '../hooks/useTenantActions'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
-import type { WebhookContractBundle } from '@/modules/webhookBuilder/types'
+import { parseContract } from '@/shared/utils/parseContract'
 
 const FRIENDLY_NAMES: Record<string, string> = {
   'SEND_EMAIL_RESUME': 'Enviar email con resumen',
@@ -149,7 +149,3 @@ function ActionCard({ action, onView }: {
   )
 }
 
-function parseContract(json: string | null): Partial<WebhookContractBundle> {
-  if (!json) return {}
-  try { return JSON.parse(json) } catch { return {} }
-}
