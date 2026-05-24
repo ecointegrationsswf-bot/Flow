@@ -5,6 +5,9 @@ dist/
 node_modules/
 publish/
 
+# Scripts ad-hoc / mockups locales — no entran al repo
+mockups/
+
 # IDE
 .vs/
 .vscode/
