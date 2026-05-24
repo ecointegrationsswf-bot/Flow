@@ -643,6 +643,21 @@ public class CampaignDispatcherService(
                     {
                         logger.LogWarning("Campaña {CampaignId}: {Threshold}+ errores consecutivos. Frenando lote.",
                             campaignId, ConsecutiveErrorThreshold);
+                        // Alerta a Teams: señal temprana (antes del auto-pause por %).
+                        // Probablemente la línea acaba de caer mid-batch o UltraMsg está
+                        // devolviendo sent:false/queued. Notificar para que el equipo
+                        // mire antes de que se desperdicien más batches.
+                        try
+                        {
+                            await teamsNotifier.NotifyAsync(
+                                $"⚠️ Batch cortado por {ConsecutiveErrorThreshold} errores consecutivos\n" +
+                                $"• Tenant: {tenant.Name}\n" +
+                                $"• Campaña: {campaign.Name}\n" +
+                                $"• Último error del provider: {Truncate(lastError, 200)}\n" +
+                                $"• Acción: verificar estado de la línea WhatsApp; el dispatcher esperará al próximo cool-down antes de reintentar.",
+                                ct);
+                        }
+                        catch (Exception ex) { logger.LogWarning(ex, "[Dispatcher] Teams notify falló (errores consecutivos)."); }
                         break;
                     }
                 }
@@ -804,6 +819,32 @@ public class CampaignDispatcherService(
     {
         try
         {
+            // ── Notificación a Microsoft Teams (Power Automate) ─────────────
+            // Best-effort independiente del email: el equipo operativo lo ve
+            // inmediato en el canal. Se cubre TODO el escenario del 18/05:
+            // - Linea muerta y UltraMsg responde sent:false/queued → fallos por
+            //   contacto → este auto-pause por % se dispara → Teams alert.
+            // - Aunque #2 y #3 (pre/mid-check de salud) ya pausen primero,
+            //   este es la última red de seguridad si el ping de UltraMsg
+            //   responde "authenticated" pero el envío real está fallando
+            //   por throttling de Meta u otra causa no detectable vía status.
+            try
+            {
+                var tenantName = campaign.Tenant?.Name ?? tenantId.ToString();
+                await teamsNotifier.NotifyAsync(
+                    $"⚠️ Campaña auto-pausada por alta tasa de fallos\n" +
+                    $"• Tenant: {tenantName}\n" +
+                    $"• Campaña: {campaign.Name}\n" +
+                    $"• Resultado del último batch: {failed}/{total} fallidos ({rate:F1}%)\n" +
+                    $"• Causa probable: línea WhatsApp restringida por Meta, lista con números inválidos, o UltraMsg encolando sin entregar.\n" +
+                    $"• Acción: revisar el estado de la línea y las estadísticas de la campaña antes de reanudar.",
+                    CancellationToken.None);
+            }
+            catch (Exception teamsEx)
+            {
+                logger.LogWarning(teamsEx, "[AutoPause] Teams notify falló (no bloqueante).");
+            }
+
             // Buscar admins/supervisores del tenant para notificar
             var adminEmails = await db.AppUsers
                 .Where(u => u.TenantId == tenantId && u.IsActive
