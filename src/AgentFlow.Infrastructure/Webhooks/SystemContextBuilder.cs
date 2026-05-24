@@ -68,6 +68,21 @@ public class SystemContextBuilder(AgentFlowDbContext db, ILogger<SystemContextBu
             {
                 ctx.Set("conversation.id", conv.Id.ToString());
                 ctx.Set("conversation.createdAt", conv.StartedAt.ToString("O"));
+                // Teléfono del cliente (E.164). Lo expongo aquí porque varias
+                // acciones (ej: INSURED_INITIATE / INSURED_VALIDATE de PASESA)
+                // necesitan enviarlo al broker como `telefonoOrigen` y declaran
+                // `sourceType=system, sourceKey=conversation.clientPhone`.
+                // Sin esto el PayloadBuilder devolvía null y los brokers no
+                // podían persistir la asociación teléfono↔asegurado (rompiendo
+                // el caso AUTO_VALIDADO en visitas subsiguientes).
+                if (!string.IsNullOrEmpty(conv.ClientPhone))
+                {
+                    ctx.Set("conversation.clientPhone", conv.ClientPhone);
+                    // Alias también como contact.phone para acciones que prefieren
+                    // ese namespace (ya estaba en SYSTEM_SOURCE_KEYS del frontend).
+                    if (ctx.Get("contact.phone") is null)
+                        ctx.Set("contact.phone", conv.ClientPhone);
+                }
 
                 // Datos del contacto via conversation
                 if (!string.IsNullOrEmpty(conv.ClientName))

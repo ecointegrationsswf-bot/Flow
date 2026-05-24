@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban, MoreVertical, BarChart3 } from 'lucide-react'
+import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban, MoreVertical, BarChart3, Lock } from 'lucide-react'
 import { CampaignDeliveryStatsModal } from './CampaignDeliveryStatsModal'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
@@ -28,17 +28,20 @@ const triggerLabels: Record<string, string> = {
   Manual: 'Manual',
 }
 
+// Badges de estado — pastel discreto pero legible (text-[11px] + px-2 py-0.5).
+// El status final "Cerrada" lleva un poco más de contraste + ícono Lock para que
+// se diferencie del resto sin saltar visualmente.
 const statusConfig: Record<string, { label: string; className: string }> = {
-  Pending:    { label: 'Pendiente',  className: 'bg-gray-100 text-gray-600' },
+  Pending:    { label: 'Pendiente',  className: 'bg-gray-100 text-gray-700' },
   Launching:  { label: 'Lanzando',   className: 'bg-yellow-100 text-yellow-700' },
   Running:    { label: 'En curso',   className: 'bg-green-100 text-green-700' },
   Paused:     { label: 'Pausada',    className: 'bg-orange-100 text-orange-700' },
   Completed:  { label: 'Completada', className: 'bg-blue-100 text-blue-700' },
   Failed:     { label: 'Error',      className: 'bg-red-100 text-red-700' },
-  Cancelled:  { label: 'Cancelada',  className: 'bg-gray-200 text-gray-600 line-through' },
+  Cancelled:  { label: 'Cancelada',  className: 'bg-gray-200 text-gray-500 line-through' },
   // Status final del ciclo de vida — la setea AutoCloseSweep al cumplirse
   // CampaignTemplate.AutoCloseHours desde CompletedAt. No más follow-ups.
-  Closed:     { label: 'Cerrada',    className: 'bg-slate-200 text-slate-700' },
+  Closed:     { label: 'Cerrada',    className: 'bg-slate-300 text-slate-800' },
 }
 
 // Estados desde los que se puede CANCELAR (terminal — irreversible).
@@ -395,8 +398,9 @@ export function CampaignsPage() {
                           </div>
                         </td>
                         <td className="whitespace-nowrap px-2 py-1.5">
-                          <span className={`inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${stCfg.className}`}>
+                          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${stCfg.className}`}>
                             {isRunning && <Loader2 className="h-2.5 w-2.5 animate-spin" />}
+                            {status === 'Closed' && <Lock className="h-2.5 w-2.5" />}
                             {stCfg.label}
                           </span>
                           {/* Badge cool-down: si Running + tiene NextBatchAfterUtc futuro,
