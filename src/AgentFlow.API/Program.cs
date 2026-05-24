@@ -282,6 +282,11 @@ builder.Services.AddHttpClient<IUltraMsgInstanceService, UltraMsgInstanceService
 builder.Services.AddHttpClient(); // IHttpClientFactory para descargar media de UltraMsg
 builder.Services.AddScoped<IChannelProviderFactory, AgentFlow.Infrastructure.Channels.ChannelProviderFactory>();
 
+// ── Notificaciones a Microsoft Teams (Power Automate webhook) ──
+// Alertas operacionales: lineas caidas, campanas auto-pausadas, errores criticos.
+builder.Services.AddHttpClient<AgentFlow.Domain.Interfaces.ITeamsNotifier,
+    AgentFlow.Infrastructure.Notifications.PowerAutomateTeamsNotifier>();
+
 // ── Azure Blob Storage (documentos de agentes) ──────────
 builder.Services.AddSingleton<IBlobStorageService, AzureBlobStorageService>();
 

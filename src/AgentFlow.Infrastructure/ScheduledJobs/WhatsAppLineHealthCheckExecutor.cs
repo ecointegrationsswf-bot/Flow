@@ -29,6 +29,7 @@ public class WhatsAppLineHealthCheckExecutor(
     AgentFlowDbContext db,
     IUltraMsgInstanceService ultra,
     IEmailService email,
+    ITeamsNotifier teamsNotifier,
     ILogger<WhatsAppLineHealthCheckExecutor> log) : IScheduledJobExecutor
 {
     public string Slug => "WHATSAPP_LINE_HEALTH_CHECK";
@@ -75,6 +76,22 @@ public class WhatsAppLineHealthCheckExecutor(
             return JobRunResult.Success(lines.Count,
                 $"Verificadas={lines.Count} · Todas conectadas.");
         }
+
+        // ── Notificación a Microsoft Teams (Power Automate) ───────────
+        // Antes del email a cada admin: un sólo mensaje consolidado a Teams
+        // para el equipo de operaciones. Mucho más rápido que esperar a abrir
+        // los emails y filtrar bandeja.
+        try
+        {
+            var teamsSummary = string.Join("\n", downedLines
+                .OrderBy(l => l.Tenant?.Name)
+                .Select(l => $"• {l.Tenant?.Name ?? "(sin tenant)"} → {l.DisplayName} ({l.PhoneNumber}) — estado: {l.LastStatus ?? "unknown"}"));
+
+            await teamsNotifier.NotifyAsync(
+                $"⚠️ Reporte diario WhatsApp · {downedLines.Count} línea(s) inactiva(s)\n{teamsSummary}",
+                ct);
+        }
+        catch (Exception ex) { log.LogWarning(ex, "[WhatsAppHealth] Teams notify falló."); }
 
         // 3) Notificación a SuperAdmins (1 correo consolidado).
         var superAdminEmails = await db.Set<SuperAdmin>()

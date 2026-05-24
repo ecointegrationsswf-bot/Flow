@@ -263,6 +263,11 @@ builder.Services.AddHttpClient<
     AgentFlow.Infrastructure.Channels.UltraMsg.IUltraMsgInstanceService,
     AgentFlow.Infrastructure.Channels.UltraMsg.UltraMsgInstanceService>();
 
+// ── Notificaciones a Microsoft Teams (Power Automate webhook) ──
+builder.Services.AddHttpClient<
+    AgentFlow.Domain.Interfaces.ITeamsNotifier,
+    AgentFlow.Infrastructure.Notifications.PowerAutomateTeamsNotifier>();
+
 // BackgroundService: tick cada 60s.
 builder.Services.AddHostedService<
     AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
@@ -291,4 +296,40 @@ builder.Services.AddHostedService<AgentFlow.Worker.Inbox.InboundMessageWatchdog>
 // ── Run ──────────────────────────────────────────────────
 var host = builder.Build();
 Console.WriteLine("[Worker] AgentFlow.Worker arrancando…");
+
+// ── Notificación a Teams del ciclo de vida del Worker ────
+// Started: arrancó correctamente y está procesando.
+// Stopping: parada gracefull (sc.exe stop, Ctrl+C, deploy). Crashes abruptos
+// (kill -9, OOM, BSOD) NO disparan ApplicationStopping — para eso necesitamos
+// un watchdog externo (ej: job en el API que verifica heartbeat).
+var lifetime = host.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
+var teamsNotifier = host.Services.GetRequiredService<AgentFlow.Domain.Interfaces.ITeamsNotifier>();
+var hostName = Environment.MachineName;
+
+lifetime.ApplicationStarted.Register(() =>
+{
+    try
+    {
+        _ = teamsNotifier.NotifyAsync(
+            $"✅ AgentFlow Worker iniciado en `{hostName}` (UTC {DateTime.UtcNow:HH:mm:ss}).",
+            CancellationToken.None);
+    }
+    catch { /* best-effort, no bloquea arranque */ }
+});
+
+lifetime.ApplicationStopping.Register(() =>
+{
+    try
+    {
+        // Síncrono porque ApplicationStopping no espera tareas asíncronas —
+        // damos hasta 5s para que el HTTP POST termine antes de matar el proceso.
+        var task = teamsNotifier.NotifyAsync(
+            $"🛑 AgentFlow Worker detenido en `{hostName}` (UTC {DateTime.UtcNow:HH:mm:ss}). " +
+            "Si la parada NO fue planeada, los mensajes de la cola quedan sin procesar hasta reiniciar.",
+            CancellationToken.None);
+        task.Wait(TimeSpan.FromSeconds(5));
+    }
+    catch { /* best-effort */ }
+});
+
 await host.RunAsync();

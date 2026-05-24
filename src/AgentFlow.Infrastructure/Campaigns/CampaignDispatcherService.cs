@@ -39,6 +39,7 @@ public class CampaignDispatcherService(
     IEmailService emailService,
     EmailTemplateRenderer emailRenderer,
     IUltraMsgInstanceService ultraMsgInstance,
+    ITeamsNotifier teamsNotifier,
     ILogger<CampaignDispatcherService> logger)
 {
     // ── Mínimos de seguridad — tope inferior aunque la config diga lo contrario ──
@@ -1356,6 +1357,21 @@ por el sistema de protección anti-restricción.</p>
     private async Task NotifyLineDownAsync(
         Tenant tenant, Campaign campaign, string reason, CancellationToken ct)
     {
+        // ── Notificación a Microsoft Teams (Power Automate) ─────────────────
+        // El equipo operativo necesita enterarse INMEDIATO, no esperar al email.
+        // Best-effort: si Teams falla, igual mandamos el email a Admin/Supervisor.
+        try
+        {
+            await teamsNotifier.NotifyAsync(
+                $"⚠️ Campaña pausada por línea WhatsApp caída\n" +
+                $"• Tenant: {tenant.Name}\n" +
+                $"• Campaña: {campaign.Name}\n" +
+                $"• Motivo: {reason}\n" +
+                $"• Acción: reconectar la línea desde Configuración → WhatsApp, luego reanudar la campaña.",
+                ct);
+        }
+        catch (Exception ex) { logger.LogWarning(ex, "[LineHealth] Teams notify falló."); }
+
         var recipients = await db.Set<AppUser>()
             .Where(u => u.TenantId == tenant.Id && u.IsActive
                      && (u.Role == UserRole.Admin || u.Role == UserRole.Supervisor))
