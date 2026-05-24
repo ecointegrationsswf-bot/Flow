@@ -1,6 +1,7 @@
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Channels.UltraMsg;
 using AgentFlow.Infrastructure.Email;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -37,11 +38,18 @@ public class CampaignDispatcherService(
     IBusinessHoursClock businessHours,
     IEmailService emailService,
     EmailTemplateRenderer emailRenderer,
+    IUltraMsgInstanceService ultraMsgInstance,
     ILogger<CampaignDispatcherService> logger)
 {
     // ── Mínimos de seguridad — tope inferior aunque la config diga lo contrario ──
     private const int MinDelaySecondsFloor = 3;     // jamás bajamos de 3s entre mensajes
     private const int ConsecutiveErrorThreshold = 3; // 3 errores seguidos → frena
+    // Cada cuántos envíos EXITOSOS re-validamos que la línea siga authenticated.
+    // Cinturón doble contra el escenario del 18/05: línea cae a mitad del batch y
+    // UltraMsg responde HTTP 200 con sent=false (encolando internamente). Aunque
+    // el Fix #1 valida el body, este check periódico atrapa el caso edge donde
+    // la línea cae justo antes de un envío y el body responde algo no esperado.
+    private const int LineHealthRecheckEveryN = 5;
 
     private static readonly Random _random = new();
 
@@ -214,6 +222,30 @@ public class CampaignDispatcherService(
                 }
                 // Si tiene varios canales y falta WhatsApp, seguimos con los otros pero avisamos.
                 logger.LogWarning("Campaña {CampaignId}: WhatsApp habilitado en el agente pero tenant sin línea. Se omite WhatsApp en los envíos.", campaignId);
+            }
+            else
+            {
+                // ── Fix #2 — Pre-check de salud de la línea ANTES de empezar el batch ──
+                // Llama UltraMsg /instance/status. Si != "authenticated" abortamos el
+                // batch, pausamos la campaña y notificamos al admin. Evita el escenario
+                // del 18/05 donde la línea estaba caída y UltraMsg encolaba 95 mensajes.
+                var (healthy, reason) = await EnsureWhatsAppLineHealthyAsync(tenant.Id, ct);
+                if (!healthy)
+                {
+                    logger.LogWarning("Campaña {CampaignId}: línea WhatsApp NO sana ({Reason}). Pausando campaña.",
+                        campaignId, reason);
+                    campaign.IsActive = false;
+                    campaign.Status = CampaignStatus.Paused;
+                    await db.SaveChangesAsync(ct);
+
+                    // Notificar al admin del tenant (best-effort).
+                    try { await NotifyLineDownAsync(tenant, campaign, reason!, ct); }
+                    catch (Exception ex) { logger.LogWarning(ex, "[LineHealth] Notificación falló (no bloqueante)."); }
+
+                    return new DispatchResult(0, 0,
+                        $"Línea WhatsApp inactiva: {reason}",
+                        DispatchStopReason.NoProvider);
+                }
             }
         }
 
@@ -564,6 +596,27 @@ public class CampaignDispatcherService(
                     contact.DispatchError = null;
                     sent++;
                     consecutiveErrors = 0;
+
+                    // ── Fix #3 — Re-validar salud de la línea cada N envíos exitosos ──
+                    // Cinturón doble contra el caso 18/05: aunque el body venga "ok",
+                    // si la línea cayó a mitad del batch este check lo atrapa antes de
+                    // seguir bombardeando UltraMsg con requests que terminan en su cola.
+                    if (waProvider is not null && sent > 0 && sent % LineHealthRecheckEveryN == 0)
+                    {
+                        var (stillHealthy, midReason) = await EnsureWhatsAppLineHealthyAsync(tenant.Id, ct);
+                        if (!stillHealthy)
+                        {
+                            logger.LogWarning(
+                                "Campaña {CampaignId}: línea WhatsApp cayó a mitad de batch tras {Sent} envíos ({Reason}). Pausando.",
+                                campaignId, sent, midReason);
+                            campaign.IsActive = false;
+                            campaign.Status = CampaignStatus.Paused;
+                            await db.SaveChangesAsync(ct);
+                            try { await NotifyLineDownAsync(tenant, campaign, midReason!, ct); }
+                            catch (Exception ex) { logger.LogWarning(ex, "[LineHealth] Notificación mid-batch falló."); }
+                            break;
+                        }
+                    }
                 }
                 else if (channelFailures > 0)
                 {
@@ -1230,6 +1283,119 @@ por el sistema de protección anti-restricción.</p>
             && TimeZoneInfo.TryFindSystemTimeZoneById(ianaId, out var ianaTz) && ianaTz is not null)
             return ianaTz;
         return TimeZoneInfo.Utc;
+    }
+
+    /// <summary>
+    /// Verifica que la línea WhatsApp del tenant esté "authenticated" antes de
+    /// enviar mensajes. Pingea UltraMsg /instance/status para la línea activa.
+    /// Devuelve (false, motivo) cuando hay que abortar el batch.
+    ///
+    /// Solo aplica al provider UltraMsg. Para MetaCloudApi devuelve siempre
+    /// (true, null) porque Meta tiene mejores garantías del lado del provider.
+    ///
+    /// Persistir LastStatus en la WhatsAppLine también sirve al monitor diario:
+    /// si el dispatcher detecta la caída a las 11 AM, el badge en la UI ya lo
+    /// refleja sin esperar al ping de las 6 AM siguiente.
+    /// </summary>
+    private async Task<(bool Healthy, string? Reason)> EnsureWhatsAppLineHealthyAsync(
+        Guid tenantId, CancellationToken ct)
+    {
+        var line = await db.Set<WhatsAppLine>()
+            .Where(l => l.TenantId == tenantId && l.IsActive)
+            .FirstOrDefaultAsync(ct);
+
+        if (line is null)
+            return (false, "Sin línea WhatsApp activa para el tenant.");
+
+        // Solo validamos UltraMsg. MetaCloudApi tiene mejor manejo de errores
+        // y no necesita pre-check (su API responde 4xx cuando la cuenta está mal).
+        if (line.Provider != ProviderType.UltraMsg)
+            return (true, null);
+
+        UltraMsgInstanceStatus status;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            status = await ultraMsgInstance.GetStatusAsync(line.InstanceId, line.ApiToken, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            // Timeout o error de red — NO podemos confirmar que la línea esté sana.
+            // Política conservadora: fail-closed. Mejor abortar batch que arriesgar
+            // bombardear UltraMsg si la línea está caída y solo no respondió a tiempo.
+            logger.LogWarning(ex, "[LineHealth] Ping a UltraMsg falló para tenant {TenantId}.", tenantId);
+            line.ConsecutivePingFailures++;
+            line.LastStatusCheckedAt = DateTime.UtcNow;
+            try { await db.SaveChangesAsync(ct); } catch { }
+            return (false, $"No se pudo verificar el estado de la línea: {ex.Message}");
+        }
+
+        // Persistir el resultado del ping (igual que hace el job diario).
+        line.LastStatus = status.Status;
+        line.LastStatusCheckedAt = DateTime.UtcNow;
+        if (string.Equals(status.Status, "authenticated", StringComparison.OrdinalIgnoreCase))
+            line.ConsecutivePingFailures = 0;
+        else
+            line.ConsecutivePingFailures++;
+        try { await db.SaveChangesAsync(ct); } catch { }
+
+        if (!string.Equals(status.Status, "authenticated", StringComparison.OrdinalIgnoreCase))
+            return (false, $"Línea '{line.DisplayName}' en estado '{status.Status}' (no authenticated).");
+
+        return (true, null);
+    }
+
+    /// <summary>
+    /// Notificación best-effort al Admin del tenant cuando una campaña se pausa
+    /// porque su línea WhatsApp cayó. Se invoca desde 2 sitios: pre-check inicial
+    /// y re-check mid-batch. Best-effort: si el email falla, NO bloquea el flujo
+    /// (la campaña ya quedó Pausada con su Status, suficiente para que el equipo
+    /// lo vea en la UI cuando entren).
+    /// </summary>
+    private async Task NotifyLineDownAsync(
+        Tenant tenant, Campaign campaign, string reason, CancellationToken ct)
+    {
+        var recipients = await db.Set<AppUser>()
+            .Where(u => u.TenantId == tenant.Id && u.IsActive
+                     && (u.Role == UserRole.Admin || u.Role == UserRole.Supervisor))
+            .Select(u => u.Email)
+            .ToListAsync(ct);
+
+        if (recipients.Count == 0)
+        {
+            logger.LogWarning("[LineHealth] Tenant {Tenant} sin Admin/Supervisor activos — no se notifica caída.",
+                tenant.Name);
+            return;
+        }
+
+        var subject = $"⚠️ Campaña pausada — línea WhatsApp de {tenant.Name} sin conexión";
+        var html = $"""
+<!DOCTYPE html><html><body style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:24px;color:#333;">
+  <table cellpadding="0" cellspacing="0" width="100%" style="background:#b91c1c;color:#fff;border-radius:6px;margin-bottom:20px;">
+    <tr><td bgcolor="#b91c1c" style="background:#b91c1c;color:#fff;padding:20px;">
+      <h2 style="margin:0;color:#fff;">⚠️ Campaña pausada automáticamente</h2>
+    </td></tr>
+  </table>
+  <p>La campaña <b>{System.Net.WebUtility.HtmlEncode(campaign.Name)}</b> se pausó automáticamente porque la línea WhatsApp del tenant <b>{System.Net.WebUtility.HtmlEncode(tenant.Name)}</b> no está conectada.</p>
+  <div style="background:#fff7ed;border-left:4px solid #f59e0b;padding:12px 16px;margin:16px 0;">
+    <p style="margin:0;"><b>Motivo:</b> {System.Net.WebUtility.HtmlEncode(reason)}</p>
+  </div>
+  <p><b>Qué hacer:</b></p>
+  <ol>
+    <li>Ingresa al portal y ve a <b>Configuración → WhatsApp</b>.</li>
+    <li>Presiona <b>Vincular</b> en la línea afectada y escanea el QR.</li>
+    <li>Una vez reconectada, presiona <b>Reanudar</b> en la campaña pausada.</li>
+  </ol>
+  <p style="margin-top:24px;color:#6b7280;font-size:12px;">Esta pausa automática protege el número de un posible bloqueo por parte de Meta cuando UltraMsg encola mensajes sin entregar.</p>
+</body></html>
+""";
+
+        foreach (var to in recipients)
+        {
+            try { await emailService.SendCustomHtmlAsync(to, ccEmail: null, subject, html, textBody: null, ct); }
+            catch (Exception ex) { logger.LogWarning(ex, "[LineHealth] Email a {Email} falló.", to); }
+        }
     }
 }
 
