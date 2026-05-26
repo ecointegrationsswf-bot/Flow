@@ -491,10 +491,49 @@ public class CampaignDispatcherService(
                         string? generationError = null;
                         if (messageGenerator is not null)
                         {
-                            try { message = await messageGenerator.GenerateAsync(campaign, contact, ct); }
+                            try
+                            {
+                                var genResult = await messageGenerator.GenerateAsync(campaign, contact, ct);
+                                if (genResult.ErrorCode == MessageGenerationError.None)
+                                {
+                                    message = genResult.Text;
+                                }
+                                else
+                                {
+                                    // Mapeo de código de error a mensaje accionable para el admin del tenant.
+                                    // Cada código tiene una causa raíz distinta y una acción correctiva distinta.
+                                    generationError = genResult.ErrorCode switch
+                                    {
+                                        MessageGenerationError.NoApiKey =>
+                                            "Falta configurar la API key del LLM en este tenant. " +
+                                            "Acción: ir a Configuración → Tenant → pegar la API key de Anthropic y guardar. " +
+                                            "Luego reanudar la campaña desde la página de Campañas.",
+                                        MessageGenerationError.NoPrompt =>
+                                            "El maestro de campaña no tiene prompt configurado. " +
+                                            "Acción: ir a Maestros de Campaña → editar este maestro → tab Prompt → configurar el SystemPrompt y guardar.",
+                                        MessageGenerationError.EmptyPromptTemplate =>
+                                            "El PromptTemplate global asociado al maestro está vacío. " +
+                                            $"Acción: ir a Admin → Prompts y configurar el contenido. Detalle: {genResult.Detail}",
+                                        MessageGenerationError.NoContactData =>
+                                            "El contacto no tiene los datos del archivo cargados (ContactDataJson vacío). " +
+                                            "Acción: re-cargar el archivo de la campaña con los datos completos por columna. " +
+                                            "Si el problema persiste, reportar al equipo de TI (problema en el procesador del archivo).",
+                                        MessageGenerationError.LlmException =>
+                                            $"El servicio del LLM respondió con error. Detalle: {Truncate(genResult.Detail, 250)}. " +
+                                            "Verificar que la API key del tenant sea válida y el modelo esté disponible.",
+                                        MessageGenerationError.EmptyLlmResponse =>
+                                            "El LLM respondió con texto vacío. Esto suele indicar un prompt mal formado o sin contexto suficiente. " +
+                                            "Acción: revisar el SystemPrompt del maestro y los datos del contacto.",
+                                        _ => $"Error desconocido del generador IA: {genResult.ErrorCode}."
+                                    };
+                                    logger.LogWarning(
+                                        "Campaña {CampaignId}: generación falló para {Phone} con código {Code}. Detalle: {Detail}",
+                                        campaignId, contact.PhoneNumber, genResult.ErrorCode, genResult.Detail);
+                                }
+                            }
                             catch (Exception exGen)
                             {
-                                generationError = exGen.Message;
+                                generationError = $"Excepción inesperada del generador: {Truncate(exGen.Message, 250)}";
                                 logger.LogWarning(exGen, "Campaña {CampaignId}: generación con Claude falló para {Phone}.",
                                     campaignId, contact.PhoneNumber);
                             }
@@ -514,35 +553,34 @@ public class CampaignDispatcherService(
                                 logger.LogError(
                                     "Campaña {CampaignId}: el LLM emitió output META para {Phone} (no apto para cliente). Razón: {Reason}. Output (primeros 500 chars): {Output}",
                                     campaignId, contact.PhoneNumber, metaReason, Truncate(message, 500));
-                                generationError = $"El LLM emitió un mensaje meta no apto para enviar al cliente ({metaReason}). " +
-                                                  "Esto suele indicar un prompt sin reglas claras de formato/identidad. " +
-                                                  "Revisar el SystemPrompt del template de campaña.";
+                                generationError = $"El LLM emitió un mensaje 'meta' no apto para el cliente ({metaReason}). " +
+                                                  "Causa probable: el SystemPrompt del maestro no tiene reglas claras de formato e identidad — " +
+                                                  "el LLM se confundió y emitió texto técnico/refusal en vez del mensaje al cliente. " +
+                                                  "Acción: editar el maestro → tab Prompt → reforzar las reglas de tono y formato → guardar.";
                                 message = null;
                             }
                         }
 
                         if (string.IsNullOrWhiteSpace(message))
                         {
-                            // No mandamos mensaje "basura" hardcodeado al cliente cuando el
-                            // generador IA no produjo nada. Antes caíamos a un texto fijo de
-                            // "le saluda el equipo de cobros" — peligroso para tenants que no
-                            // son de cobros (ej. Internacional de Seguros / Ventas / Reclamos).
-                            // Marcamos el contacto como Error con un mensaje claro para que el
-                            // admin contacte al equipo de TI a revisar la parametrización del LLM
-                            // (LlmApiKey del tenant, SystemPrompt del template, etc.).
-                            var detail = generationError is not null
-                                ? $"Excepción del LLM: {Truncate(generationError, 300)}"
-                                : "El generador IA no produjo mensaje. Posibles causas: tenant sin LlmApiKey, template sin SystemPrompt, contacto sin ContactDataJson, o respuesta vacía de Claude.";
+                            // El mensaje accionable ya viene en generationError (el switch
+                            // por MessageGenerationError lo armó con la acción correctiva
+                            // específica). Si llegamos acá sin generationError (caso raro:
+                            // messageGenerator==null pero no debería pasar en prod), usamos
+                            // un fallback genérico.
+                            var finalError = !string.IsNullOrWhiteSpace(generationError)
+                                ? generationError
+                                : "No se generó mensaje (generador IA no disponible). Reportar al equipo de TI.";
                             attempt = new DispatchAttemptResult(
                                 Success: false,
                                 ExternalId: null,
-                                Error: $"No se envió el mensaje a este contacto: revisar con el equipo de TI la parametrización del LLM. {detail}",
+                                Error: finalError,
                                 SentContent: null,
                                 Subject: null,
                                 Recipient: contact.PhoneNumber);
                             logger.LogError(
-                                "Campaña {CampaignId}: NO se envió mensaje a {Phone} — generador IA retornó vacío. {Detail}",
-                                campaignId, contact.PhoneNumber, detail);
+                                "Campaña {CampaignId}: NO se envió mensaje a {Phone}. {Detail}",
+                                campaignId, contact.PhoneNumber, finalError);
                         }
                         else
                         {

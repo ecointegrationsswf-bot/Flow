@@ -21,7 +21,7 @@ public class InitialMessageGenerator(
     AgentFlowDbContext db,
     ILogger<InitialMessageGenerator> logger) : IInitialMessageGenerator
 {
-    public async Task<string?> GenerateAsync(
+    public async Task<MessageGenerationResult> GenerateAsync(
         Campaign campaign,
         CampaignContact contact,
         CancellationToken ct = default)
@@ -45,9 +45,9 @@ public class InitialMessageGenerator(
             if (promptIds is null || promptIds.Count == 0)
             {
                 logger.LogWarning(
-                    "Campaign {Id}: maestro sin SystemPrompt local ni PromptTemplateIds — fallback al template básico.",
+                    "Campaign {Id}: maestro sin SystemPrompt local ni PromptTemplateIds.",
                     campaign.Id);
-                return null;
+                return MessageGenerationResult.Fail(MessageGenerationError.NoPrompt);
             }
 
             var promptId = promptIds[0];
@@ -59,9 +59,10 @@ public class InitialMessageGenerator(
             if (string.IsNullOrWhiteSpace(prompt))
             {
                 logger.LogWarning(
-                    "Campaign {Id}: PromptTemplate {Pid} sin SystemPrompt y maestro tampoco lo tiene local — fallback al template básico.",
+                    "Campaign {Id}: PromptTemplate {Pid} sin SystemPrompt y maestro tampoco lo tiene local.",
                     campaign.Id, promptId);
-                return null;
+                return MessageGenerationResult.Fail(MessageGenerationError.EmptyPromptTemplate,
+                    $"PromptTemplate {promptId} vacío.");
             }
 
             logger.LogInformation(
@@ -77,9 +78,9 @@ public class InitialMessageGenerator(
         var apiKey = campaign.Tenant?.LlmApiKey;
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            logger.LogWarning("Campaign {Id}: tenant {TenantId} sin LlmApiKey — fallback al template básico.",
+            logger.LogWarning("Campaign {Id}: tenant {TenantId} sin LlmApiKey.",
                 campaign.Id, campaign.TenantId);
-            return null;
+            return MessageGenerationResult.Fail(MessageGenerationError.NoApiKey);
         }
 
         // ContactDataJson DEBE venir poblado por el upstream (FixedFormatCampaignService
@@ -89,10 +90,10 @@ public class InitialMessageGenerator(
         if (string.IsNullOrWhiteSpace(contact.ContactDataJson))
         {
             logger.LogWarning(
-                "Campaign {Id}: contact {Phone} sin ContactDataJson — fallback al template básico. " +
-                "Revisar upstream (FixedFormatCampaignService/DelinquencyProcessor) que debe poblar este campo.",
+                "Campaign {Id}: contact {Phone} sin ContactDataJson. " +
+                "Revisar upstream (FixedFormatCampaignService/DelinquencyProcessor).",
                 campaign.Id, contact.PhoneNumber);
-            return null;
+            return MessageGenerationResult.Fail(MessageGenerationError.NoContactData);
         }
 
         // Contexto = registros del JSON + campos directos del contact (resuelve {{NombreCliente}} etc.).
@@ -122,12 +123,15 @@ public class InitialMessageGenerator(
                 }, ct);
 
             var text = resp.Content.OfType<TextContent>().FirstOrDefault()?.Text?.Trim();
-            return string.IsNullOrWhiteSpace(text) ? null : text;
+            return string.IsNullOrWhiteSpace(text)
+                ? MessageGenerationResult.Fail(MessageGenerationError.EmptyLlmResponse)
+                : MessageGenerationResult.Ok(text);
         }
         catch (Exception ex)
         {
-            logger.LogError(ex, "Campaign {Id}: error generando mensaje con Claude — fallback al template básico.", campaign.Id);
-            return null;
+            logger.LogError(ex, "Campaign {Id}: error generando mensaje con Claude.", campaign.Id);
+            return MessageGenerationResult.Fail(MessageGenerationError.LlmException,
+                detail: ex.Message);
         }
     }
 
