@@ -234,13 +234,20 @@ export function InvalidNumbersPage() {
                   className="w-full rounded border border-gray-300 px-2 py-1.5 text-xs"
                 />
               </div>
-              <label className="flex items-center gap-2 text-xs text-gray-700">
+              <label className="flex items-start gap-2 text-xs text-gray-700">
                 <input
                   type="checkbox"
                   checked={newIsGlobal}
                   onChange={(e) => setNewIsGlobal(e.target.checked)}
+                  className="mt-0.5"
                 />
-                Aplicar globalmente (a todos los tenants)
+                <div>
+                  <div>Elevar a global (aplicar a todos los tenants)</div>
+                  <div className="text-[10px] text-gray-500 mt-0.5">
+                    Por default el bloqueo es solo para este tenant. Activar solo si confirmaste
+                    que el número está fuera de WhatsApp a nivel global (línea cerrada, baja oficial, etc.).
+                  </div>
+                </div>
               </label>
             </div>
             <div className="mt-4 flex justify-end gap-2">

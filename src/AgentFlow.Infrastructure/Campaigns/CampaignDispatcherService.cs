@@ -594,11 +594,13 @@ public class CampaignDispatcherService(
                                 {
                                     try
                                     {
+                                        // Registro por tenant — datasets diferentes por corredor.
+                                        // El admin puede elevar a global desde el panel si aplica.
                                         await whatsAppValidator.RegisterAsBlacklistedAsync(
                                             contact.PhoneNumber,
                                             reason: $"Dispatch error: {Truncate(waResult.Error, 300)}",
                                             source: "dispatch-error",
-                                            tenantId: null,
+                                            tenantId: tenant.Id,
                                             campaignId: campaignId,
                                             userId: null,
                                             ct: ct);

@@ -13,10 +13,14 @@ namespace AgentFlow.Domain.Entities;
 ///   - Protege la reputación de la línea WhatsApp (menos rechazos en cadena).
 ///   - Mejora la métrica real de efectividad (denominador limpio).
 ///
-/// Se considera "cross-tenant" por defecto (TenantId = null): si un número no
-/// existe en WhatsApp para Somos Seguros, tampoco existe para PASESA. Pero el
-/// admin puede agregar entradas con TenantId específico si quiere bloquear el
-/// número solo para un corredor (ej: "este cliente cambió de aseguradora").
+/// El registro es POR TENANT por DEFAULT (TenantId = tenant del corredor que
+/// detectó el número). Cada corredor maneja su propio universo de datos y un
+/// número puede ser inválido para uno por un error de carga sin serlo para otro.
+///
+/// El admin PUEDE ELEVAR un número a "global" (TenantId = null) desde el panel
+/// cuando aplica a todos (ej: número reportado por baja oficial, línea WhatsApp
+/// Business cerrada, etc.). El validador, al leer, consulta primero la entrada
+/// del tenant; si no hay, busca la global.
 /// </summary>
 public class InvalidWhatsAppNumber
 {

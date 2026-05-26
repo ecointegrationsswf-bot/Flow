@@ -79,12 +79,17 @@ public class WhatsAppNumberValidator(
 
         if (existsInWa == false)
         {
-            // Registramos en lista negra (idempotente).
+            // Registramos en lista negra del TENANT (no cross-tenant).
+            // Razón: datasets distintos por corredor — el mismo teléfono puede
+            // estar mal escrito para Somos pero correcto para PASESA. Quien
+            // suba el archivo es responsable de su universo. Un admin puede
+            // elevar manualmente a "global" desde el panel si tiene razón
+            // operativa (ej: número reportado por baja general).
             await RegisterAsBlacklistedAsync(
                 phoneNumber,
                 reason: "No registrado en WhatsApp (UltraMsg /contacts/check status=invalid)",
                 source: "ultramsg-precheck",
-                tenantId: null,                 // cross-tenant — si no existe para uno, no existe para nadie
+                tenantId: tenantId,
                 campaignId: campaignId,
                 userId: null,
                 ct: ct);
