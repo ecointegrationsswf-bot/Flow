@@ -120,6 +120,10 @@ export default function App() {
           <Route element={<PermissionRoute permission="view_campaigns" />}>
             <Route path="/campaigns" element={<CampaignsPage />} />
             <Route path="/campaigns/:id/contacts" element={<CampaignContactsPage />} />
+            {/* Lista negra de números sin WhatsApp — vista por tenant.
+                Backend (InvalidNumbersController) filtra por TenantId automáticamente
+                cuando el usuario NO es super admin, así que se reutiliza la misma página. */}
+            <Route path="/invalid-numbers" element={<InvalidNumbersPage />} />
           </Route>
           <Route element={<PermissionRoute permission="create_campaigns" />}>
             <Route path="/campaigns/new" element={<CampaignUploadPage />} />
