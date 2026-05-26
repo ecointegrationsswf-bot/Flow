@@ -42,7 +42,8 @@ export function useInvalidNumbers(filter: InvalidNumbersFilter = {}) {
       if (filter.isActive !== undefined) params.isActive = filter.isActive
       if (filter.page !== undefined) params.page = filter.page
       if (filter.pageSize !== undefined) params.pageSize = filter.pageSize
-      const { data } = await client.get<InvalidNumbersListResponse>('/api/invalid-numbers', { params })
+      // El `api` axios tiene baseURL='/api' configurado — las rutas NO deben repetir '/api/'.
+      const { data } = await client.get<InvalidNumbersListResponse>('/invalid-numbers', { params })
       return data
     },
     placeholderData: (prev) => prev,
@@ -53,7 +54,7 @@ export function useRestoreInvalidNumber() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (id: string) => {
-      const { data } = await client.post(`/api/invalid-numbers/${id}/restore`)
+      const { data } = await client.post(`/invalid-numbers/${id}/restore`)
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['invalid-numbers'] }),
@@ -64,7 +65,7 @@ export function useAddInvalidNumber() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (payload: { phoneNumber: string; reason?: string; isGlobal?: boolean }) => {
-      const { data } = await client.post('/api/invalid-numbers', payload)
+      const { data } = await client.post('/invalid-numbers', payload)
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ['invalid-numbers'] }),
