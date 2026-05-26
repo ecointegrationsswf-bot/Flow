@@ -19,7 +19,10 @@ namespace AgentFlow.Application.Modules.Campaigns;
 /// 6. Guarda todo en la base de datos en una sola transacción
 /// 7. Retorna el ID de la campaña creada
 /// </summary>
-public class StartCampaignCommandHandler(ICampaignRepository campaigns) : IRequestHandler<StartCampaignCommand, Guid>
+public class StartCampaignCommandHandler(
+    ICampaignRepository campaigns,
+    IWhatsAppNumberValidator? whatsAppValidator = null)
+    : IRequestHandler<StartCampaignCommand, Guid>
 {
     public async Task<Guid> Handle(StartCampaignCommand cmd, CancellationToken ct)
     {
@@ -64,6 +67,23 @@ public class StartCampaignCommandHandler(ICampaignRepository campaigns) : IReque
             // Detectar duplicados: si el teléfono ya apareció, marcarlo como inválido
             var isDuplicate = !seenPhones.Add(normalizedPhone);
 
+            // ── Validación contra lista negra histórica (InvalidWhatsAppNumbers) ──
+            // Si el validador está disponible, consulta la lista negra de números que
+            // ya sabemos que no tienen WhatsApp (por intentos previos o registro manual).
+            // No toca UltraMsg en este paso — la validación pre-envío vive en el
+            // dispatcher. Esto es solo el filtro barato sobre la BD local.
+            string? blacklistReason = null;
+            if (whatsAppValidator is not null && isValid && !isDuplicate)
+            {
+                try
+                {
+                    var blacklisted = await whatsAppValidator.CheckBlacklistAsync(normalizedPhone, cmd.TenantId, ct);
+                    if (blacklisted is not null)
+                        blacklistReason = $"Lista negra: {blacklisted.Reason}";
+                }
+                catch { /* no bloquear la carga por error del validator — fail-open */ }
+            }
+
             var contact = new CampaignContact
             {
                 Id = Guid.NewGuid(),
@@ -76,7 +96,8 @@ public class StartCampaignCommandHandler(ICampaignRepository campaigns) : IReque
                 PendingAmount = row.PendingAmount,
                 ExtraData = row.Extra ?? new Dictionary<string, string>(),
                 ContactDataJson = row.ContactDataJson,
-                IsPhoneValid = isValid && !isDuplicate,
+                IsPhoneValid = isValid && !isDuplicate && blacklistReason is null,
+                DispatchError = blacklistReason,  // si está en lista negra, ya queda el motivo registrado
                 RetryCount = 0,
                 Result = GestionResult.Pending,
                 CreatedAt = DateTime.UtcNow

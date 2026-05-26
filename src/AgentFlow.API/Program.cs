@@ -282,6 +282,11 @@ builder.Services.AddHttpClient<IUltraMsgInstanceService, UltraMsgInstanceService
 builder.Services.AddHttpClient(); // IHttpClientFactory para descargar media de UltraMsg
 builder.Services.AddScoped<IChannelProviderFactory, AgentFlow.Infrastructure.Channels.ChannelProviderFactory>();
 
+// Validador de números WhatsApp (lista negra + UltraMsg /contacts/check)
+builder.Services.AddHttpClient<AgentFlow.Infrastructure.Channels.UltraMsg.UltraMsgContactsChecker>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWhatsAppNumberValidator,
+    AgentFlow.Infrastructure.Channels.UltraMsg.WhatsAppNumberValidator>();
+
 // ── Notificaciones a Microsoft Teams (Power Automate webhook) ──
 // Alertas operacionales: lineas caidas, campanas auto-pausadas, errores criticos.
 builder.Services.AddHttpClient<AgentFlow.Domain.Interfaces.ITeamsNotifier,
@@ -1176,6 +1181,43 @@ try
             END");
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] InboundMessageQueueItems: {ex.Message}"); }
+
+    // ── InvalidWhatsAppNumbers — lista negra de números sin WhatsApp ──
+    // Auto-aprende de UltraMsg /contacts/check (pre-envío) y de errores de
+    // dispatch. Cross-tenant por default (TenantId NULL). Soft-delete via IsActive
+    // para no perder histórico cuando un admin restaura un falso positivo.
+    try
+    {
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'InvalidWhatsAppNumbers')
+            BEGIN
+                CREATE TABLE InvalidWhatsAppNumbers (
+                    Id                   uniqueidentifier NOT NULL PRIMARY KEY DEFAULT NEWID(),
+                    PhoneNumber          varchar(30)  NOT NULL,
+                    Reason               nvarchar(500) NOT NULL,
+                    Source               varchar(40)  NOT NULL,
+                    FirstDetectedAt      datetime2    NOT NULL DEFAULT SYSUTCDATETIME(),
+                    LastCheckedAt        datetime2    NOT NULL DEFAULT SYSUTCDATETIME(),
+                    OccurrenceCount      int          NOT NULL DEFAULT 1,
+                    TenantId             uniqueidentifier NULL,
+                    LastTenantId         uniqueidentifier NULL,
+                    LastCampaignId       uniqueidentifier NULL,
+                    Notes                nvarchar(1000) NULL,
+                    IsActive             bit          NOT NULL DEFAULT 1,
+                    CreatedByUserId      uniqueidentifier NULL,
+                    DeactivatedByUserId  uniqueidentifier NULL,
+                    DeactivatedAt        datetime2    NULL
+                );
+                -- Único por (phone, tenant) — permite entradas globales (TenantId=NULL)
+                -- coexistiendo con entradas específicas por tenant. SQL Server permite
+                -- múltiples NULL en un índice único por default (a diferencia de ANSI).
+                CREATE UNIQUE INDEX UX_InvalidWANumber_Phone_Tenant
+                    ON InvalidWhatsAppNumbers (PhoneNumber, TenantId);
+                CREATE INDEX IX_InvalidWANumber_Active_LastCheck
+                    ON InvalidWhatsAppNumbers (IsActive, LastCheckedAt DESC);
+            END");
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] InvalidWhatsAppNumbers: {ex.Message}"); }
 
     // ── Fase 3: columnas de etiquetado IA (self-healing) ──
     // Solo persistimos en Conversations el resultado de la clasificación.

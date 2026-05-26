@@ -263,6 +263,11 @@ builder.Services.AddHttpClient<
     AgentFlow.Infrastructure.Channels.UltraMsg.IUltraMsgInstanceService,
     AgentFlow.Infrastructure.Channels.UltraMsg.UltraMsgInstanceService>();
 
+// Validador de números WhatsApp (lista negra + UltraMsg /contacts/check)
+builder.Services.AddHttpClient<AgentFlow.Infrastructure.Channels.UltraMsg.UltraMsgContactsChecker>();
+builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWhatsAppNumberValidator,
+    AgentFlow.Infrastructure.Channels.UltraMsg.WhatsAppNumberValidator>();
+
 // ── Notificaciones a Microsoft Teams (Power Automate webhook) ──
 builder.Services.AddHttpClient<
     AgentFlow.Domain.Interfaces.ITeamsNotifier,

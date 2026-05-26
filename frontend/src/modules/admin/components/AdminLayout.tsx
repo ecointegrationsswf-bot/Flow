@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Building2, Bot, Tag, Phone, Users, LogOut, Zap, FileText,
-  Calendar, TrendingDown, PanelLeftClose, PanelLeft, Inbox, Send,
+  Calendar, TrendingDown, PanelLeftClose, PanelLeft, Inbox, Send, ShieldAlert,
 } from 'lucide-react'
 import { useSuperAdminStore } from '@/shared/stores/superAdminStore'
 
@@ -16,6 +16,7 @@ const adminNav = [
   { to: '/admin/actions',         icon: Zap,         label: 'Acciones'        },
   { to: '/admin/morosidad',       icon: TrendingDown,label: 'Descargas'       },
   { to: '/admin/scheduled-jobs',  icon: Calendar,    label: 'Scheduled Jobs'  },
+  { to: '/admin/invalid-numbers', icon: ShieldAlert, label: 'Lista negra WA'  },
   { to: '/admin/prompts',         icon: FileText,    label: 'Prompts'         },
   { to: '/admin/users',           icon: Users,       label: 'Administradores' },
 ]

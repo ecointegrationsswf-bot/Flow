@@ -40,6 +40,7 @@ public class CampaignDispatcherService(
     EmailTemplateRenderer emailRenderer,
     IUltraMsgInstanceService ultraMsgInstance,
     ITeamsNotifier teamsNotifier,
+    IWhatsAppNumberValidator whatsAppValidator,
     ILogger<CampaignDispatcherService> logger)
 {
     // ── Mínimos de seguridad — tope inferior aunque la config diga lo contrario ──
@@ -545,15 +546,74 @@ public class CampaignDispatcherService(
                         }
                         else
                         {
-                            var waResult = await waProvider.SendMessageAsync(
-                                new SendMessageRequest(contact.PhoneNumber, message), ct);
-                            attempt = new DispatchAttemptResult(
-                                Success: waResult.Success,
-                                ExternalId: waResult.ExternalMessageId,
-                                Error: waResult.Error,
-                                SentContent: message,
-                                Subject: null,
-                                Recipient: contact.PhoneNumber);
+                            // ── Validación pre-envío: lista negra + UltraMsg /contacts/check ──
+                            // Antes de gastar UN envío confirmamos que el número tiene WhatsApp.
+                            //   - Lista negra ya registrada → ni siquiera consulta UltraMsg.
+                            //   - UltraMsg responde invalid → se registra en BD + se skipea el envío.
+                            //   - UltraMsg responde unknown (timeout) → fail-open: el envío real va.
+                            // Solo aplica para UltraMsg. MetaCloud se omite (su API tiene su propia validación).
+                            WhatsAppLine? activeLine = null;
+                            if (waProvider.ProviderType == ProviderType.UltraMsg)
+                            {
+                                activeLine = await db.Set<WhatsAppLine>()
+                                    .Where(l => l.TenantId == tenant.Id && l.IsActive)
+                                    .FirstOrDefaultAsync(ct);
+                            }
+
+                            WhatsAppNumberValidationResult? preCheck = null;
+                            if (activeLine is not null)
+                            {
+                                preCheck = await whatsAppValidator.ValidateBeforeSendAsync(
+                                    contact.PhoneNumber, activeLine, tenant.Id, campaignId, ct);
+                            }
+
+                            if (preCheck is not null && !preCheck.IsValid)
+                            {
+                                logger.LogInformation(
+                                    "Campaña {CampaignId}: contacto {Phone} NO enviado — {Source}: {Reason}",
+                                    campaignId, contact.PhoneNumber, preCheck.Source, preCheck.Reason);
+                                attempt = new DispatchAttemptResult(
+                                    Success: false,
+                                    ExternalId: null,
+                                    Error: preCheck.Reason ?? "Número no entregable",
+                                    SentContent: null,
+                                    Subject: null,
+                                    Recipient: contact.PhoneNumber);
+                            }
+                            else
+                            {
+                                var waResult = await waProvider.SendMessageAsync(
+                                    new SendMessageRequest(contact.PhoneNumber, message), ct);
+
+                                // Si el provider devolvió error de tipo "número no válido",
+                                // registramos en lista negra para futuras campañas.
+                                if (!waResult.Success && activeLine is not null && waResult.Error is not null
+                                    && (waResult.Error.Contains("invalid", StringComparison.OrdinalIgnoreCase)
+                                        || waResult.Error.Contains("not connected", StringComparison.OrdinalIgnoreCase)
+                                        || waResult.Error.Contains("no entregado", StringComparison.OrdinalIgnoreCase)))
+                                {
+                                    try
+                                    {
+                                        await whatsAppValidator.RegisterAsBlacklistedAsync(
+                                            contact.PhoneNumber,
+                                            reason: $"Dispatch error: {Truncate(waResult.Error, 300)}",
+                                            source: "dispatch-error",
+                                            tenantId: null,
+                                            campaignId: campaignId,
+                                            userId: null,
+                                            ct: ct);
+                                    }
+                                    catch (Exception ex) { logger.LogWarning(ex, "[WANumberValidator] Register post-dispatch failed."); }
+                                }
+
+                                attempt = new DispatchAttemptResult(
+                                    Success: waResult.Success,
+                                    ExternalId: waResult.ExternalMessageId,
+                                    Error: waResult.Error,
+                                    SentContent: message,
+                                    Subject: null,
+                                    Recipient: contact.PhoneNumber);
+                            }
                         }
                     }
                     else
