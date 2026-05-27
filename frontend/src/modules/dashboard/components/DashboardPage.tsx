@@ -1,5 +1,4 @@
-import { Link } from 'react-router-dom'
-import { MessageSquare, Bot, Megaphone, AlertTriangle, FileText } from 'lucide-react'
+import { MessageSquare, Bot, Megaphone, AlertTriangle } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
 import { StatCard } from './StatCard'
@@ -23,18 +22,11 @@ export function DashboardPage() {
 
   return (
     <div>
+      {/* El botón "Informe gerencial" se movió al menú "Informes" del sidebar,
+          donde el usuario elige qué reporte generar (Gerencial / Efectividad). */}
       <PageHeader
         title="Dashboard"
         subtitle="Resumen de actividad"
-        action={
-          <Link
-            to="/dashboard/management-report"
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
-          >
-            <FileText className="h-4 w-4" />
-            Informe gerencial
-          </Link>
-        }
       />
 
       {/* KPI Cards */}

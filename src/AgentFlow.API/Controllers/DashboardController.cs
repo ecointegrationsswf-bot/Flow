@@ -1,10 +1,12 @@
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using AgentFlow.Application.Modules.Dashboard;
 using AgentFlow.Application.Modules.Monitor;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Persistence;
+using AgentFlow.Infrastructure.Reports;
 using MediatR;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -15,8 +17,15 @@ namespace AgentFlow.API.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/dashboard")]
-public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx) : ControllerBase
+public class DashboardController(
+    AgentFlowDbContext db,
+    ITenantContext tenantCtx,
+    IHttpClientFactory httpFactory,
+    ILogger<DashboardController> log) : ControllerBase
 {
+    private const int LogoMaxBytes = 2 * 1024 * 1024;
+
+
     [HttpGet("stats")]
     public async Task<IActionResult> GetStats(CancellationToken ct)
     {
@@ -180,10 +189,15 @@ public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx
     /// Informe gerencial comparativo entre varios períodos. Cada período es un
     /// mes completo o una quincena (Q1 = días 1-15, Q2 = 16 a fin de mes).
     ///
-    /// Efectividad = (count de etiquetas marcadas como efectivas) / total del período.
-    /// Por defecto se identifican como efectivas las etiquetas cuyo nombre contiene
-    /// "compromiso", "comprobante", "pago" o "pagó" (case-insensitive). El caller
-    /// puede sobrescribir esta selección pasando ?effectiveLabelIds=guid1,guid2.
+    /// Se mide por <b>cliente único</b> (teléfono distinto) y a cada cliente se
+    /// le asigna el MEJOR resultado de sus conversaciones en el período según
+    /// rank Confimó Pago &gt; Promesa &gt; Negociación &gt; Disputa &gt; Cancelación.
+    /// La efectividad = clientes con mejor etiqueta en {Confimó Pago, Promesa,
+    /// Negociación} sobre el total de clientes únicos. Esto alinea el informe
+    /// con <c>/api/reports/effectiveness</c> — ambos reportes sobre la misma data
+    /// dan el mismo número.
+    ///
+    /// Override de etiquetas efectivas: <c>?effectiveLabelIds=guid1,guid2</c>.
     /// </summary>
     [HttpGet("management-report")]
     public async Task<IActionResult> GetManagementReport(
@@ -194,166 +208,12 @@ public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx
         [FromQuery] string? effectiveLabelIds = null,  // override opcional, csv de guids
         CancellationToken ct = default)
     {
-        var tenantId = tenantCtx.TenantId;
         if (to < from) return BadRequest(new { error = "El rango es inválido (from > to)." });
         if ((to - from).TotalDays > 366) return BadRequest(new { error = "El rango no puede exceder 12 meses." });
 
-        var tenant = await db.Tenants
-            .Where(t => t.Id == tenantId)
-            .Select(t => new { t.Name })
-            .FirstOrDefaultAsync(ct);
-        if (tenant is null) return Unauthorized();
-
-        // Si se filtra por maestro, cargar sus LabelIds (subset de etiquetas a mostrar).
-        // Si no se filtra, se muestran TODAS las etiquetas del tenant.
-        List<Guid>? templateLabelIds = null;
-        string? templateName = null;
-        if (campaignTemplateId.HasValue)
-        {
-            var tpl = await db.CampaignTemplates
-                .Where(t => t.Id == campaignTemplateId.Value && t.TenantId == tenantId)
-                .Select(t => new { t.Name, t.LabelIds })
-                .FirstOrDefaultAsync(ct);
-            if (tpl is null)
-                return NotFound(new { error = "Maestro de campaña no encontrado." });
-            templateLabelIds = tpl.LabelIds ?? new List<Guid>();
-            templateName = tpl.Name;
-        }
-
-        // Hora Panamá: rango UTC del from-to (incluye to completo)
-        var startUtc = new DateTime(from.Year, from.Month, from.Day, 0, 0, 0, DateTimeKind.Unspecified).AddHours(5);
-        var endUtc   = new DateTime(to.Year, to.Month, to.Day, 0, 0, 0, DateTimeKind.Unspecified).AddDays(1).AddHours(5);
-
-        // Cargar conversaciones del rango — opcionalmente filtradas por maestro
-        // (vía join con Campaigns.CampaignTemplateId).
-        var convsQuery = db.Conversations
-            .Where(c => c.TenantId == tenantId
-                     && (c.LabeledAt != null
-                         ? c.LabeledAt >= startUtc && c.LabeledAt < endUtc
-                         : c.StartedAt >= startUtc && c.StartedAt < endUtc));
-
-        if (campaignTemplateId.HasValue)
-        {
-            // Solo conversaciones cuya Campaign usa el CampaignTemplate seleccionado.
-            // Las conversaciones sueltas (sin Campaign) quedan fuera del filtro.
-            var campaignIdsOfTemplate = db.Campaigns
-                .Where(c => c.TenantId == tenantId && c.CampaignTemplateId == campaignTemplateId.Value)
-                .Select(c => c.Id);
-            convsQuery = convsQuery
-                .Where(c => c.CampaignId.HasValue && campaignIdsOfTemplate.Contains(c.CampaignId.Value));
-        }
-
-        var allConvs = await convsQuery
-            .Select(c => new {
-                c.Id,
-                c.LabelId,
-                Date = c.LabeledAt ?? c.StartedAt,
-            })
-            .ToListAsync(ct);
-
-        // Cargar labels del tenant (filtrar al subset del maestro si aplica)
-        var labelsQuery = db.Set<Domain.Entities.ConversationLabel>()
-            .Where(l => l.TenantId == tenantId);
-        if (templateLabelIds is not null && templateLabelIds.Count > 0)
-        {
-            var idsCopy = templateLabelIds; // EF translate
-            labelsQuery = labelsQuery.Where(l => idsCopy.Contains(l.Id));
-        }
-        var labels = await labelsQuery
-            .Select(l => new { l.Id, l.Name, l.Color })
-            .ToListAsync(ct);
-        var labelById = labels.ToDictionary(l => l.Id);
-
-        // Determinar etiquetas "efectivas" para el cálculo
-        HashSet<Guid> effectiveSet;
-        if (!string.IsNullOrWhiteSpace(effectiveLabelIds))
-        {
-            effectiveSet = effectiveLabelIds
-                .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                .Select(s => Guid.TryParse(s.Trim(), out var g) ? g : Guid.Empty)
-                .Where(g => g != Guid.Empty)
-                .ToHashSet();
-        }
-        else
-        {
-            // Matching automático por keywords del nombre de la etiqueta.
-            // Cubre los casos típicos: "Compromiso de pago", "Envió Comprobante",
-            // "Pago recibido", "Pago confirmado". Insensible a mayúsculas y acentos
-            // simples (la BD ya guarda con tilde correcta).
-            var keywords = new[] { "compromiso", "comprobante", "pago" };
-            effectiveSet = labels
-                .Where(l => keywords.Any(k =>
-                    l.Name.Contains(k, StringComparison.OrdinalIgnoreCase)))
-                .Select(l => l.Id)
-                .ToHashSet();
-        }
-
-        // Generar lista de períodos según granularidad
-        var periods = BuildPeriods(from, to, granularity);
-
-        // Por cada período, agrupar y calcular
-        var labelIdsSet = new HashSet<Guid>(labels.Select(l => l.Id));
-        var periodsResult = periods.Select(p =>
-        {
-            var rangeStartUtc = new DateTime(p.start.Year, p.start.Month, p.start.Day, 0, 0, 0, DateTimeKind.Unspecified).AddHours(5);
-            var rangeEndUtc   = new DateTime(p.end.Year, p.end.Month, p.end.Day, 0, 0, 0, DateTimeKind.Unspecified).AddDays(1).AddHours(5);
-            var convs = allConvs.Where(c => c.Date >= rangeStartUtc && c.Date < rangeEndUtc).ToList();
-            var total = convs.Count;
-
-            var counts = convs
-                .Where(c => c.LabelId.HasValue && labelIdsSet.Contains(c.LabelId.Value))
-                .GroupBy(c => c.LabelId!.Value)
-                .ToDictionary(g => g.Key, g => g.Count());
-            var unlabeled = total - counts.Values.Sum();
-
-            var effectiveCount = counts.Where(kv => effectiveSet.Contains(kv.Key)).Sum(kv => kv.Value);
-            var effectivenessPct = total == 0 ? 0 : Math.Round(effectiveCount * 100.0 / total, 1);
-
-            var breakdown = counts
-                .Select(kv => new
-                {
-                    labelId = kv.Key,
-                    name = labelById.TryGetValue(kv.Key, out var l) ? l.Name : "(eliminada)",
-                    color = labelById.TryGetValue(kv.Key, out var l2) ? l2.Color : "#94a3b8",
-                    isEffective = effectiveSet.Contains(kv.Key),
-                    count = kv.Value,
-                    percentage = total == 0 ? 0 : Math.Round(kv.Value * 100.0 / total, 1),
-                })
-                .OrderByDescending(b => b.count)
-                .ToList();
-
-            return new
-            {
-                p.label,
-                start = p.start,
-                end = p.end,
-                total,
-                effectiveness = effectivenessPct,
-                unlabeledCount = unlabeled,
-                unlabeledPercentage = total == 0 ? 0 : Math.Round(unlabeled * 100.0 / total, 1),
-                breakdown,
-            };
-        }).ToList();
-
-        // Universo total agregado (todos los períodos) — para la tabla "Grand Total"
-        var totalAll = periodsResult.Sum(p => p.total);
-        var effectiveAll = periodsResult.Sum(p =>
-            p.breakdown.Where(b => b.isEffective).Sum(b => b.count));
-        var effectivenessAll = totalAll == 0 ? 0 : Math.Round(effectiveAll * 100.0 / totalAll, 1);
-
-        return Ok(new
-        {
-            tenantName = tenant.Name,
-            from = from.ToString("yyyy-MM-dd"),
-            to = to.ToString("yyyy-MM-dd"),
-            granularity,
-            campaignTemplateId,
-            campaignTemplateName = templateName,
-            effectiveLabelIds = effectiveSet.ToList(),
-            totalAll,
-            effectivenessAll,
-            periods = periodsResult,
-        });
+        var built = await BuildManagementReportDtoAsync(from, to, granularity, campaignTemplateId, effectiveLabelIds, ct);
+        if (built.Error is not null) return built.Error;
+        return Ok(built.Data);
     }
 
     /// <summary>
@@ -399,35 +259,63 @@ public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx
         var startUtc = new DateTime(from.Year, from.Month, from.Day, 0, 0, 0, DateTimeKind.Unspecified).AddHours(5);
         var endUtc   = new DateTime(to.Year, to.Month, to.Day, 0, 0, 0, DateTimeKind.Unspecified).AddDays(1).AddHours(5);
 
-        // Conversaciones del rango (con join opcional a Campaign para nombre)
-        var convsQuery = from c in db.Conversations
-                         join cmp in db.Campaigns on c.CampaignId equals cmp.Id into cmpJoin
-                         from cmp in cmpJoin.DefaultIfEmpty()
-                         where c.TenantId == tenantId
-                            && (c.LabeledAt != null
-                                ? c.LabeledAt >= startUtc && c.LabeledAt < endUtc
-                                : c.StartedAt >= startUtc && c.StartedAt < endUtc)
-                         select new
-                         {
-                             c.Id,
-                             c.ClientName,
-                             c.ClientPhone,
-                             c.LabelId,
-                             c.LabeledAt,
-                             c.StartedAt,
-                             c.ClosedAt,
-                             c.Status,
-                             CampaignName = cmp != null ? cmp.Name : null,
-                             CampaignId = cmp != null ? (Guid?)cmp.Id : null,
-                             CampaignTemplateId = cmp != null ? cmp.CampaignTemplateId : null,
-                         };
-
+        // Universo de campañas — filtrado por Campaign.CreatedAt para alinear el
+        // reporte al modelo "rendimiento de campañas". Una respuesta tardía de
+        // una campaña en el rango sigue contando; una conversación sin campaña
+        // o de campañas fuera del rango se ignora.
+        var campaignsScopeQ = db.Campaigns
+            .Where(c => c.TenantId == tenantId
+                     && c.CreatedAt >= startUtc
+                     && c.CreatedAt <= endUtc);
         if (campaignTemplateId.HasValue)
-        {
-            convsQuery = convsQuery.Where(c => c.CampaignTemplateId == campaignTemplateId.Value);
-        }
+            campaignsScopeQ = campaignsScopeQ.Where(c => c.CampaignTemplateId == campaignTemplateId.Value);
 
-        var allConvs = await convsQuery.ToListAsync(ct);
+        var campaignsScope = await campaignsScopeQ
+            .Select(c => new { c.Id, c.Name, c.CreatedAt, c.CampaignTemplateId })
+            .ToListAsync(ct);
+        var campaignsScopeIds = campaignsScope.Select(c => c.Id).ToList();
+        var campaignNameById = campaignsScope.ToDictionary(c => c.Id, c => c.Name);
+
+        // CampaignContacts del universo — define los "clientes únicos contactados".
+        var contactsRaw = await db.CampaignContacts
+            .Where(cc => campaignsScopeIds.Contains(cc.CampaignId))
+            .Select(cc => new { cc.CampaignId, cc.PhoneNumber })
+            .ToListAsync(ct);
+
+        // Conversaciones SOLO de esas campañas (sin filtro de fecha sobre la
+        // conversación — las respuestas tardías están permitidas).
+        var allConvsRaw = await db.Conversations
+            .Where(c => c.TenantId == tenantId
+                     && c.CampaignId.HasValue && campaignsScopeIds.Contains(c.CampaignId.Value))
+            .Select(c => new
+            {
+                c.Id,
+                c.ClientName,
+                c.ClientPhone,
+                c.LabelId,
+                c.LabeledAt,
+                c.StartedAt,
+                c.ClosedAt,
+                c.Status,
+                CampaignId = (Guid?)c.CampaignId,
+            })
+            .ToListAsync(ct);
+
+        // Proyección enriquecida con CampaignName resuelto en memoria — el
+        // resto del Excel (hoja "Conversaciones", chart, etc.) consume este shape.
+        var allConvs = allConvsRaw.Select(c => new
+        {
+            c.Id,
+            c.ClientName,
+            c.ClientPhone,
+            c.LabelId,
+            c.LabeledAt,
+            c.StartedAt,
+            c.ClosedAt,
+            c.Status,
+            CampaignName = c.CampaignId.HasValue && campaignNameById.TryGetValue(c.CampaignId.Value, out var n) ? n : null,
+            c.CampaignId,
+        }).ToList();
 
         // Etiquetas (filtradas a las del maestro si aplica)
         var labelsQuery = db.Set<Domain.Entities.ConversationLabel>()
@@ -442,7 +330,9 @@ public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx
             .ToListAsync(ct);
         var labelById = labels.ToDictionary(l => l.Id);
 
-        // Efectividad
+        // Efectividad — mismo criterio que el Informe de Efectividad: las 3
+        // etiquetas estándar (Confimó Pago + Promesa + Negociación) o el override
+        // explícito vía query param. Sin keyword matching para no engañar al lector.
         HashSet<Guid> effectiveSet;
         if (!string.IsNullOrWhiteSpace(effectiveLabelIds))
         {
@@ -452,9 +342,8 @@ public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx
         }
         else
         {
-            var keywords = new[] { "compromiso", "comprobante", "pago" };
             effectiveSet = labels
-                .Where(l => keywords.Any(k => l.Name.Contains(k, StringComparison.OrdinalIgnoreCase)))
+                .Where(l => EffectiveLabelNames.Contains(l.Name, StringComparer.OrdinalIgnoreCase))
                 .Select(l => l.Id).ToHashSet();
         }
 
@@ -503,28 +392,68 @@ public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx
         var totalsByLabel = new Dictionary<Guid, int>();
         var totalByPeriod = new int[periods.Count];
 
-        // Pre-computar counts por período para reutilizar
+        // Pre-computar counts por período — universo = teléfonos en CampaignContacts
+        // de campañas creadas en el período (modelo "rendimiento de campañas").
+        // Best label por cliente entre las convs de esas campañas. Mismo cálculo
+        // que /api/dashboard/management-report (JSON) y el PDF.
         var countsByPeriodLabel = new Dictionary<int, Dictionary<Guid, int>>();
         var unlabeledByPeriod = new Dictionary<int, int>();
+        var labelIdsSetAll = labels.Select(l => l.Id).ToHashSet();
+
         for (int pi = 0; pi < periods.Count; pi++)
         {
             var p = periods[pi];
             var rangeStartUtc = new DateTime(p.start.Year, p.start.Month, p.start.Day, 0, 0, 0, DateTimeKind.Unspecified).AddHours(5);
             var rangeEndUtc   = new DateTime(p.end.Year, p.end.Month, p.end.Day, 0, 0, 0, DateTimeKind.Unspecified).AddDays(1).AddHours(5);
-            var convs = allConvs.Where(c =>
-            {
-                var date = c.LabeledAt ?? c.StartedAt;
-                return date >= rangeStartUtc && date < rangeEndUtc;
-            }).ToList();
 
-            var labelIdsSet = labels.Select(l => l.Id).ToHashSet();
-            var counts = convs
-                .Where(c => c.LabelId.HasValue && labelIdsSet.Contains(c.LabelId.Value))
-                .GroupBy(c => c.LabelId!.Value)
-                .ToDictionary(g => g.Key, g => g.Count());
-            countsByPeriodLabel[pi] = counts;
-            unlabeledByPeriod[pi] = convs.Count - counts.Values.Sum();
-            totalByPeriod[pi] = convs.Count;
+            // Campañas cuya CreatedAt cae en este período.
+            var campaignIdsOfPeriod = campaignsScope
+                .Where(c => c.CreatedAt >= rangeStartUtc && c.CreatedAt < rangeEndUtc)
+                .Select(c => c.Id)
+                .ToHashSet();
+
+            // Universo = teléfonos únicos en CampaignContacts de esas campañas.
+            var phonesOfPeriod = contactsRaw
+                .Where(cc => campaignIdsOfPeriod.Contains(cc.CampaignId)
+                          && !string.IsNullOrWhiteSpace(cc.PhoneNumber))
+                .Select(cc => cc.PhoneNumber)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // Convs de esas campañas indexadas por teléfono.
+            var convsByPhonePeriod = allConvs
+                .Where(c => c.CampaignId.HasValue
+                         && campaignIdsOfPeriod.Contains(c.CampaignId.Value)
+                         && !string.IsNullOrWhiteSpace(c.ClientPhone))
+                .GroupBy(c => c.ClientPhone!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+            var bestCounts = new Dictionary<Guid, int>();
+            int unlabeledClients = 0;
+            int totalClients = phonesOfPeriod.Count;
+
+            foreach (var phone in phonesOfPeriod)
+            {
+                Guid? bestLabelId = null;
+                int bestRank = int.MinValue;
+                if (convsByPhonePeriod.TryGetValue(phone, out var phoneConvs))
+                {
+                    foreach (var c in phoneConvs)
+                    {
+                        if (!c.LabelId.HasValue || !labelIdsSetAll.Contains(c.LabelId.Value)) continue;
+                        var name = labelById[c.LabelId.Value].Name;
+                        var rank = RankLabelName(name);
+                        if (rank > bestRank) { bestRank = rank; bestLabelId = c.LabelId.Value; }
+                    }
+                }
+                if (bestLabelId.HasValue)
+                    bestCounts[bestLabelId.Value] = bestCounts.GetValueOrDefault(bestLabelId.Value) + 1;
+                else
+                    unlabeledClients++;
+            }
+
+            countsByPeriodLabel[pi] = bestCounts;
+            unlabeledByPeriod[pi] = unlabeledClients;
+            totalByPeriod[pi] = totalClients;
         }
 
         foreach (var lab in labels)
@@ -628,13 +557,13 @@ public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx
             // dejamos sin imagen — el resto del Excel ya tiene la data completa.
         }
 
-        // ── Hoja 2: Períodos — métricas por período ──
+        // ── Hoja 2: Períodos — métricas por cliente único ──
         var wsPeriods = wb.Worksheets.Add("Por período");
         wsPeriods.Cell(1, 1).Value = "Período";
         wsPeriods.Cell(1, 2).Value = "Inicio";
         wsPeriods.Cell(1, 3).Value = "Fin";
-        wsPeriods.Cell(1, 4).Value = "Total conversaciones";
-        wsPeriods.Cell(1, 5).Value = "Etiquetadas";
+        wsPeriods.Cell(1, 4).Value = "Clientes únicos";
+        wsPeriods.Cell(1, 5).Value = "Con etiqueta";
         wsPeriods.Cell(1, 6).Value = "Sin etiqueta";
         wsPeriods.Cell(1, 7).Value = "Efectividad %";
         wsPeriods.Row(1).Style.Font.Bold = true;
@@ -735,6 +664,373 @@ public class DashboardController(AgentFlowDbContext db, ITenantContext tenantCtx
         return File(bytes,
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             fileName);
+    }
+
+    // ── PDF NATIVO ───────────────────────────────────────────────────────
+    /// <summary>
+    /// Exporta el Informe Gerencial como PDF nativo (no screenshot). Reusa la
+    /// misma computación que <c>GET /management-report</c> y embebe el gráfico
+    /// apilado renderizado server-side (mismo PNG que el del Excel). El logo
+    /// del tenant se descarga best-effort para incluirlo en el header.
+    /// </summary>
+    [HttpGet("management-report/pdf")]
+    public async Task<IActionResult> ManagementReportPdf(
+        [FromQuery] DateTime from,
+        [FromQuery] DateTime to,
+        [FromQuery] string granularity = "monthly",
+        [FromQuery] Guid? campaignTemplateId = null,
+        [FromQuery] string? effectiveLabelIds = null,
+        CancellationToken ct = default)
+    {
+        if (to < from) return BadRequest(new { error = "El rango es inválido (from > to)." });
+        if ((to - from).TotalDays > 366) return BadRequest(new { error = "El rango no puede exceder 12 meses." });
+
+        var built = await BuildManagementReportDtoAsync(from, to, granularity, campaignTemplateId, effectiveLabelIds, ct);
+        if (built.Error is not null) return built.Error;
+        var dto = built.Data!;
+
+        // Logo del tenant (best-effort) — coincide con el resto de los informes.
+        var tenantLogoUrl = await db.Tenants
+            .Where(t => t.Id == tenantCtx.TenantId)
+            .Select(t => t.LogoUrl)
+            .FirstOrDefaultAsync(ct);
+        var logoBytes = await TryDownloadLogoAsync(tenantLogoUrl, ct);
+
+        // Gráfico apilado renderizado a PNG. Si GDI+ no está disponible o falla,
+        // pasamos null y el PDF cae al fallback textual del bloque del gráfico.
+        byte[]? chartPng = null;
+        try
+        {
+            if (OperatingSystem.IsWindows())
+            {
+                chartPng = BuildChartPngForReport(dto);
+            }
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "[DashboardController] No se pudo renderizar el chart PNG para el PDF.");
+        }
+
+        var generator = new ManagementReportPdfGenerator();
+        var bytes = generator.Generate(dto, chartPng, logoBytes);
+
+        var safeTenant = string.Join("_", dto.TenantName.Split(Path.GetInvalidFileNameChars()));
+        var filename = $"informe_gerencial_{safeTenant}_{from:yyyyMMdd}_{to:yyyyMMdd}.pdf";
+        return File(bytes, "application/pdf", filename);
+    }
+
+    /// <summary>
+    /// Re-renderiza el chart apilado a partir del DTO ya calculado. Las etiquetas
+    /// y los conteos por período salen del propio breakdown del DTO, así no
+    /// re-consultamos la BD.
+    /// </summary>
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    private static byte[] BuildChartPngForReport(ManagementReportDto dto)
+    {
+        // Set de etiquetas únicas presentes en el reporte (orden estable).
+        var labels = dto.Periods
+            .SelectMany(p => p.Breakdown)
+            .GroupBy(b => b.LabelId)
+            .Select(g => g.First())
+            .Select(l => new ChartLabel(l.LabelId, l.Name, l.Color, l.IsEffective))
+            .ToList();
+
+        var periods = dto.Periods.Select(p =>
+        {
+            var counts = p.Breakdown.ToDictionary(b => b.LabelId, b => b.Count);
+            var effectiveCount = p.Breakdown.Where(b => b.IsEffective).Sum(b => b.Count);
+            return new ChartPeriod(p.Label, p.Total, effectiveCount, counts, p.UnlabeledCount);
+        }).ToList();
+
+        return GenerateStackedBarChartPng(periods, labels, dto.TenantName);
+    }
+
+    // ── Definición de "efectivo" unificada con el Informe de Efectividad ─
+    // Las tres etiquetas que cuentan como gestión efectiva. Los nombres deben
+    // coincidir EXACTAMENTE con los que produce el labeler. El override por
+    // query param `effectiveLabelIds` sigue funcionando para tenants que tengan
+    // labels nombradas distinto.
+    private static readonly string[] EffectiveLabelNames = {
+        "Confimo Pago", "Confirmo Pago",   // typo histórico + nombre correcto
+        "Promesa de Pago",
+        "Negociación / Acuerdo",
+    };
+
+    /// <summary>
+    /// Rank de etiquetas para resolver el MEJOR resultado por cliente cuando
+    /// tiene varias conversaciones en el mismo período. Idéntico al usado en
+    /// <c>EffectivenessReportService.RankLabel</c> — así ambos informes hablan
+    /// el mismo idioma.
+    ///   4 = Confimó Pago, 3 = Promesa, 2 = Negociación, 1 = Disputa,
+    ///  -1 = Cancelación, 0 = resto (incluye etiquetas custom no rankeadas).
+    /// </summary>
+    private static int RankLabelName(string? name) => name switch
+    {
+        "Confimo Pago" or "Confirmo Pago" => 4,
+        "Promesa de Pago"                  => 3,
+        "Negociación / Acuerdo"            => 2,
+        "Disputa / Reclamo"                => 1,
+        "Solicita Cancelación"             => -1,
+        _                                  => 0,
+    };
+
+    /// <summary>
+    /// Lógica de cómputo del Informe Gerencial. <b>Mide rendimiento de CAMPAÑAS</b>
+    /// — alineado byte-a-byte con <c>/api/reports/effectiveness</c>:
+    /// <list type="bullet">
+    ///  <item>El UNIVERSO de cada período son los teléfonos únicos en
+    ///        <c>CampaignContacts</c> de campañas creadas en el período.
+    ///        Conversaciones sin campaña asociada NO entran al reporte.</item>
+    ///  <item>Cada cliente cae en el período de SU CAMPAÑA, no en el período
+    ///        donde respondió. Si una campaña creada en abril recibe respuesta
+    ///        en mayo, ese cliente cuenta en abril (donde están los costos del
+    ///        outreach).</item>
+    ///  <item>Mejor etiqueta por cliente por rank Confimó Pago &gt; Promesa &gt;
+    ///        Negociación &gt; Disputa &gt; Cancelación. Idéntico al Informe
+    ///        de Efectividad.</item>
+    ///  <item>Efectividad = clientes con mejor etiqueta en {Confimó Pago,
+    ///        Promesa, Negociación} sobre clientes únicos del período.</item>
+    /// </list>
+    /// Retorno: tagged-union (Data, Error) para propagar 401/404 sin excepciones.
+    /// </summary>
+    private async Task<(ManagementReportDto? Data, IActionResult? Error)> BuildManagementReportDtoAsync(
+        DateTime from, DateTime to, string granularity,
+        Guid? campaignTemplateId, string? effectiveLabelIds,
+        CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+
+        var tenant = await db.Tenants
+            .Where(t => t.Id == tenantId)
+            .Select(t => new { t.Name })
+            .FirstOrDefaultAsync(ct);
+        if (tenant is null) return (null, Unauthorized());
+
+        List<Guid>? templateLabelIds = null;
+        string? templateName = null;
+        if (campaignTemplateId.HasValue)
+        {
+            var tpl = await db.CampaignTemplates
+                .Where(t => t.Id == campaignTemplateId.Value && t.TenantId == tenantId)
+                .Select(t => new { t.Name, t.LabelIds })
+                .FirstOrDefaultAsync(ct);
+            if (tpl is null)
+                return (null, NotFound(new { error = "Maestro de campaña no encontrado." }));
+            templateLabelIds = tpl.LabelIds ?? new List<Guid>();
+            templateName = tpl.Name;
+        }
+
+        var startUtc = new DateTime(from.Year, from.Month, from.Day, 0, 0, 0, DateTimeKind.Unspecified).AddHours(5);
+        var endUtc   = new DateTime(to.Year, to.Month, to.Day, 0, 0, 0, DateTimeKind.Unspecified).AddDays(1).AddHours(5);
+
+        // ── 1. Campañas del rango — filtradas por Campaign.CreatedAt y opcionalmente
+        //       por maestro. Este es el punto de anclaje: cada campaña pertenece
+        //       a UN período (el del momento en que se creó).
+        var campaignsQ = db.Campaigns
+            .Where(c => c.TenantId == tenantId
+                     && c.CreatedAt >= startUtc
+                     && c.CreatedAt <= endUtc);
+        if (campaignTemplateId.HasValue)
+            campaignsQ = campaignsQ.Where(c => c.CampaignTemplateId == campaignTemplateId.Value);
+
+        var campaigns = await campaignsQ
+            .Select(c => new { c.Id, c.CreatedAt })
+            .ToListAsync(ct);
+        var campaignIdList = campaigns.Select(c => c.Id).ToList();
+
+        // ── 2. CampaignContacts del universo — la lista de teléfonos a los que
+        //       les escribimos. Esto es lo que cuenta como "cliente único contactado".
+        var contactsRaw = await db.CampaignContacts
+            .Where(cc => campaignIdList.Contains(cc.CampaignId))
+            .Select(cc => new { cc.CampaignId, cc.PhoneNumber })
+            .ToListAsync(ct);
+
+        // ── 3. Conversaciones de esas campañas — sin filtro de fecha sobre la
+        //       conversación. Una respuesta tardía sigue contando porque la
+        //       campaña original sí está en el rango.
+        var allConvs = await db.Conversations
+            .Where(c => c.TenantId == tenantId
+                     && c.CampaignId.HasValue && campaignIdList.Contains(c.CampaignId.Value))
+            .Select(c => new { c.Id, c.LabelId, c.ClientPhone, c.CampaignId })
+            .ToListAsync(ct);
+
+        // ── 4. Labels — catálogo del tenant, recortado al maestro si aplica.
+        var labelsQuery = db.Set<Domain.Entities.ConversationLabel>().Where(l => l.TenantId == tenantId);
+        if (templateLabelIds is not null && templateLabelIds.Count > 0)
+        {
+            var idsCopy = templateLabelIds;
+            labelsQuery = labelsQuery.Where(l => idsCopy.Contains(l.Id));
+        }
+        var labels = await labelsQuery.Select(l => new { l.Id, l.Name, l.Color }).ToListAsync(ct);
+        var labelById = labels.ToDictionary(l => l.Id);
+
+        // Set de etiquetas "efectivas" — override por query o fallback estándar.
+        HashSet<Guid> effectiveSet;
+        if (!string.IsNullOrWhiteSpace(effectiveLabelIds))
+        {
+            effectiveSet = effectiveLabelIds
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => Guid.TryParse(s.Trim(), out var g) ? g : Guid.Empty)
+                .Where(g => g != Guid.Empty)
+                .ToHashSet();
+        }
+        else
+        {
+            effectiveSet = labels
+                .Where(l => EffectiveLabelNames.Contains(l.Name, StringComparer.OrdinalIgnoreCase))
+                .Select(l => l.Id)
+                .ToHashSet();
+        }
+
+        // ── Helper: dado un set de campañas (de un período o del rango total),
+        //   devuelve breakdown por mejor etiqueta + unlabeled + totales.
+        (Dictionary<Guid, int> bestCounts, int unlabeled, int total, int effective)
+            ComputeForCampaigns(IReadOnlySet<Guid> campaignIdsScope)
+        {
+            // Universo = teléfonos únicos en CampaignContacts de estas campañas.
+            var phones = contactsRaw
+                .Where(cc => campaignIdsScope.Contains(cc.CampaignId)
+                          && !string.IsNullOrWhiteSpace(cc.PhoneNumber))
+                .Select(cc => cc.PhoneNumber)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            // Convs de esas campañas indexadas por teléfono.
+            var convsByPhone = allConvs
+                .Where(c => c.CampaignId.HasValue
+                         && campaignIdsScope.Contains(c.CampaignId.Value)
+                         && !string.IsNullOrWhiteSpace(c.ClientPhone))
+                .GroupBy(c => c.ClientPhone!, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+
+            var bestCounts = new Dictionary<Guid, int>();
+            int unlabeled = 0;
+            int effective = 0;
+            int total = phones.Count;
+
+            foreach (var phone in phones)
+            {
+                // Buscar el mejor label entre las convs de este teléfono.
+                Guid? bestLabelId = null;
+                int bestRank = int.MinValue;
+
+                if (convsByPhone.TryGetValue(phone, out var convs))
+                {
+                    foreach (var c in convs)
+                    {
+                        if (!c.LabelId.HasValue) continue;
+                        if (!labelById.TryGetValue(c.LabelId.Value, out var labInfo)) continue;
+                        var rank = RankLabelName(labInfo.Name);
+                        if (rank > bestRank)
+                        {
+                            bestRank = rank;
+                            bestLabelId = c.LabelId.Value;
+                        }
+                    }
+                }
+
+                if (bestLabelId.HasValue)
+                {
+                    bestCounts[bestLabelId.Value] = bestCounts.GetValueOrDefault(bestLabelId.Value) + 1;
+                    if (effectiveSet.Contains(bestLabelId.Value)) effective++;
+                }
+                else
+                {
+                    // Cliente contactado por una campaña del scope pero sin
+                    // conversación etiquetada → "Sin etiqueta" (incluye los
+                    // silenciosos que nunca respondieron).
+                    unlabeled++;
+                }
+            }
+
+            return (bestCounts, unlabeled, total, effective);
+        }
+
+        // ── 5. Loop por período: para cada uno, las campañas creadas dentro.
+        var periodsRanges = BuildPeriods(from, to, granularity);
+        var periodsResult = new List<ManagementReportPeriod>(periodsRanges.Count);
+
+        foreach (var p in periodsRanges)
+        {
+            var rangeStartUtc = new DateTime(p.start.Year, p.start.Month, p.start.Day, 0, 0, 0, DateTimeKind.Unspecified).AddHours(5);
+            var rangeEndUtc   = new DateTime(p.end.Year, p.end.Month, p.end.Day, 0, 0, 0, DateTimeKind.Unspecified).AddDays(1).AddHours(5);
+
+            // Campañas cuyo CreatedAt cae en el período.
+            var campaignIdsOfPeriod = campaigns
+                .Where(c => c.CreatedAt >= rangeStartUtc && c.CreatedAt < rangeEndUtc)
+                .Select(c => c.Id)
+                .ToHashSet();
+
+            var (bestCounts, unlabeled, total, effective) = ComputeForCampaigns(campaignIdsOfPeriod);
+            var effectivenessPct = total == 0 ? 0 : Math.Round(effective * 100.0 / total, 1);
+
+            var breakdown = bestCounts
+                .Select(kv => new ManagementReportLabelBreakdown(
+                    LabelId: kv.Key,
+                    Name: labelById.TryGetValue(kv.Key, out var l1) ? l1.Name : "(eliminada)",
+                    Color: labelById.TryGetValue(kv.Key, out var l2) ? l2.Color : "#94a3b8",
+                    IsEffective: effectiveSet.Contains(kv.Key),
+                    Count: kv.Value,
+                    Percentage: total == 0 ? 0 : Math.Round(kv.Value * 100.0 / total, 1)))
+                .OrderByDescending(b => b.Count)
+                .ToList();
+
+            periodsResult.Add(new ManagementReportPeriod(
+                Label: p.label,
+                Start: p.start,
+                End: p.end,
+                Total: total,
+                Effectiveness: effectivenessPct,
+                UnlabeledCount: unlabeled,
+                UnlabeledPercentage: total == 0 ? 0 : Math.Round(unlabeled * 100.0 / total, 1),
+                Breakdown: breakdown));
+        }
+
+        // ── 6. Grand Total — universo de TODAS las campañas del rango.
+        //   Igual a lo que reporta /api/reports/effectiveness para el mismo rango.
+        var allCampaignIdsSet = campaignIdList.ToHashSet();
+        var (_, _, totalClientsAll, totalEffective) = ComputeForCampaigns(allCampaignIdsSet);
+        var effectivenessAll = totalClientsAll == 0 ? 0 : Math.Round(totalEffective * 100.0 / totalClientsAll, 1);
+
+        var dto = new ManagementReportDto(
+            TenantName: tenant.Name,
+            From: from.ToString("yyyy-MM-dd"),
+            To: to.ToString("yyyy-MM-dd"),
+            Granularity: granularity,
+            CampaignTemplateId: campaignTemplateId,
+            CampaignTemplateName: templateName,
+            EffectiveLabelIds: effectiveSet.ToList(),
+            TotalAll: totalClientsAll,
+            EffectivenessAll: effectivenessAll,
+            Periods: periodsResult);
+
+        return (dto, null);
+    }
+
+    /// <summary>
+    /// Descarga el logo del tenant (best-effort) para embeber en el PDF.
+    /// Cualquier fallo retorna null y el PDF se genera sin logo.
+    /// </summary>
+    private async Task<byte[]?> TryDownloadLogoAsync(string? logoUrl, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(logoUrl)) return null;
+        if (!Uri.TryCreate(logoUrl, UriKind.Absolute, out var uri)) return null;
+        if (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) return null;
+        try
+        {
+            using var http = httpFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(5);
+            using var resp = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct);
+            if (!resp.IsSuccessStatusCode) return null;
+            if (resp.Content.Headers.ContentLength is long len && len > LogoMaxBytes) return null;
+            var bytes = await resp.Content.ReadAsByteArrayAsync(ct);
+            if (bytes.Length == 0 || bytes.Length > LogoMaxBytes) return null;
+            return bytes;
+        }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "[DashboardController] Falló descarga del logo {Url}", logoUrl);
+            return null;
+        }
     }
 
     // Genera lista de "períodos" entre from y to según granularidad.

@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowLeft, Printer, RefreshCcw, FileText, Loader2, FileDown } from 'lucide-react'
+import { ArrowLeft, FileDown, RefreshCcw, FileText, Loader2, Download } from 'lucide-react'
 import {
   useManagementReport,
   useExportManagementReport,
+  useDownloadManagementReportPdf,
   type ManagementReport,
   type ReportPeriod,
   type ReportLabelBreakdown,
@@ -39,6 +40,7 @@ export function ManagementReportPage() {
     generated,
   )
   const exportMut = useExportManagementReport()
+  const downloadPdfMut = useDownloadManagementReportPdf()
   const { toasts, remove, toast } = useToast()
 
   const handleGenerate = () => {
@@ -46,8 +48,6 @@ export function ManagementReportPage() {
     // si ya estaba generado y solo cambió fechas/granularidad, refetch
     setTimeout(() => refetch(), 0)
   }
-
-  const handlePrint = () => window.print()
 
   const handleExport = async () => {
     try {
@@ -62,12 +62,25 @@ export function ManagementReportPage() {
     }
   }
 
+  const handleDownloadPdf = async () => {
+    try {
+      await downloadPdfMut.mutateAsync({
+        from, to, granularity,
+        campaignTemplateId: campaignTemplateId || null,
+      })
+      toast.success('PDF descargado.')
+    } catch (err: unknown) {
+      const e = err as { message?: string }
+      toast.error(e.message ?? 'No se pudo descargar el PDF.')
+    }
+  }
+
   return (
     <div className="p-6 print:p-0">
       {/* ── Controles (ocultos al imprimir) ── */}
       <div className="mb-6 print:hidden">
-        <Link to="/dashboard" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline mb-3">
-          <ArrowLeft className="h-4 w-4" /> Volver al Dashboard
+        <Link to="/reports" className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline mb-3">
+          <ArrowLeft className="h-4 w-4" /> Volver a Informes
         </Link>
 
         <div className="flex items-start justify-between gap-4 mb-4">
@@ -93,12 +106,15 @@ export function ManagementReportPage() {
                 Exportar Excel
               </button>
               <button
-                onClick={handlePrint}
-                disabled={isLoading || isError}
+                onClick={handleDownloadPdf}
+                disabled={isLoading || isError || downloadPdfMut.isPending}
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+                title="Descarga el informe como PDF nativo (no es un screenshot)"
               >
-                <Printer className="h-4 w-4" />
-                Imprimir / Guardar PDF
+                {downloadPdfMut.isPending
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <Download className="h-4 w-4" />}
+                Descargar PDF
               </button>
             </div>
           )}
@@ -253,10 +269,14 @@ function ReportContent({ data }: { data: ManagementReport }) {
         <StackedBarChart periods={data.periods} labels={allLabels} />
 
         <p className="mt-6 text-xs italic text-gray-500">
-          <strong className="not-italic text-gray-700">Nota:</strong> Efectividad calculada como la suma de
-          conversaciones clasificadas con etiquetas positivas
-          {' '}<em>(compromisos de pago + envío de comprobantes + pagos confirmados)</em>{' '}
-          sobre el total de conversaciones del período.
+          <strong className="not-italic text-gray-700">Nota metodológica:</strong> Este informe mide el{' '}
+          <strong className="not-italic text-gray-700">rendimiento de las campañas</strong>.
+          El universo de cada período son los teléfonos únicos contactados por campañas creadas en ese período.
+          Conversaciones espontáneas sin campaña asociada no entran. Una respuesta tardía sigue contando — el
+          cliente cae en el período de SU campaña original, no en el mes en que respondió. A cada cliente se le
+          asigna su mejor resultado por rank: Confimó Pago › Promesa › Negociación › Disputa › Cancelación.
+          Efectividad = clientes con mejor etiqueta en {'{'}Confimó Pago, Promesa, Negociación{'}'}.
+          Estas métricas coinciden con el Informe de Efectividad sobre el mismo rango.
         </p>
 
         <footer className="mt-10 flex items-center justify-between text-xs text-gray-400">
@@ -566,7 +586,7 @@ function keyFindings(
 
   // 1) Volumen total
   findings.push(
-    `Se gestionaron ${data.totalAll} conversaciones en el rango completo, ` +
+    `Se gestionaron ${data.totalAll} clientes únicos en el rango completo, ` +
     `con una efectividad agregada del ${data.effectivenessAll}%.`
   )
 

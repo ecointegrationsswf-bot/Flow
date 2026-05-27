@@ -1,7 +1,7 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   LayoutDashboard, MessageSquare, Megaphone, Bot, ClipboardList,
-  Settings, LogOut, PanelLeftClose, PanelLeft, Tag, User, Brain, Download, ShieldAlert,
+  Settings, LogOut, PanelLeftClose, PanelLeft, Tag, User, Brain, Download, ShieldAlert, FileBarChart,
 } from 'lucide-react'
 import { useAuthStore } from '@/shared/stores/authStore'
 import { useUiStore } from '@/shared/stores/uiStore'
@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { to: '/monitor',            icon: MessageSquare,   label: 'Monitor',           permission: 'view_monitor' },
   { to: '/campaign-templates', icon: ClipboardList,   label: 'Maestro Campañas',  permission: 'view_campaign_templates' },
   { to: '/campaigns',          icon: Megaphone,       label: 'Campañas',          permission: 'view_campaigns' },
+  { to: '/reports',            icon: FileBarChart,    label: 'Informes',          permission: 'view_campaigns' },
   { to: '/invalid-numbers',    icon: ShieldAlert,     label: 'Lista negra WA',    permission: 'view_campaigns' },
   { to: '/downloads',          icon: Download,        label: 'Descargas',         permission: undefined },
   { to: '/agents',             icon: Bot,             label: 'Agentes IA',        permission: 'view_agents' },

@@ -145,3 +145,36 @@ export function useExportManagementReport() {
     },
   })
 }
+
+/**
+ * Descarga el informe como PDF nativo (QuestPDF + chart PNG embebido). NO es
+ * un screenshot — la tipografía es vectorial, las páginas tienen paginación
+ * real y el header trae el logo del tenant.
+ */
+export function useDownloadManagementReportPdf() {
+  return useMutation({
+    mutationFn: async (params: ManagementReportQuery) => {
+      const resp = await api.get('/dashboard/management-report/pdf', {
+        params: {
+          from: params.from,
+          to: params.to,
+          granularity: params.granularity,
+          ...(params.campaignTemplateId ? { campaignTemplateId: params.campaignTemplateId } : {}),
+        },
+        responseType: 'blob',
+      })
+      const blob = new Blob([resp.data as Blob], { type: 'application/pdf' })
+      const cd = resp.headers['content-disposition'] as string | undefined
+      const match = cd?.match(/filename="?([^";]+)"?/)
+      const filename = match?.[1] ?? `informe_gerencial_${params.from}_${params.to}.pdf`
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    },
+  })
+}

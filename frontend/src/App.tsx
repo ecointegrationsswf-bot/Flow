@@ -33,6 +33,9 @@ import { AdminUsersPage } from '@/modules/admin/components/AdminUsersPage'
 import { ActionsPage } from '@/modules/admin/components/ActionsPage'
 import { ScheduledJobsPage } from '@/modules/admin/components/ScheduledJobsPage'
 import { InvalidNumbersPage } from '@/modules/admin/components/InvalidNumbersPage'
+import { ReportsPage } from '@/modules/reports/components/ReportsPage'
+import { EffectivenessReportPage } from '@/modules/reports/components/EffectivenessReportPage'
+import { ConversationDetailsPage } from '@/modules/reports/components/ConversationDetailsPage'
 import { AdminMorosidadPage } from '@/modules/admin/components/AdminMorosidadPage'
 import { PromptsPage } from '@/modules/admin/components/PromptsPage'
 import { PromptFormPage } from '@/modules/admin/components/PromptFormPage'
@@ -124,6 +127,10 @@ export default function App() {
                 Backend (InvalidNumbersController) filtra por TenantId automáticamente
                 cuando el usuario NO es super admin, así que se reutiliza la misma página. */}
             <Route path="/invalid-numbers" element={<InvalidNumbersPage />} />
+            {/* /reports = hub (cards de informes disponibles). Cada informe en su sub-ruta. */}
+            <Route path="/reports" element={<ReportsPage />} />
+            <Route path="/reports/effectiveness" element={<EffectivenessReportPage />} />
+            <Route path="/reports/conversation-details" element={<ConversationDetailsPage />} />
           </Route>
           <Route element={<PermissionRoute permission="create_campaigns" />}>
             <Route path="/campaigns/new" element={<CampaignUploadPage />} />

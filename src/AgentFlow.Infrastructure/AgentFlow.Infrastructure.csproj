@@ -36,6 +36,11 @@
          .NET nativo, soporta layout y tablas. Lo usa DocumentIndexer al subir
          un documento al maestro de campaña. -->
     <PackageReference Include="PdfPig" Version="0.1.10" />
+    <!-- QuestPDF: generación de PDFs nativos (no screenshots) con fluent API.
+         Licencia Community gratis para uso comercial < $1M revenue.
+         Lo usa el módulo de Informes para exportar el reporte de efectividad
+         con tipografía profesional, tablas, headers/footers y soporte UTF-8. -->
+    <PackageReference Include="QuestPDF" Version="2024.12.3" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="10.0.0-preview.3.25171.5" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0-preview.3.25171.5" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.0-preview.3.25171.5" />

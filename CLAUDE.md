@@ -454,6 +454,181 @@ Consultar al DBA antes de acceder directamente a las tablas.
 
 ---
 
+## Módulo Informes — acuerdos cerrados con el usuario
+
+El menú `/reports` es el hub único de reportes operacionales. Reemplaza el botón
+"Informe gerencial" que vivía en el Dashboard. Cualquier reporte nuevo se agrega
+como una card más en `ReportsPage.tsx` — no recrear menús alternos.
+
+### Regla maestra: los informes miden CAMPAÑAS
+
+**Decisión del usuario (Mayo 2026, sesión de alineación de informes):**
+> *"Estos informes son para medir las campañas. Si el cliente escribe y no está
+> asociado a una campaña, no debe contar."*
+> *"Si el cliente escribió un mes después de su campaña real, lo cuento."*
+
+Consecuencias técnicas:
+- **Universo** = teléfonos únicos en `CampaignContacts` de campañas cuya
+  `Campaign.CreatedAt` cae en el rango. NO se parte de `Conversations`.
+- **Período del cliente** = el período de SU campaña (por `Campaign.CreatedAt`),
+  no el mes en que respondió. Una respuesta tardía sigue contando, pero en su
+  campaña original.
+- **Conversaciones sin `CampaignId`** quedan fuera de los reportes por default.
+  Solo aparecen en "Detalle de Conversaciones" cuando el usuario prende
+  explícitamente el toggle "Inbound sin campaña".
+- **Filtro por maestro** (no por campañas individuales): el usuario selecciona
+  uno o varios `CampaignTemplate`. Filtrar por campaña concreta es ruido — un
+  maestro puede tener 5+ corridas y el supervisor quiere verlas consolidadas.
+
+### Definición de "Efectiva" — UNIFICADA entre todos los informes
+
+Las tres etiquetas que cuentan como gestión efectiva (constante
+`EffectiveLabelNames` en `DashboardController` + lógica en
+`EffectivenessReportService.RankLabel`):
+
+```
+Confimo Pago / Confirmo Pago    → rank 4 (typo histórico + nombre correcto)
+Promesa de Pago                 → rank 3
+Negociación / Acuerdo           → rank 2
+Disputa / Reclamo               → rank 1
+Solicita Cancelación            → rank -1
+otras (incluye sin etiqueta)    → rank 0
+```
+
+- Cada cliente recibe la etiqueta con el rank MAYOR entre todas sus
+  conversaciones del período.
+- **Efectividad = clientes con mejor etiqueta en {4, 3, 2} / total clientes únicos**.
+- Disputa y Cancelación NO cuentan como efectivas.
+- El parámetro query `effectiveLabelIds=csv-de-guids` sigue funcionando como
+  override para tenants con etiquetas nombradas distinto, pero el fallback
+  estándar es la lista de arriba.
+
+### Reportes disponibles
+
+**1. Informe Gerencial** — `GET /api/dashboard/management-report` (JSON) +
+`/management-report/pdf` (PDF nativo QuestPDF) + `/management-report/export` (Excel)
+
+- Vista comparativa por período (mensual o quincenal Q1=1-15 / Q2=16-fin).
+- Universo y "efectiva" = los descritos arriba.
+- Helper único `BuildManagementReportDtoAsync` → consumido por JSON, PDF y Excel.
+  No duplicar la lógica de cómputo en otro lado.
+- Chart apilado: PNG generado server-side en `GenerateStackedBarChartPng`
+  (System.Drawing, Windows-only). Mismo PNG embebido en Excel y PDF.
+- Página: `/dashboard/management-report` (no se movió a `/reports/management`
+  para mantener bookmarks viejos). Link "Volver" apunta a `/reports`.
+
+**2. Informe de Efectividad** — `GET /api/reports/effectiveness` (JSON) +
+`/effectiveness/pdf` (PDF QuestPDF)
+
+- Métricas por cliente único: Engagement, Confirmed Payment Rate, Effective
+  Management Rate, distribución de # de contactos, resultado por categoría.
+- Filtro por **maestros** (multi-select) — el endpoint
+  `/reports/templates-for-filter` devuelve solo los maestros que tienen al
+  menos una corrida en el rango, con `campaignCount` agregado.
+- Servicio: `IEffectivenessReportService` / `EffectivenessReportService`.
+- Página: `/reports/effectiveness`.
+
+**3. Detalle de Conversaciones** — `GET /api/reports/conversation-details/export`
+
+- Excel descargable a demanda. **Mismo formato que el resumen automático del
+  job nocturno `SEND_LABELING_SUMMARY`** — 10 columnas: Campaña, Cliente,
+  Celular, Identificación, Fecha Gestión, Etiqueta, Resumen, Usuario,
+  Apellido, Agente.
+- Filtros: rango (obligatorio), maestro de campaña (opcional — null = todos),
+  toggle `includeInboundWithoutCampaign` (default off).
+- Cuando el toggle está ON, se agregan conversaciones donde `CampaignId IS NULL`
+  y existe al menos un mensaje Inbound en el rango. Columna Campaña muestra
+  "(sin campaña)".
+- Servicio: `ConversationDetailsExcelExporter` (DI Scoped).
+- Página: `/reports/conversation-details`.
+
+### PDF nativo — NO usar `window.print()`
+
+- Generación con **QuestPDF 2024.12.3** (Community License: válida mientras
+  la revenue de la empresa sea menor a $1M USD/año).
+- `QuestPDF.Settings.License = LicenseType.Community` se setea UNA vez en
+  `Program.cs`.
+- Generadores en `AgentFlow.Infrastructure/Reports/`:
+  `EffectivenessReportPdfGenerator`, `ManagementReportPdfGenerator`.
+- Patrón: el generator recibe el DTO + bytes opcionales (chart PNG + logo
+  del tenant). Es CPU-bound puro y testeable sin red.
+- El controller descarga el logo via `IHttpClientFactory` (best-effort, timeout
+  5s, cap 2 MB). Si falla la descarga, el PDF se genera sin logo, no bloquea.
+- El header de los PDFs incluye `Tenant.LogoUrl` cuando está configurado en
+  la entidad Tenant.
+
+### Decisión de NO unificar Effectiveness y Gerencial en un solo informe
+
+Aunque ambos miden lo mismo conceptualmente sobre la misma data, se mantienen
+separados porque responden preguntas distintas en la operación:
+
+- **Gerencial** — vista ejecutiva mes-a-mes, gráfico apilado para directorio.
+- **Efectividad** — KPIs específicos (engagement, saturación de contactos,
+  distribución de # de contactos por cliente) que no caben en el formato
+  del gerencial.
+
+Después de la alineación, ambos dan el mismo número de efectividad sobre el
+mismo rango — si difieren, hay un bug.
+
+### Posición sobre cambios futuros al cálculo
+
+Antes de tocar la regla de "efectiva" o el universo, leer la sección anterior y
+confirmar con el usuario operativo. El razonamiento detrás de los criterios
+está documentado en los comentarios de:
+- `EffectivenessReportService.GenerateAsync` (Infrastructure/Reports/)
+- `DashboardController.BuildManagementReportDtoAsync` (API/Controllers/)
+
+---
+
+## Convenciones de deploy
+
+Per skill `talkia-deploy`, todos los publishes se generan en:
+
+```
+C:\TalkIADeploy\api\
+C:\TalkIADeploy\frontend\   (cuando se publica con dotnet; el frontend Vite va a frontend\dist\)
+C:\TalkIADeploy\worker-win-x64\
+```
+
+Deploy a producción:
+
+| Componente | Sitio | URL pública | Método |
+|---|---|---|---|
+| API | site12 | `http://jamconsulting-004-site12.site4future.com` | Web Deploy + `-enableRule:AppOffline` |
+| Frontend | site11 | `http://jamconsulting-004-site11.site4future.com` | Web Deploy (sin AppOffline) |
+| Worker | on-prem `VMI2141660` | — | Copia manual a `C:\Windows\ServicesJAM\worker\` + restart servicio |
+
+**Orden obligatorio del deploy:**
+
+1. **Worker on-prem** primero (si tiene cambios)
+2. **API** (después de confirmar que el Worker corre el código nuevo)
+3. **Frontend** al final (no afecta backend)
+
+Saltarse este orden con cambios al pipeline de inbox puede dejar mensajes
+`Pending` hasta que el watchdog los escale (2 min cada uno).
+
+PublishSettings files:
+- `~/Downloads/site11.PublishSettings`
+- `~/Downloads/site12.PublishSettings`
+- Password NO va en archivos — solo en variables locales de cada sesión.
+
+---
+
+## Documentos técnicos en `docs/`
+
+- `docs/ARQUITECTURA.md` — diseño original del proyecto.
+- `docs/Propuesta-Simplificacion-2FA-PASESA.docx` — propuesta de consolidar
+  los 3 endpoints del broker PASESA (`INSURED_INITIATE` +
+  `SEND_2FA_CODE_EMAIL` + `INSURED_VALIDATE`) en 2 endpoints
+  (`INSURED_REQUEST_CODE` + `INSURED_VALIDATE_CODE`). Eliminación del
+  `idCodigo` del wire — la sesión 2FA se identifica server-side por
+  `(cédula + telefonoOrigen)`. Beneficios cuantificados: -40% latencia
+  turno 1, -50% tokens LLM, 0 ChainRules por tenant para 2FA.
+- `docs/generate-pasesa-2fa-proposal.js` — script docx-js que generó el
+  Word de arriba. Reusable para regenerar si cambian datos.
+
+---
+
 ## Decisiones pendientes
 
 - **Autenticación**: ¿Keycloak/Identity Server o JWT generado internamente?

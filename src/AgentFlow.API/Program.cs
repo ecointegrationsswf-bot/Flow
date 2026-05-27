@@ -168,6 +168,14 @@ builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IBusinessHoursClock,
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInitialMessageGenerator,
     AgentFlow.Infrastructure.AI.InitialMessageGenerator>();
 
+// ── Reportes ─────────────────────────────────────────────
+// QuestPDF Community License (free para uso comercial < $1M revenue).
+// Settings.License debe configurarse UNA vez al inicializar la app.
+QuestPDF.Settings.License = QuestPDF.Infrastructure.LicenseType.Community;
+builder.Services.AddScoped<AgentFlow.Application.Modules.Reports.IEffectivenessReportService,
+    AgentFlow.Infrastructure.Reports.EffectivenessReportService>();
+builder.Services.AddScoped<AgentFlow.Infrastructure.Reports.ConversationDetailsExcelExporter>();
+
 // ── CampaignIntakeService v2 (reemplazo de la fase A+B+C de n8n) ─────
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDuplicateChecker,
     AgentFlow.Infrastructure.Campaigns.V2.DuplicateChecker>();
