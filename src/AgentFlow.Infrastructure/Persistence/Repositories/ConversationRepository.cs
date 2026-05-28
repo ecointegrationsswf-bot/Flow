@@ -43,12 +43,32 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
 
         if (!string.IsNullOrWhiteSpace(launchedByUserId))
         {
-            // Conversaciones cuyo Campaign.LaunchedByUserId coincide,
-            // O conversaciones sin CampaignId (chats orgánicos / no-campaña visibles para todos).
+            // Modos de filtrado del monitor (centinelas + clave de usuario):
+            //   "__inbound__"    → SOLO conversaciones sin campaña (el cliente escribió
+            //                      espontáneamente, no salió de una campaña).
+            //   "__unassigned__" → campañas de descarga sin ejecutivo matcheado
+            //                      (LaunchedByUserId = "system:download").
+            //   <email/clave>    → SOLO las campañas de ESE usuario (ya NO se mezclan
+            //                      las conversaciones sin campaña — antes el OR las traía
+            //                      siempre, lo que confundía el conteo por ejecutivo).
+            // null/"" (sin filtro) → todas las del tenant (rama de arriba, no entra acá).
             var userKey = launchedByUserId.Trim();
-            q = q.Where(c => c.CampaignId == null
-                          || db.Campaigns.Any(camp => camp.Id == c.CampaignId
-                                                   && camp.LaunchedByUserId == userKey));
+            if (userKey == "__inbound__")
+            {
+                q = q.Where(c => c.CampaignId == null);
+            }
+            else if (userKey == "__unassigned__")
+            {
+                q = q.Where(c => c.CampaignId != null
+                              && db.Campaigns.Any(camp => camp.Id == c.CampaignId
+                                                       && camp.LaunchedByUserId == "system:download"));
+            }
+            else
+            {
+                q = q.Where(c => c.CampaignId != null
+                              && db.Campaigns.Any(camp => camp.Id == c.CampaignId
+                                                       && camp.LaunchedByUserId == userKey));
+            }
         }
 
         return await q

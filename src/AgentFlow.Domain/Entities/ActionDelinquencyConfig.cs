@@ -36,9 +36,29 @@ public class ActionDelinquencyConfig
     /// </summary>
     public bool AutoCrearCampanas { get; set; }
 
+    /// <summary>
+    /// Si true (default), las campañas auto-creadas se LANZAN automáticamente
+    /// (los mensajes salen sin intervención). Si false, las campañas quedan en
+    /// estado Pending (creadas pero inertes) para que un humano las revise y
+    /// lance manualmente desde el portal. Solo aplica cuando AutoCrearCampanas=true.
+    /// Default true = comportamiento histórico (crear + lanzar).
+    /// </summary>
+    public bool AutoLaunchCampaigns { get; set; } = true;
+
     /// <summary>Maestro de campaña a usar al auto-crear campañas. Requerido si AutoCrearCampanas=true.</summary>
     public Guid? CampaignTemplateId { get; set; }
     public CampaignTemplate? CampaignTemplate { get; set; }
+
+    /// <summary>
+    /// Si true, al auto-crear campañas el sistema NO crea una sola campaña sino
+    /// UNA POR EJECUTIVO DE COBROS. El email del ejecutivo se toma de la columna
+    /// mapeada con Rol=ExecutiveEmail y se matchea contra los AppUsers del tenant
+    /// (por Email, case-insensitive). Las filas que matchean van a la campaña de
+    /// ese usuario (LaunchedByUserId = su email); las que no matchean — o si no
+    /// hay columna ExecutiveEmail mapeada — caen a la campaña "system:download"
+    /// (comportamiento actual). Default false = una sola campaña como hasta ahora.
+    /// </summary>
+    public bool SplitCampaignsByExecutive { get; set; }
 
     /// <summary>Agente asignado a las campañas creadas automáticamente.</summary>
     public Guid? AgentDefinitionId { get; set; }

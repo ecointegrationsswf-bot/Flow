@@ -15,6 +15,8 @@ interface ConversationListProps {
   onToDateChange: (v: string) => void
   launchedByUserId: string
   onLaunchedByUserIdChange: (v: string) => void
+  /** Email del usuario logueado — para la opción "Mis conversaciones". Null si no hay. */
+  currentUserEmail?: string | null
 }
 
 
@@ -36,6 +38,7 @@ export function ConversationList({
   conversations, selectedId, onSelect,
   fromDate, toDate, onFromDateChange, onToDateChange,
   launchedByUserId, onLaunchedByUserIdChange,
+  currentUserEmail,
 }: ConversationListProps) {
   const tt = useTenantTime()
   const { data: launchers = [] } = useCampaignLaunchers()
@@ -183,18 +186,29 @@ export function ConversationList({
         )}
       </div>
 
-      {/* Launched-by-user filter */}
+      {/* Filtro de alcance — modos especiales + lista de usuarios que lanzaron campañas.
+          Centinelas: "__inbound__" = inbound sin campaña, "__unassigned__" = descarga sin
+          ejecutivo matcheado (system:download). El email del usuario = sus campañas. */}
       <div className="px-4 pb-2">
         <select
           value={launchedByUserId}
           onChange={e => onLaunchedByUserIdChange(e.target.value)}
           className="w-full rounded-lg border border-gray-200 bg-[#f6f6f6] px-3 py-1.5 text-xs text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-400/50"
-          title="Filtra por el usuario que lanzó la campaña. Las conversaciones sin campaña son visibles para todos."
+          title="Filtra las conversaciones por alcance: las tuyas, sin asignar, inbound sin campaña, o todas."
         >
           <option value="">Todas las campañas (cualquier usuario)</option>
-          {launchers.map(l => (
-            <option key={l.key} value={l.key}>{l.label}</option>
-          ))}
+          {currentUserEmail && (
+            <option value={currentUserEmail}>Mis conversaciones</option>
+          )}
+          <option value="__unassigned__">Sin asignar (descarga sin ejecutivo)</option>
+          <option value="__inbound__">Inbound sin campaña (el cliente escribió)</option>
+          {launchers.length > 0 && (
+            <optgroup label="Por usuario que lanzó">
+              {launchers.map(l => (
+                <option key={l.key} value={l.key}>{l.label}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
       </div>
 

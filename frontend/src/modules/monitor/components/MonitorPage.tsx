@@ -20,13 +20,19 @@ function todayLocalDate(): string {
 export function MonitorPage() {
   const [selected, setSelected] = useState<string | null>(null)
   const tenantId = useAuthStore((s) => s.tenantId) ?? ''
+  const user = useAuthStore((s) => s.user)
   const queryClient = useQueryClient()
 
   // Filtros — por defecto: del día actual.
   const today = todayLocalDate()
   const [fromDate, setFromDate] = useState<string>(today)
   const [toDate, setToDate]     = useState<string>(today)
-  const [launchedByUserId, setLaunchedByUserId] = useState<string>('')
+  // Default del alcance por ROL: un ejecutivo de Cobros arranca viendo SOLO sus
+  // conversaciones (su email); Admin/Supervisor arrancan en "Todas". Cualquiera
+  // puede cambiar el selector. useState(initializer) corre una sola vez.
+  const [launchedByUserId, setLaunchedByUserId] = useState<string>(
+    () => (user?.role === 'Cobros' && user?.email ? user.email : ''),
+  )
 
   const { data: conversations = [], isLoading } = useConversations({
     fromIso: fromDate || null,    // YYYY-MM-DD; el backend lo interpreta en TZ del tenant
@@ -60,6 +66,7 @@ export function MonitorPage() {
         onToDateChange={setToDate}
         launchedByUserId={launchedByUserId}
         onLaunchedByUserIdChange={setLaunchedByUserId}
+        currentUserEmail={user?.email ?? null}
       />
 
       <main className="flex flex-1 flex-col bg-[#f0f2f5]">

@@ -17,5 +17,21 @@ public enum FieldRole
     /// <summary>Monto pendiente — opcional. El agente IA lo cita en el mensaje al cliente.</summary>
     Amount,
     /// <summary>Número de póliza — opcional. Persistido aparte para queries específicas.</summary>
-    PolicyNumber
+    PolicyNumber,
+    /// <summary>
+    /// Email del ejecutivo de cobros responsable de la fila — opcional. Si está
+    /// mapeado y el flag SplitCampaignsByExecutive está activo, el sistema matchea
+    /// este email contra los AppUsers del tenant y crea una campaña por ejecutivo.
+    /// Las filas que no matchean (o sin este mapeo) caen a la campaña "system:download".
+    /// </summary>
+    ExecutiveEmail,
+    /// <summary>
+    /// Celular del ejecutivo de cobros — opcional. Cuando el email del ejecutivo
+    /// matchea un AppUser (split por ejecutivo activo), este número actualiza el
+    /// NotifyPhone del perfil (normalizado a E.164) para que la acción de
+    /// transferencia a humano sepa a qué número avisar. El archivo es la fuente
+    /// de verdad: sobrescribe el NotifyPhone en cada descarga. Si viene vacío, no
+    /// se toca el valor actual del perfil.
+    /// </summary>
+    ExecutivePhone
 }

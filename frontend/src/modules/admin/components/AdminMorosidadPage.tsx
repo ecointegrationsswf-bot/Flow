@@ -22,6 +22,8 @@ interface DelinquencyConfig {
   campaignNamePattern: string | null; notificationEmail: string | null
   downloadWebhookUrl: string | null; downloadWebhookMethod: string
   downloadWebhookHeaders: string | null; isActive: boolean
+  splitCampaignsByExecutive: boolean
+  autoLaunchCampaigns: boolean
 }
 interface ConfigPayload {
   codigoPais: string; itemsJsonPath: string | null; autoCrearCampanas: boolean
@@ -29,8 +31,10 @@ interface ConfigPayload {
   campaignNamePattern: string | null; notificationEmail: string | null
   downloadWebhookUrl: string | null; downloadWebhookMethod: string
   downloadWebhookHeaders: string | null; isActive: boolean
+  splitCampaignsByExecutive: boolean
+  autoLaunchCampaigns: boolean
 }
-type FieldRole = 'None' | 'Phone' | 'ClientName' | 'KeyValue' | 'Amount' | 'PolicyNumber'
+type FieldRole = 'None' | 'Phone' | 'ClientName' | 'KeyValue' | 'Amount' | 'PolicyNumber' | 'ExecutiveEmail' | 'ExecutivePhone'
 interface FieldMapping {
   id?: string
   columnKey: string
@@ -224,6 +228,8 @@ const DEFAULT_CONFIG: ConfigPayload = {
   campaignNamePattern: '{acción} {fecha}', notificationEmail: null,
   downloadWebhookUrl: null, downloadWebhookMethod: 'GET', downloadWebhookHeaders: null,
   isActive: true,
+  splitCampaignsByExecutive: false,
+  autoLaunchCampaigns: true,
 }
 
 function ConfigTab({ tenantId, actionId }: { tenantId: string; actionId: string }) {
@@ -248,6 +254,8 @@ function ConfigTab({ tenantId, actionId }: { tenantId: string; actionId: string 
         downloadWebhookMethod: config.downloadWebhookMethod || 'GET',
         downloadWebhookHeaders: config.downloadWebhookHeaders || '',
         isActive:              config.isActive,
+        splitCampaignsByExecutive: config.splitCampaignsByExecutive ?? false,
+        autoLaunchCampaigns:   config.autoLaunchCampaigns ?? true,
       })
     } else if (config === null) {
       setForm(DEFAULT_CONFIG)
@@ -387,6 +395,61 @@ function ConfigTab({ tenantId, actionId }: { tenantId: string; actionId: string 
               />
               <p className="text-xs text-gray-500">Placeholders: <code className="rounded bg-gray-100 px-1">{'{acción}'}</code> <code className="rounded bg-gray-100 px-1">{'{fecha}'}</code> <code className="rounded bg-gray-100 px-1">{'{grupos}'}</code></p>
             </div>
+
+            {/* Toggle: lanzar automáticamente o dejar en Pending para revisión manual */}
+            <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-800">Lanzar campañas automáticamente</p>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    Si está <strong>activo</strong>, al terminar la descarga las campañas se lanzan solas
+                    (los mensajes salen). Si está <strong>apagado</strong>, las campañas quedan
+                    <strong> creadas en estado Pendiente</strong> y un humano las revisa y lanza a mano
+                    desde el portal. Útil para validar antes de enviar.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, autoLaunchCampaigns: !form.autoLaunchCampaigns })}
+                  className={`relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${form.autoLaunchCampaigns ? 'bg-blue-600' : 'bg-gray-300'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${form.autoLaunchCampaigns ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              {!form.autoLaunchCampaigns && (
+                <p className="mt-2 rounded bg-amber-50 border border-amber-200 px-2 py-1.5 text-[11px] text-amber-800">
+                  Las campañas NO se enviarán automáticamente. Quedan en Pendiente — hay que lanzarlas manualmente.
+                </p>
+              )}
+            </div>
+
+            {/* Toggle: partir campañas por ejecutivo de cobros */}
+            <div className="rounded-md border border-gray-200 bg-gray-50 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-gray-800">Partir campañas por ejecutivo de cobros</p>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    En vez de una sola campaña, crea <strong>una por ejecutivo</strong>: matchea el email de la
+                    columna marcada con rol <code className="rounded bg-gray-100 px-1">ExecutiveEmail</code> contra
+                    los usuarios del tenant. Las filas sin match (o sin esa columna) caen a una campaña sin asignar.
+                    Cada ejecutivo verá solo sus conversaciones en el Monitor y recibirá su propio Excel del resumen diario.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setForm({ ...form, splitCampaignsByExecutive: !form.splitCampaignsByExecutive })}
+                  className={`relative mt-0.5 inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${form.splitCampaignsByExecutive ? 'bg-blue-600' : 'bg-gray-300'}`}
+                >
+                  <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform ${form.splitCampaignsByExecutive ? 'translate-x-6' : 'translate-x-1'}`} />
+                </button>
+              </div>
+              {form.splitCampaignsByExecutive && (
+                <p className="mt-2 rounded bg-amber-50 border border-amber-200 px-2 py-1.5 text-[11px] text-amber-800">
+                  Recordá marcar una columna con rol <strong>ExecutiveEmail</strong> en la pestaña de Mapeo de campos.
+                  Sin esa columna, todas las filas caen a "sin asignar".
+                </p>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -435,12 +498,14 @@ function ConfigTab({ tenantId, actionId }: { tenantId: string; actionId: string 
 // ─── Tab Mapeo de campos ──────────────────────────────────────────────────────
 
 const ROLE_OPTIONS: { value: FieldRole; label: string; required: boolean }[] = [
-  { value: 'None',         label: 'Sin rol (extra)',     required: false },
-  { value: 'Phone',        label: 'Teléfono *',          required: true  },
-  { value: 'ClientName',   label: 'Nombre cliente *',    required: true  },
-  { value: 'KeyValue',     label: 'KeyValue *',          required: true  },
-  { value: 'Amount',       label: 'Monto',               required: false },
-  { value: 'PolicyNumber', label: 'Número de póliza',    required: false },
+  { value: 'None',           label: 'Sin rol (extra)',       required: false },
+  { value: 'Phone',          label: 'Teléfono *',            required: true  },
+  { value: 'ClientName',     label: 'Nombre cliente *',      required: true  },
+  { value: 'KeyValue',       label: 'KeyValue *',            required: true  },
+  { value: 'Amount',         label: 'Monto',                 required: false },
+  { value: 'PolicyNumber',   label: 'Número de póliza',      required: false },
+  { value: 'ExecutiveEmail', label: 'Email ejecutivo',       required: false },
+  { value: 'ExecutivePhone', label: 'Celular ejecutivo',     required: false },
 ]
 
 const DATA_TYPES = ['string', 'number', 'phone', 'currency', 'date'] as const

@@ -449,6 +449,21 @@ var app = builder.Build();
             BEGIN
                 ALTER TABLE CampaignTemplates ADD ActionConfigs nvarchar(max) NULL;
             END");
+        // Flag de "partir campañas de descarga por ejecutivo" — se agrega vía guard
+        // idempotente (no migración EF) por el drift de schema existente en prod.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionDelinquencyConfigs') AND name = 'SplitCampaignsByExecutive')
+            BEGIN
+                ALTER TABLE ActionDelinquencyConfigs ADD SplitCampaignsByExecutive bit NOT NULL DEFAULT 0;
+            END");
+        // AutoLaunchCampaigns: default 1 para que las configs existentes sigan
+        // lanzando automaticamente (comportamiento historico). El operador puede
+        // apagarlo para crear campanas en Pending y lanzarlas a mano.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionDelinquencyConfigs') AND name = 'AutoLaunchCampaigns')
+            BEGIN
+                ALTER TABLE ActionDelinquencyConfigs ADD AutoLaunchCampaigns bit NOT NULL DEFAULT 1;
+            END");
         Console.WriteLine("[Startup] Columnas de seguridad verificadas.");
     }
     catch (Exception ex)

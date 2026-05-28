@@ -1,6 +1,8 @@
+using System.Net.Http.Headers;
 using System.Text.Json;
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
+using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Persistence;
 using ClosedXML.Excel;
 using Microsoft.AspNetCore.Authorization;
@@ -17,7 +19,10 @@ namespace AgentFlow.API.Controllers;
 [ApiController]
 [Route("api/admin/morosidad")]
 [Authorize(Roles = "super_admin")]
-public class AdminMorosidadController(AgentFlowDbContext db) : ControllerBase
+public class AdminMorosidadController(
+    AgentFlowDbContext db,
+    IDelinquencyProcessor processor,
+    IHttpClientFactory httpFactory) : ControllerBase
 {
     // ── Catálogo de campos lógicos (global, sin tenant) ──────────────────────
 
@@ -80,7 +85,9 @@ public class AdminMorosidadController(AgentFlowDbContext db) : ControllerBase
             config.DownloadWebhookUrl,
             config.DownloadWebhookMethod,
             config.DownloadWebhookHeaders,
-            config.IsActive
+            config.IsActive,
+            config.SplitCampaignsByExecutive,
+            config.AutoLaunchCampaigns
         });
     }
 
@@ -116,10 +123,80 @@ public class AdminMorosidadController(AgentFlowDbContext db) : ControllerBase
         existing.DownloadWebhookMethod  = req.DownloadWebhookMethod ?? "GET";
         existing.DownloadWebhookHeaders = req.DownloadWebhookHeaders;
         existing.IsActive               = req.IsActive;
+        existing.SplitCampaignsByExecutive = req.SplitCampaignsByExecutive;
+        existing.AutoLaunchCampaigns    = req.AutoLaunchCampaigns;
         existing.UpdatedAt           = DateTime.UtcNow;
 
         await db.SaveChangesAsync(ct);
         return Ok(new { existing.Id });
+    }
+
+    /// <summary>
+    /// Ejecuta la descarga de morosidad AHORA para UN solo tenant (manual).
+    /// Descarga el JSON de la URL configurada y lo procesa con el DelinquencyProcessor.
+    /// Respeta los flags de la config: si AutoLaunchCampaigns=false, las campañas
+    /// quedan en Pending (no se envían). Scoped a un tenant — NO afecta a otros.
+    /// Útil para validar la configuración (split por ejecutivo, etc.) sin esperar
+    /// al cron ni disparar a todos los tenants.
+    /// </summary>
+    [HttpPost("{tenantId:guid}/run-download/{actionId:guid}")]
+    public async Task<IActionResult> RunDownloadNow(Guid tenantId, Guid actionId, CancellationToken ct)
+    {
+        var config = await db.ActionDelinquencyConfigs
+            .FirstOrDefaultAsync(c => c.TenantId == tenantId && c.ActionDefinitionId == actionId && c.IsActive, ct);
+        if (config is null)
+            return NotFound(new { error = "No hay configuración de morosidad activa para ese tenant/acción." });
+
+        var actionDef = await db.ActionDefinitions.FirstOrDefaultAsync(a => a.Id == actionId, ct);
+        if (actionDef is null) return NotFound(new { error = "Acción no encontrada." });
+
+        var url = !string.IsNullOrWhiteSpace(config.DownloadWebhookUrl)
+            ? config.DownloadWebhookUrl
+            : actionDef.WebhookUrl;
+        if (string.IsNullOrWhiteSpace(url))
+            return BadRequest(new { error = "La config no tiene URL de descarga." });
+
+        // Descargar JSON (GET/POST con headers configurados).
+        string json;
+        try
+        {
+            var client = httpFactory.CreateClient("delinquency");
+            using var req = new HttpRequestMessage(
+                config.DownloadWebhookMethod.Equals("POST", StringComparison.OrdinalIgnoreCase) ? HttpMethod.Post : HttpMethod.Get,
+                url);
+            if (!string.IsNullOrWhiteSpace(config.DownloadWebhookHeaders))
+            {
+                var headers = JsonSerializer.Deserialize<Dictionary<string, string>>(config.DownloadWebhookHeaders);
+                if (headers != null)
+                    foreach (var (k, v) in headers) req.Headers.TryAddWithoutValidation(k, v);
+            }
+            req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            using var resp = await client.SendAsync(req, ct);
+            resp.EnsureSuccessStatusCode();
+            json = await resp.Content.ReadAsStringAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { error = $"Falló la descarga: {ex.Message}" });
+        }
+
+        if (string.IsNullOrWhiteSpace(json))
+            return BadRequest(new { error = "El endpoint devolvió respuesta vacía." });
+
+        var executionId = await processor.ProcessAsync(tenantId, actionId, json, scheduledJobId: null, ct: ct);
+
+        var exec = await db.DelinquencyExecutions
+            .Where(e => e.Id == executionId)
+            .Select(e => new { e.Status, e.TotalItems, e.ProcessedItems, e.DiscardedItems, e.GroupsCreated, e.CampaignsCreated })
+            .FirstOrDefaultAsync(ct);
+
+        return Ok(new
+        {
+            executionId,
+            autoLaunch = config.AutoLaunchCampaigns,
+            splitByExecutive = config.SplitCampaignsByExecutive,
+            execution = exec
+        });
     }
 
     // ── Mapeo de campos (sin tenant, solo por ActionDefinitionId) ────────────
@@ -483,7 +560,9 @@ public record AdminUpsertConfigRequest(
     string? DownloadWebhookUrl,
     string? DownloadWebhookMethod,
     string? DownloadWebhookHeaders,
-    bool IsActive
+    bool IsActive,
+    bool SplitCampaignsByExecutive = false,
+    bool AutoLaunchCampaigns = true
 );
 
 public record AdminSetMappingsRequest(List<AdminMappingItem>? Mappings);

@@ -53,6 +53,10 @@ public class DelinquencyProcessor(
         var keyValueMapping  = mappings.FirstOrDefault(m => m.Role == FieldRole.KeyValue);
         var amountMapping    = mappings.FirstOrDefault(m => m.Role == FieldRole.Amount);
         var policyMapping    = mappings.FirstOrDefault(m => m.Role == FieldRole.PolicyNumber);
+        // Opcional — email del ejecutivo de cobros. Solo se usa si SplitCampaignsByExecutive=true.
+        var execEmailMapping = mappings.FirstOrDefault(m => m.Role == FieldRole.ExecutiveEmail);
+        // Opcional — celular del ejecutivo. Se usa para actualizar el NotifyPhone del perfil matcheado.
+        var execPhoneMapping = mappings.FirstOrDefault(m => m.Role == FieldRole.ExecutivePhone);
 
         if (phoneMapping == null)
             throw new InvalidOperationException("La acción no tiene un campo con Rol=Phone configurado.");
@@ -89,6 +93,13 @@ public class DelinquencyProcessor(
             // Para cada grupo acumulamos los registros (NombreCliente + KeyValue + extras) que luego
             // se serializan como ContactDataJson — mismo formato que FixedFormatCampaignService.
             var groupRecords = new Dictionary<string, List<Dictionary<string, object?>>>();
+            // Email del ejecutivo de cobros por teléfono (primer valor no vacío gana).
+            // Solo se llena si hay columna mapeada con Rol=ExecutiveEmail. Se usa al
+            // final para partir las campañas por ejecutivo (si el flag está activo).
+            var groupExecutiveEmail = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+            // Celular del ejecutivo por teléfono (primer valor no vacío gana) — para
+            // actualizar el NotifyPhone del perfil matcheado.
+            var groupExecutivePhone = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
 
             for (var i = 0; i < items.Length; i++)
             {
@@ -163,6 +174,21 @@ public class DelinquencyProcessor(
                 group.TotalAmount += item.Amount ?? 0;
                 group.ItemCount++;
 
+                // Capturar email del ejecutivo (si está mapeado) — primer no-vacío gana.
+                if (execEmailMapping != null && !groupExecutiveEmail.ContainsKey(phone))
+                {
+                    var execEmail = extracted.GetValueOrDefault(execEmailMapping.ColumnKey);
+                    if (!string.IsNullOrWhiteSpace(execEmail))
+                        groupExecutiveEmail[phone] = execEmail.Trim();
+                }
+                // Capturar celular del ejecutivo (si está mapeado) — primer no-vacío gana.
+                if (execPhoneMapping != null && !groupExecutivePhone.ContainsKey(phone))
+                {
+                    var execPhone = extracted.GetValueOrDefault(execPhoneMapping.ColumnKey);
+                    if (!string.IsNullOrWhiteSpace(execPhone))
+                        groupExecutivePhone[phone] = execPhone.Trim();
+                }
+
                 // Construir registro para ContactDataJson — mismo shape que FixedFormatCampaignService.
                 // Estrategia: incluir TODAS las propiedades del JSON original descargado para
                 // que Claude tenga acceso a cualquier campo que el prompt del template necesite
@@ -220,38 +246,79 @@ public class DelinquencyProcessor(
             db.ContactGroups.AddRange(groups);
             db.DelinquencyItems.AddRange(itemEntities);
 
-            // ── 6. Auto-crear UNA campaña con todos los grupos como contactos ─────
+            // ── 6. Auto-crear campañas con los grupos como contactos ────────────
+            //   Default: UNA campaña con todos los grupos (LaunchedByUserId=system:download).
+            //   Si SplitCampaignsByExecutive=true: UNA campaña por ejecutivo de cobros
+            //   (match del email contra AppUsers); las filas sin match caen a system:download.
             if (config.AutoCrearCampanas && config.CampaignTemplateId.HasValue && groups.Count > 0)
             {
-                var campaignId = await CreateSingleCampaignAsync(config, groups, groupRecords, execution, tenantId, ct);
-                if (campaignId.HasValue)
+                // Resolver agente del maestro una sola vez (lo comparten todas las campañas).
+                var templateAgentId = await db.CampaignTemplates
+                    .Where(t => t.Id == config.CampaignTemplateId!.Value)
+                    .Select(t => (Guid?)t.AgentDefinitionId)
+                    .FirstOrDefaultAsync(ct);
+
+                if (templateAgentId is null || templateAgentId == Guid.Empty)
                 {
-                    execution.CampaignsCreated = 1;
-                    // Persistir antes de lanzar para que el handler vea la campaña + contactos.
+                    logger.LogWarning("[Download] El maestro {TemplateId} no tiene agente asignado — omitiendo creación de campaña", config.CampaignTemplateId);
+                }
+                else
+                {
+                    // Construir el plan de campañas: lista de (LaunchedByUserId, LaunchedByPhone, grupos).
+                    var plan = config.SplitCampaignsByExecutive
+                        ? await BuildExecutivePlanAsync(groups, groupExecutiveEmail, groupExecutivePhone, config.CodigoPais, tenantId, ct)
+                        : new List<CampaignPlanGroup> { new("system:download", null, null, groups) };
+
+                    var createdCampaigns = new List<(Guid CampaignId, string LaunchedBy, string? LaunchedByPhone)>();
+                    foreach (var planGroup in plan)
+                    {
+                        if (planGroup.Groups.Count == 0) continue;
+                        var campaignId = await CreateCampaignAsync(
+                            config, templateAgentId.Value, planGroup, groupRecords, execution, tenantId, ct);
+                        if (campaignId.HasValue)
+                            createdCampaigns.Add((campaignId.Value, planGroup.LaunchedByUserId, planGroup.LaunchedByPhone));
+                    }
+
+                    execution.CampaignsCreated = createdCampaigns.Count;
+                    // Persistir antes de lanzar para que el handler vea las campañas + contactos
+                    // (y persiste también los NotifyPhone actualizados de los ejecutivos).
                     await db.SaveChangesAsync(ct);
 
-                    // Auto-lanzar v2 (en proceso, sin n8n) — el ejecutivo no debe presionar
-                    // "Lanzar" para descargas automáticas. El CampaignWorker procesa los Queued.
-                    var launchResult = await mediator.Send(new LaunchCampaignV2Command(
-                        CampaignId: campaignId.Value,
-                        TenantId: tenantId,
-                        LaunchedByUserId: "system:download",
-                        LaunchedByUserPhone: null,
-                        WarmupDay: 0
-                    ), ct);
-
-                    if (!launchResult.Success)
+                    // Auto-lanzar SOLO si el flag está activo. Si AutoLaunchCampaigns=false,
+                    // las campañas quedan en Pending (inertes) para revisión/lanzamiento manual.
+                    if (!config.AutoLaunchCampaigns)
                     {
-                        logger.LogError("[Download] Auto-launch v2 falló para campaign {CampaignId}: {Error}",
-                            campaignId, launchResult.Error);
-                        execution.ErrorMessage = $"Campaña creada pero el auto-launch v2 falló: {launchResult.Error}";
+                        logger.LogInformation(
+                            "[Download] {N} campañas creadas en Pending SIN lanzar (AutoLaunchCampaigns=false). El operador las lanza desde el portal.",
+                            createdCampaigns.Count);
                     }
                     else
                     {
-                        logger.LogInformation(
-                            "[Download] Campaign {CampaignId} auto-lanzada v2 — queued={Queued}, deferred={Deferred}, duplicate={Duplicate}, skipped={Skipped}",
-                            campaignId, launchResult.QueuedCount, launchResult.DeferredCount,
-                            launchResult.DuplicateCount, launchResult.SkippedCount);
+                        // Auto-lanzar v2 cada campaña (en proceso, sin n8n).
+                        foreach (var (campaignId, launchedBy, launchedByPhone) in createdCampaigns)
+                        {
+                            var launchResult = await mediator.Send(new LaunchCampaignV2Command(
+                                CampaignId: campaignId,
+                                TenantId: tenantId,
+                                LaunchedByUserId: launchedBy,
+                                LaunchedByUserPhone: launchedByPhone,
+                                WarmupDay: 0
+                            ), ct);
+
+                            if (!launchResult.Success)
+                            {
+                                logger.LogError("[Download] Auto-launch v2 falló para campaign {CampaignId} ({LaunchedBy}): {Error}",
+                                    campaignId, launchedBy, launchResult.Error);
+                                execution.ErrorMessage = $"Campaña {campaignId} creada pero el auto-launch v2 falló: {launchResult.Error}";
+                            }
+                            else
+                            {
+                                logger.LogInformation(
+                                    "[Download] Campaign {CampaignId} ({LaunchedBy}) auto-lanzada v2 — queued={Queued}, deferred={Deferred}, duplicate={Duplicate}, skipped={Skipped}",
+                                    campaignId, launchedBy, launchResult.QueuedCount, launchResult.DeferredCount,
+                                    launchResult.DuplicateCount, launchResult.SkippedCount);
+                            }
+                        }
                     }
                 }
             }
@@ -319,12 +386,97 @@ public class DelinquencyProcessor(
     }
 
     /// <summary>
-    /// Crea UNA campaña con todos los grupos como contactos. Trigger=DelinquencyEvent
-    /// para que se distinga visualmente de las campañas manuales/Excel.
+    /// Plan de una campaña a crear: a quién se le atribuye (LaunchedByUserId),
+    /// su teléfono de notificación opcional, el nombre del ejecutivo para el
+    /// título de la campaña, y los grupos (teléfonos) que la componen.
     /// </summary>
-    private async Task<Guid?> CreateSingleCampaignAsync(
-        ActionDelinquencyConfig config,
+    private sealed record CampaignPlanGroup(
+        string LaunchedByUserId,
+        string? LaunchedByPhone,
+        string? ExecutiveName,
+        List<ContactGroup> Groups);
+
+    /// <summary>
+    /// Arma el plan de campañas por ejecutivo. Matchea el email de cada grupo
+    /// (capturado del archivo) contra los AppUsers del tenant por Email
+    /// (case-insensitive). Los grupos cuyo email matchea un usuario van a la
+    /// campaña de ese usuario (LaunchedByUserId = su Email, para mantener el
+    /// mismo formato que las campañas manuales). Los que no matchean — o sin
+    /// email — caen al grupo "system:download".
+    /// </summary>
+    private async Task<List<CampaignPlanGroup>> BuildExecutivePlanAsync(
         List<ContactGroup> groups,
+        Dictionary<string, string?> groupExecutiveEmail,
+        Dictionary<string, string?> groupExecutivePhone,
+        string codigoPais,
+        Guid tenantId,
+        CancellationToken ct)
+    {
+        // Usuarios del tenant — TRACKED (los modificamos para actualizar NotifyPhone).
+        // Incluimos inactivos: se les atribuye igual para histórico.
+        var users = await db.AppUsers
+            .Where(u => u.TenantId == tenantId && u.Email != null && u.Email != "")
+            .ToListAsync(ct);
+        var userByEmail = users
+            .GroupBy(u => u.Email!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+        // Agrupar los grupos por la clave de atribución.
+        var byKey = new Dictionary<string, CampaignPlanGroup>(StringComparer.OrdinalIgnoreCase);
+        foreach (var group in groups)
+        {
+            string launchedBy = "system:download";
+            string? launchedPhone = null;
+            string? execName = null;
+
+            var rawEmail = groupExecutiveEmail.GetValueOrDefault(group.PhoneNormalized);
+            if (!string.IsNullOrWhiteSpace(rawEmail)
+                && userByEmail.TryGetValue(rawEmail.Trim(), out var matchedUser))
+            {
+                // Actualizar el NotifyPhone del ejecutivo desde el archivo (fuente de
+                // verdad → sobrescribe). PhoneNormalizer agrega +507 si no viene.
+                // Si el archivo trae el celular vacío, NO se toca el valor actual.
+                var rawPhone = groupExecutivePhone.GetValueOrDefault(group.PhoneNormalized);
+                if (!string.IsNullOrWhiteSpace(rawPhone))
+                {
+                    var normalized = PhoneNormalizer.Normalize(rawPhone, codigoPais);
+                    if (!string.IsNullOrWhiteSpace(normalized) && normalized != matchedUser.NotifyPhone)
+                    {
+                        logger.LogInformation(
+                            "[Download] NotifyPhone de {Email} actualizado: '{Old}' -> '{New}' (desde archivo)",
+                            matchedUser.Email, matchedUser.NotifyPhone ?? "(vacío)", normalized);
+                        matchedUser.NotifyPhone = normalized;
+                    }
+                }
+
+                launchedBy    = matchedUser.Email!.Trim();
+                launchedPhone = matchedUser.NotifyPhone;
+                execName      = matchedUser.FullName;
+            }
+
+            if (!byKey.TryGetValue(launchedBy, out var plan))
+            {
+                plan = new CampaignPlanGroup(launchedBy, launchedPhone, execName, []);
+                byKey[launchedBy] = plan;
+            }
+            plan.Groups.Add(group);
+        }
+
+        // Los cambios en NotifyPhone se persisten con el SaveChangesAsync que el
+        // caller (ProcessAsync) hace antes de lanzar las campañas.
+        return byKey.Values.ToList();
+    }
+
+    /// <summary>
+    /// Crea UNA campaña con los grupos del plan como contactos. Trigger=DelinquencyEvent
+    /// para que se distinga visualmente de las campañas manuales/Excel. El
+    /// LaunchedByUserId/CreatedByUserId sale del plan (email del ejecutivo o
+    /// "system:download"). El nombre incluye al ejecutivo cuando matcheó.
+    /// </summary>
+    private async Task<Guid?> CreateCampaignAsync(
+        ActionDelinquencyConfig config,
+        Guid templateAgentId,
+        CampaignPlanGroup plan,
         Dictionary<string, List<Dictionary<string, object?>>> groupRecords,
         DelinquencyExecution execution,
         Guid tenantId,
@@ -332,18 +484,7 @@ public class DelinquencyProcessor(
     {
         if (!config.CampaignTemplateId.HasValue) return null;
 
-        // El agente lo aporta el maestro de campaña.
-        var templateAgentId = await db.CampaignTemplates
-            .Where(t => t.Id == config.CampaignTemplateId.Value)
-            .Select(t => (Guid?)t.AgentDefinitionId)
-            .FirstOrDefaultAsync(ct);
-
-        if (templateAgentId == null || templateAgentId == Guid.Empty)
-        {
-            logger.LogWarning("[Download] El maestro {TemplateId} no tiene agente asignado — omitiendo creación de campaña", config.CampaignTemplateId);
-            return null;
-        }
-
+        var groups       = plan.Groups;
         var action       = await db.ActionDefinitions.FindAsync([config.ActionDefinitionId], ct);
         var dateStr      = DateTime.UtcNow.ToString("yyyy-MM-dd");
         var actionName   = action?.Description ?? action?.Name ?? "Descarga";
@@ -353,6 +494,9 @@ public class DelinquencyProcessor(
             .Replace("{fecha:yyyy-MM-dd}", dateStr)
             .Replace("{accion}", actionName)
             .Replace("{grupos}", groups.Count.ToString());
+        // Sufijo con el ejecutivo cuando la campaña es de un usuario matcheado.
+        if (!string.IsNullOrWhiteSpace(plan.ExecutiveName))
+            campaignName = $"{campaignName} — {plan.ExecutiveName}";
 
         var campaign = new Campaign
         {
@@ -363,9 +507,9 @@ public class DelinquencyProcessor(
             Trigger            = CampaignTrigger.DelinquencyEvent,
             Channel            = ChannelType.WhatsApp,
             CampaignTemplateId = config.CampaignTemplateId,
-            AgentDefinitionId  = templateAgentId.Value,
+            AgentDefinitionId  = templateAgentId,
             CreatedAt          = DateTime.UtcNow,
-            CreatedByUserId    = "system:download",
+            CreatedByUserId    = plan.LaunchedByUserId,
             TotalContacts      = groups.Count
         };
         db.Campaigns.Add(campaign);
