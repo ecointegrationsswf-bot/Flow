@@ -262,17 +262,33 @@ public class ProcessIncomingMessageHandler(
         conversation.LastActivityAt = DateTime.UtcNow;
         await conversations.SaveChangesAsync(ct);
 
-        // Enviar por WhatsApp
+        // Enviar por WhatsApp — segmentado en burbujas si el texto trae '~' (igual
+        // criterio que el flujo del agente). Sin '~' es un único mensaje, idéntico
+        // al comportamiento previo.
         try
         {
             var provider = await channelFactory.GetProviderAsync(cmd.TenantId, ct);
             if (provider is not null)
             {
-                var sendResult = await provider.SendMessageAsync(
-                    new SendMessageRequest(cmd.FromPhone, decision.MessageToClient!), ct);
-                outbound.ExternalMessageId = sendResult.ExternalMessageId;
-                outbound.Status = sendResult.Success ? MessageStatus.Sent : MessageStatus.Failed;
-                await conversations.SaveChangesAsync(ct);
+                var bubbles = SplitIntoBubbles(decision.MessageToClient!);
+                string? lastExternalId = null;
+                var lastSuccess = false;
+                var sentAny = false;
+                for (var bi = 0; bi < bubbles.Count; bi++)
+                {
+                    if (bi > 0) await Task.Delay(BubbleDelayMs, ct);
+                    var r = await provider.SendMessageAsync(
+                        new SendMessageRequest(cmd.FromPhone, bubbles[bi]), ct);
+                    lastExternalId = r.ExternalMessageId;
+                    lastSuccess = r.Success;
+                    sentAny = true;
+                }
+                if (sentAny)
+                {
+                    outbound.ExternalMessageId = lastExternalId;
+                    outbound.Status = lastSuccess ? MessageStatus.Sent : MessageStatus.Failed;
+                    await conversations.SaveChangesAsync(ct);
+                }
             }
         }
         catch (Exception ex)
@@ -1159,16 +1175,31 @@ public class ProcessIncomingMessageHandler(
                     }
                     catch { }
 
-                    // Enviar por WhatsApp
+                    // Enviar por WhatsApp — segmentado en burbujas si el texto trae '~'
+                    // (lo usa el prompt de AFTA). Sin '~' es un único mensaje, igual que antes.
                     try
                     {
                         var provider = await channelFactory.GetProviderAsync(cmd.TenantId, ct);
                         if (provider is not null)
                         {
-                            var sendResult = await provider.SendMessageAsync(
-                                new SendMessageRequest(cmd.FromPhone, replyText), ct);
-                            outbound.ExternalMessageId = sendResult.ExternalMessageId;
-                            outbound.Status = sendResult.Success ? MessageStatus.Sent : MessageStatus.Failed;
+                            var bubbles = SplitIntoBubbles(replyText);
+                            string? lastExternalId = null;
+                            var lastSuccess = false;
+                            var sentAny = false;
+                            for (var bi = 0; bi < bubbles.Count; bi++)
+                            {
+                                if (bi > 0) await Task.Delay(BubbleDelayMs, ct);
+                                var r = await provider.SendMessageAsync(
+                                    new SendMessageRequest(cmd.FromPhone, bubbles[bi]), ct);
+                                lastExternalId = r.ExternalMessageId;
+                                lastSuccess = r.Success;
+                                sentAny = true;
+                            }
+                            if (sentAny)
+                            {
+                                outbound.ExternalMessageId = lastExternalId;
+                                outbound.Status = lastSuccess ? MessageStatus.Sent : MessageStatus.Failed;
+                            }
                         }
                     }
                     catch (Exception ex)
@@ -1358,6 +1389,34 @@ public class ProcessIncomingMessageHandler(
                 return value ?? string.Empty;
             });
         }
+    }
+
+    // ── Segmentación de mensajes en "burbujas" ──────────────────────────────
+    // Algunos prompts (ej. AFTA) separan párrafos con '~' para que el cliente
+    // reciba mensajes WhatsApp SEPARADOS en vez de un solo recuadro. El envío
+    // divide por '~'; si el texto no trae '~' es un único mensaje (comportamiento
+    // previo intacto). Es per-tenant "gratis": lo activa el prompt, no un flag.
+    private const int BubbleDelayMs = 1000;   // pausa entre burbujas (orden + naturalidad)
+    private const int MaxBubbles = 6;         // tope defensivo
+
+    /// <summary>
+    /// Parte el texto en burbujas por el separador '~'. Sin '~' devuelve un solo
+    /// elemento (= un único mensaje). Recorta, descarta vacías y limita a
+    /// MaxBubbles (el excedente se une en la última con saltos de línea).
+    /// </summary>
+    private static List<string> SplitIntoBubbles(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return new List<string>();
+        if (!text.Contains('~')) return new List<string> { text };
+        var parts = text
+            .Split('~', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+        if (parts.Count == 0) return new List<string> { text };
+        if (parts.Count <= MaxBubbles) return parts;
+        var capped = parts.Take(MaxBubbles - 1).ToList();
+        capped.Add(string.Join("\n\n", parts.Skip(MaxBubbles - 1)));
+        return capped;
     }
 
     /// <summary>Resuelve un path dot-notation sobre un JsonElement (case-insensitive). Mismo helper
