@@ -108,53 +108,41 @@ public class ActionExecutorService(
             return ActionResult.Fail("Estamos teniendo dificultades. Te contactaremos pronto.");
         }
 
-        // ── 5. Leer configuración: Template override → DefaultWebhookContract fallback ──
+        // ── 5. Resolver contrato: per-tenant (Acción→Tenant→Contrato) → template → default ──
         ActionConfigBundle? bundle = null;
 
-        // Nivel 1: config del template (override)
-        if (campaignTemplateId.HasValue)
+        // Nivel 0 (arquitectura nueva): contrato per-tenant. Si existe, es autoritativo.
+        var tenantContractJson = await TenantActionContractLookup.ResolveContractJsonAsync(db, tenantId, actionSlug, ct);
+        if (!string.IsNullOrWhiteSpace(tenantContractJson))
         {
-            var template = await db.CampaignTemplates
-                .Where(t => t.Id == campaignTemplateId.Value && t.TenantId == tenantId)
-                .Select(t => new { t.ActionConfigs })
-                .FirstOrDefaultAsync(ct);
-
-            bundle = configReader.Read(template?.ActionConfigs, actionDef.Id);
+            bundle = BundleFromContractJson(tenantContractJson, actionSlug);
+            if (bundle is not null)
+                logger.LogDebug("[ActionExecutor] Usando TenantActionContract para {Action} tenant={TenantId}", actionSlug, tenantId);
         }
 
-        // Nivel 2: fallback a DefaultWebhookContract de la ActionDefinition
-        if (bundle?.InputSchema is null && !string.IsNullOrWhiteSpace(actionDef.DefaultWebhookContract))
+        // Legacy (solo si el tenant no tiene contrato propio): template → DefaultWebhookContract.
+        if (bundle is null)
         {
-            try
+            // Nivel 1: config del template (override)
+            if (campaignTemplateId.HasValue)
             {
-                var defaultBundle = JsonSerializer.Deserialize<ActionConfigBundleJson>(
-                    actionDef.DefaultWebhookContract, _jsonOpts);
+                var template = await db.CampaignTemplates
+                    .Where(t => t.Id == campaignTemplateId.Value && t.TenantId == tenantId)
+                    .Select(t => new { t.ActionConfigs })
+                    .FirstOrDefaultAsync(ct);
+
+                bundle = configReader.Read(template?.ActionConfigs, actionDef.Id);
+            }
+
+            // Nivel 2: fallback a DefaultWebhookContract de la ActionDefinition
+            if (bundle?.InputSchema is null && !string.IsNullOrWhiteSpace(actionDef.DefaultWebhookContract))
+            {
+                var defaultBundle = BundleFromContractJson(actionDef.DefaultWebhookContract, actionSlug);
                 if (defaultBundle is not null)
                 {
-                    bundle = new ActionConfigBundle
-                    {
-                        EndpointConfig = new WebhookEndpointConfig
-                        {
-                            WebhookUrl = defaultBundle.WebhookUrl ?? "",
-                            WebhookMethod = defaultBundle.WebhookMethod ?? "POST",
-                            AuthType = defaultBundle.AuthType ?? "None",
-                            AuthValue = defaultBundle.AuthValue,
-                            ApiKeyHeaderName = defaultBundle.ApiKeyHeaderName ?? "X-Api-Key",
-                            WebhookHeaders = defaultBundle.WebhookHeaders,
-                            TimeoutSeconds = defaultBundle.TimeoutSeconds ?? 10
-                        },
-                        InputSchema = defaultBundle.InputSchema,
-                        OutputSchema = defaultBundle.OutputSchema,
-                        TriggerConfig = defaultBundle.TriggerConfig,
-                        ChainRules = defaultBundle.ChainRules
-                    };
+                    bundle = defaultBundle;
                     logger.LogDebug("[ActionExecutor] Usando DefaultWebhookContract para {Action}", actionSlug);
                 }
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning("[ActionExecutor] DefaultWebhookContract inválido para {Action}: {Message}",
-                    actionSlug, ex.Message);
             }
         }
 
@@ -264,6 +252,42 @@ public class ActionExecutorService(
         // pueda evaluar ChainRules contra el JSON original (independiente del
         // OutputSchema parseado, que puede ocultar campos como `status`).
         return interpreted with { RawResponseJson = httpResult.Body };
+    }
+
+    /// <summary>
+    /// Deserializa un ContractJson (shape de DefaultWebhookContract / TenantActionContract)
+    /// en un ActionConfigBundle. Devuelve null si el JSON es inválido.
+    /// </summary>
+    private ActionConfigBundle? BundleFromContractJson(string contractJson, string actionSlug)
+    {
+        try
+        {
+            var b = JsonSerializer.Deserialize<ActionConfigBundleJson>(contractJson, _jsonOpts);
+            if (b is null) return null;
+            return new ActionConfigBundle
+            {
+                EndpointConfig = new WebhookEndpointConfig
+                {
+                    WebhookUrl = b.WebhookUrl ?? "",
+                    WebhookMethod = b.WebhookMethod ?? "POST",
+                    AuthType = b.AuthType ?? "None",
+                    AuthValue = b.AuthValue,
+                    ApiKeyHeaderName = b.ApiKeyHeaderName ?? "X-Api-Key",
+                    WebhookHeaders = b.WebhookHeaders,
+                    TimeoutSeconds = b.TimeoutSeconds ?? 10
+                },
+                InputSchema = b.InputSchema,
+                OutputSchema = b.OutputSchema,
+                TriggerConfig = b.TriggerConfig,
+                ChainRules = b.ChainRules
+            };
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("[ActionExecutor] Contract JSON inválido para {Action}: {Message}",
+                actionSlug, ex.Message);
+            return null;
+        }
     }
 
     // ── Circuit Breaker ──

@@ -464,6 +464,24 @@ var app = builder.Build();
             BEGIN
                 ALTER TABLE ActionDelinquencyConfigs ADD AutoLaunchCampaigns bit NOT NULL DEFAULT 1;
             END");
+        // TenantActionContracts: contrato webhook por (accion, tenant). Tabla creada
+        // via guard (no migracion EF por el drift). Las columnas matchean las
+        // convenciones EF para que el DbSet mapee sin migracion.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'TenantActionContracts')
+            BEGIN
+                CREATE TABLE TenantActionContracts (
+                    Id uniqueidentifier NOT NULL CONSTRAINT PK_TenantActionContracts PRIMARY KEY,
+                    ActionDefinitionId uniqueidentifier NOT NULL,
+                    TenantId uniqueidentifier NOT NULL,
+                    ContractJson nvarchar(max) NOT NULL,
+                    IsActive bit NOT NULL DEFAULT 1,
+                    CreatedAt datetime2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                    UpdatedAt datetime2 NULL
+                );
+                CREATE UNIQUE INDEX UX_TenantActionContract_Action_Tenant
+                    ON TenantActionContracts (ActionDefinitionId, TenantId);
+            END");
         Console.WriteLine("[Startup] Columnas de seguridad verificadas.");
     }
     catch (Exception ex)

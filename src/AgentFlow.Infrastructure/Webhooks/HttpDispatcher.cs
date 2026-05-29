@@ -12,7 +12,7 @@ namespace AgentFlow.Infrastructure.Webhooks;
 ///
 /// Responsabilidades:
 /// - Serializar el payload según ContentType (JSON, form-urlencoded, query-string).
-/// - Aplicar autenticación según AuthType (None, ApiKey, Bearer).
+/// - Aplicar autenticación según AuthType (None, ApiKey, Bearer, Basic).
 /// - Agregar headers extra del tenant.
 /// - Manejar timeout configurable.
 /// - Capturar errores de red/timeout/HTTP y traducirlos a mensajes controlados.
@@ -215,6 +215,13 @@ public class HttpDispatcher(
             case "apikey":
                 var headerName = string.IsNullOrEmpty(config.ApiKeyHeaderName) ? "X-Api-Key" : config.ApiKeyHeaderName;
                 request.Headers.TryAddWithoutValidation(headerName, config.AuthValue);
+                break;
+
+            case "basic":
+                // AuthValue se guarda como "usuario:contraseña" en claro; aquí se codifica
+                // a base64 para producir `Authorization: Basic base64(user:pass)`.
+                var encoded = Convert.ToBase64String(Encoding.UTF8.GetBytes(config.AuthValue));
+                request.Headers.Authorization = new AuthenticationHeaderValue("Basic", encoded);
                 break;
 
             // "None" o cualquier otro → no agregar header

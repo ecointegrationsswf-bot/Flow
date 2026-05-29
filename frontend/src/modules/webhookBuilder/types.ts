@@ -12,7 +12,7 @@ export type SourceType = 'system' | 'conversation' | 'static' | 'labelingResult'
 export type InputDataType = 'string' | 'number' | 'boolean' | 'date' | 'array'
 export type OutputDataType = 'string' | 'number' | 'boolean' | 'date' | 'url' | 'base64' | 'array' | 'object'
 export type OutputAction = 'send_to_agent' | 'send_whatsapp_media' | 'inject_context' | 'log_only' | 'trigger_escalation'
-export type AuthType = 'None' | 'ApiKey' | 'Bearer'
+export type AuthType = 'None' | 'ApiKey' | 'Bearer' | 'Basic'
 
 export interface InputField {
   fieldPath: string
@@ -20,6 +20,8 @@ export interface InputField {
   sourceKey?: string
   staticValue?: string
   dataType: InputDataType
+  /** Formato de salida opcional para dataType='date' (ej: 'dd-MM-yyyy'). Si se omite, se emite ISO 8601. */
+  format?: string
   required: boolean
   defaultValue?: string
 }

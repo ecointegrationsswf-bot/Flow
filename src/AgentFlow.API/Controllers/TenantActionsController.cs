@@ -60,13 +60,46 @@ public class TenantActionsController(ITenantContext tenantCtx, AgentFlowDbContex
             .Where(a => a.TenantId == tenantId && a.IsActive && assignedNames.Contains(a.Name))
             .ToDictionaryAsync(a => a.Name, ct);
 
+        // Contratos per-tenant (TenantActionContract) — nueva fuente de verdad.
+        // Prioridad: TenantActionContract → clon legacy por Name → global.
+        var assignedGlobalIds = assignedActions.Where(a => a.TenantId is null).Select(a => a.Id).ToList();
+        var tenantContracts = assignedGlobalIds.Count > 0
+            ? await db.TenantActionContracts
+                .Where(c => c.TenantId == tenantId && c.IsActive && assignedGlobalIds.Contains(c.ActionDefinitionId))
+                .ToDictionaryAsync(c => c.ActionDefinitionId, c => c.ContractJson, ct)
+            : new Dictionary<Guid, string>();
+
+        static string? ExtractTrigger(string? contractJson)
+        {
+            if (string.IsNullOrWhiteSpace(contractJson)) return null;
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(contractJson);
+                if (doc.RootElement.TryGetProperty("triggerConfig", out var tc)
+                    && tc.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    return tc.GetRawText();
+            }
+            catch { /* inválido */ }
+            return null;
+        }
+
         var result = assignedActions.Select(a =>
         {
-            // Si la asignada es global y existe clon tenant-specific con mismo Name,
-            // tomamos contract/triggerConfig del clon (el resolver runtime también lo prefiere).
-            var effective = (a.TenantId is null && clonesByName.TryGetValue(a.Name, out var clone))
-                ? clone
-                : a;
+            string? contractJson;
+            string? triggerJson;
+            if (a.TenantId is null && tenantContracts.TryGetValue(a.Id, out var tac))
+            {
+                contractJson = tac;
+                triggerJson  = ExtractTrigger(tac);
+            }
+            else
+            {
+                var effective = (a.TenantId is null && clonesByName.TryGetValue(a.Name, out var clone))
+                    ? clone
+                    : a;
+                contractJson = effective.DefaultWebhookContract;
+                triggerJson  = effective.DefaultTriggerConfig;
+            }
             return new
             {
                 a.Id,
@@ -76,9 +109,9 @@ public class TenantActionsController(ITenantContext tenantCtx, AgentFlowDbContex
                 a.SendsEmail,
                 a.SendsSms,
                 a.IsDelinquencyDownload,
-                DefaultWebhookContract = effective.DefaultWebhookContract,
-                DefaultTriggerConfig   = effective.DefaultTriggerConfig,
-                HasWebhookContract     = effective.DefaultWebhookContract != null,
+                DefaultWebhookContract = contractJson,
+                DefaultTriggerConfig   = triggerJson,
+                HasWebhookContract     = contractJson != null,
             };
         });
 

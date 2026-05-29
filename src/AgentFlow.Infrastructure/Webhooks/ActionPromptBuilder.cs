@@ -138,22 +138,56 @@ public class ActionPromptBuilder(
         }
 
         // ── 4. Cargar ActionDefinitions con defaults en una sola query ──
+        // Incluye GLOBALES (TenantId==null): los templates referencian acciones globales.
         var defs = await db.ActionDefinitions
-            .Where(a => a.TenantId == tenantId && allActionIds.Contains(a.Id) && a.IsActive)
+            .Where(a => (a.TenantId == tenantId || a.TenantId == null) && allActionIds.Contains(a.Id) && a.IsActive)
             .Select(a => new { a.Id, a.Name, a.DefaultTriggerConfig, a.DefaultWebhookContract })
             .ToListAsync(ct);
 
         var defById = defs.ToDictionary(x => x.Id);
 
-        // ── 5. Para cada acción, resolver TriggerConfig con herencia (3 niveles) ──
-        // Prioridad: template triggerConfig > DefaultWebhookContract.triggerConfig > DefaultTriggerConfig
+        // Contratos per-tenant (Acción→Tenant→Contrato) — Nivel 0, autoritativo.
+        // Defensa: la tabla puede no existir todavía (el guard de creación corre en
+        // el arranque del API, NO del Worker). Si la consulta falla, seguimos con
+        // diccionario vacío y los Niveles 1-3 cubren el fallback sin romper.
+        Dictionary<Guid, string> tenantContractByActionId;
+        try
+        {
+            tenantContractByActionId = await db.TenantActionContracts
+                .Where(c => c.TenantId == tenantId && allActionIds.Contains(c.ActionDefinitionId) && c.IsActive)
+                .ToDictionaryAsync(c => c.ActionDefinitionId, c => c.ContractJson, ct);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("[ActionPromptBuilder] No pude leer TenantActionContracts (¿tabla no existe aún?): {Message}", ex.Message);
+            tenantContractByActionId = new Dictionary<Guid, string>();
+        }
+
+        // ── 5. Para cada acción, resolver TriggerConfig con herencia ──
+        // Prioridad: contrato per-tenant > template triggerConfig > DefaultWebhookContract.triggerConfig > DefaultTriggerConfig
         var configured = new List<(Guid ActionId, TriggerConfig Trigger)>();
         foreach (var aid in allActionIds)
         {
             TriggerConfig? tc = null;
 
+            // Nivel 0: triggerConfig del contrato per-tenant (autoritativo si existe).
+            if (tenantContractByActionId.TryGetValue(aid, out var tenantJson) && !string.IsNullOrWhiteSpace(tenantJson))
+            {
+                try
+                {
+                    var tBundle = JsonSerializer.Deserialize<ActionConfigBundleJson>(tenantJson, _jsonOpts);
+                    if (tBundle?.TriggerConfig is { } tTc && tTc.HasMeaningfulContent())
+                        tc = tTc;
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning("[ActionPromptBuilder] TenantActionContract inválido para action {ActionId}: {Message}",
+                        aid, ex.Message);
+                }
+            }
+
             // Nivel 1: triggerConfig del template (override)
-            if (!string.IsNullOrWhiteSpace(templateRow?.ActionConfigs))
+            if (tc is null && !string.IsNullOrWhiteSpace(templateRow?.ActionConfigs))
             {
                 var bundle = configReader.Read(templateRow.ActionConfigs, aid);
                 if (bundle?.TriggerConfig is { } templateTc && templateTc.HasMeaningfulContent())

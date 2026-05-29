@@ -32,8 +32,8 @@ public class PayloadBuilder : IPayloadBuilder
             if (rawValue is null && !field.Required && field.DefaultValue is not null)
                 rawValue = field.DefaultValue;
 
-            // Cast al tipo declarado
-            var typedValue = CastToDataType(rawValue, field.DataType);
+            // Cast al tipo declarado (Format solo aplica a date)
+            var typedValue = CastToDataType(rawValue, field.DataType, field.Format);
 
             flat[field.FieldPath] = typedValue;
         }
@@ -91,7 +91,7 @@ public class PayloadBuilder : IPayloadBuilder
     /// Convierte el valor crudo al tipo declarado en el InputSchema.
     /// Los errores de cast devuelven el valor original como string.
     /// </summary>
-    private static object? CastToDataType(object? raw, string dataType)
+    private static object? CastToDataType(object? raw, string dataType, string? format = null)
     {
         if (raw is null) return null;
 
@@ -116,7 +116,7 @@ public class PayloadBuilder : IPayloadBuilder
             // y aceptado por CONVERT(DATETIME,...) de SQL Server, que rechaza la versión
             // "O" (7 dígitos de fracción + offset).
             "date" => DateTime.TryParse(stringValue, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var d)
-                ? d.ToString("s", CultureInfo.InvariantCulture)
+                ? d.ToString(string.IsNullOrWhiteSpace(format) ? "s" : format, CultureInfo.InvariantCulture)
                 : (object)stringValue,
 
             "array" => TryDeserializeArray(stringValue) ?? (object)stringValue,

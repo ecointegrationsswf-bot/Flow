@@ -445,6 +445,56 @@ durante una conversación, usando tags estructurados que el backend parsea y eje
 
 ---
 
+## Arquitectura Acciones → Contratos por Tenant
+
+> Decisión de arquitectura (Mayo 2026). Detalle visual en
+> `docs/arquitectura-acciones-contratos.md`.
+
+**Regla maestra:** la **acción** (`ActionDefinition`) es un **encabezado global
+único** por slug. El **contrato webhook** es **por tenant**, en la entidad
+`TenantActionContract` con `UNIQUE(ActionDefinitionId, TenantId)`. Editar el
+contrato de un tenant nunca pisa el de otro.
+
+### Por qué (incidente que lo originó)
+
+El diseño viejo aislaba contratos por-tenant de dos formas sucias y contradictorias:
+1. **Clonando la `ActionDefinition` entera por tenant** — el contrato vivía en el
+   `DefaultWebhookContract` del clon. Esto generaba "acciones duplicadas" en la lista
+   y, al borrar un clon, se perdía el contrato (incidente PASESA 2FA, 2026-05-28:
+   se borraron clones creyéndolos huérfanos y se perdió el contrato 2FA).
+2. **En `CampaignTemplate.ActionConfigs`** (por template).
+
+`TenantActionContract` unifica esto en un solo lugar.
+
+### Modelo
+
+```
+ActionDefinition (GLOBAL, 1 por slug)
+   └──1:N──► TenantActionContract (ActionDefinitionId, TenantId, contrato...)
+                 └──N:1──► Tenant
+```
+
+`TenantActionContract` guarda: WebhookUrl, WebhookMethod, ContentType, Structure,
+AuthType (None|ApiKey|Bearer|**Basic**), AuthValue, ApiKeyHeaderName, WebhookHeaders,
+TimeoutSeconds, InputSchema, OutputSchema, TriggerConfig, ChainRules.
+
+### Resolución (centralizada en `IActionContractResolver`)
+
+`(tenantId, slug)` → `ActionDefinition` global por slug → `TenantActionContract(acción,
+tenant)` si existe; si no, **fallback** al `DefaultWebhookContract` global (plantilla),
+y legacy a `CampaignTemplate.ActionConfigs` hasta terminar la migración. Es **aditivo**:
+sin contrato per-tenant el sistema se comporta como antes (no rompe).
+
+Consumen el resolver: `ActionExecutorService`, `ActionChainResolver`, `ActionPromptBuilder`.
+
+### Reglas duras
+
+- **NO clonar acciones por tenant.** El endpoint de asignar acciones solo agrega el
+  id global a `Tenant.AssignedActionIds` (la lógica de clon-on-assign se deprecó).
+- **Granularidad por tenant** (no por template).
+- `Basic` auth: `Authorization: Basic base64(user:pass)` — soportado en el contrato y
+  en la pantalla del Webhook Builder.
+
 ## Integración con Tobroker
 
 Tobroker corre en SQL Server 2022 Enterprise. El agente de cobros puede consultar
@@ -587,16 +637,16 @@ Per skill `talkia-deploy`, todos los publishes se generan en:
 ```
 C:\TalkIADeploy\api\
 C:\TalkIADeploy\frontend\   (cuando se publica con dotnet; el frontend Vite va a frontend\dist\)
-C:\TalkIADeploy\worker-win-x64\
+C:\TalkIADeploy\worker\     (Worker SELF-CONTAINED win-x64 — ver reglas duras abajo)
 ```
 
 Deploy a producción:
 
 | Componente | Sitio | URL pública | Método |
 |---|---|---|---|
-| API | site12 | `http://jamconsulting-004-site12.site4future.com` | Web Deploy + `-enableRule:AppOffline` |
-| Frontend | site11 | `http://jamconsulting-004-site11.site4future.com` | Web Deploy (sin AppOffline) |
-| Worker | on-prem `VMI2141660` | — | Copia manual a `C:\Windows\ServicesJAM\worker\` + restart servicio |
+| API | site12 | `http://jamconsulting-004-site12.site4future.com` | FTP a `/talkiav2api` (host `win1232.site4now.net`) — subir `app_offline.htm` antes y borrarlo al final |
+| Frontend | site11 | `http://jamconsulting-004-site11.site4future.com` | FTP a `/talkiav2app` (estático, sin app_offline) |
+| Worker | on-prem `VMI2141660` | — | **Self-contained** → ZIP → `C:\Deploy\AgentFlow.Worker\` + restart servicio `AgentFlow Worker` |
 
 **Orden obligatorio del deploy:**
 
@@ -606,6 +656,31 @@ Deploy a producción:
 
 Saltarse este orden con cambios al pipeline de inbox puede dejar mensajes
 `Pending` hasta que el watchdog los escale (2 min cada uno).
+
+### Worker on-prem (`VMI2141660`) — REGLAS DURAS
+
+> Aprendido a la mala (2026-05-28): publicarlo **framework-dependent** lo dejó sin
+> arrancar porque el host on-prem **NO tiene el runtime .NET instalado**.
+
+- **SIEMPRE publicar self-contained `win-x64`.** El host `VMI2141660` no tiene
+  el runtime .NET → un publish framework-dependent NO arranca. Comando:
+  ```powershell
+  dotnet publish src\AgentFlow.Worker\AgentFlow.Worker.csproj -c Release `
+    -o C:\TalkIADeploy\worker --self-contained true -r win-x64
+  ```
+  **Verificación obligatoria:** el output debe contener `coreclr.dll` y `clrjit.dll`.
+  Si NO están, quedó framework-dependent (mal) → no arrancará en producción.
+- **Borrar `appsettings.Development.json`** del publish (trae secrets de dev).
+- **Ruta del servicio (regla dura):** `C:\Deploy\AgentFlow.Worker\` en `VMI2141660`.
+- **Servicio Windows:** `AgentFlow Worker` → `sc stop "AgentFlow Worker"` /
+  `sc start "AgentFlow Worker"`.
+- **Pasos:** ZIP del publish → copiar a `VMI2141660` → `sc stop "AgentFlow Worker"`
+  → reemplazar el contenido de `C:\Deploy\AgentFlow.Worker\` → `sc start "AgentFlow Worker"`.
+  No requiere instalar .NET en el host (runtime embebido).
+- **Validar arranque ANTES de empaquetar:** correr el `.exe` localmente unos
+  segundos — debe loguear `ScheduledWebhookWorker iniciado`. El scheduler espera
+  **15s** antes del primer tick: matar el proceso antes de eso y usar una
+  connection string **dummy** para NO disparar jobs/envíos reales en la validación.
 
 PublishSettings files:
 - `~/Downloads/site11.PublishSettings`

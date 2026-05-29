@@ -86,6 +86,7 @@ export function Step1Connection({ bundle, onChange }: Props) {
               <option value="None">Ninguna</option>
               <option value="Bearer">Bearer Token</option>
               <option value="ApiKey">API Key (header)</option>
+              <option value="Basic">Basic (usuario:contraseña)</option>
             </select>
           </div>
 
@@ -102,7 +103,7 @@ export function Step1Connection({ bundle, onChange }: Props) {
           </div>
         </div>
 
-        {bundle.authType !== 'None' && (
+        {bundle.authType !== 'None' && bundle.authType !== 'Basic' && (
           <div className="mt-3">
             <label className="block text-xs font-medium text-gray-700 mb-1">
               {bundle.authType === 'Bearer' ? 'Token Bearer' : 'Valor del API Key'}
@@ -116,6 +117,45 @@ export function Step1Connection({ bundle, onChange }: Props) {
             />
           </div>
         )}
+
+        {bundle.authType === 'Basic' && (() => {
+          // El contrato guarda un solo campo authValue="usuario:contraseña". Aquí lo
+          // partimos en dos inputs y lo recomponemos. La contraseña puede contener ":"
+          // (split solo por el PRIMER ":").
+          const raw = bundle.authValue ?? ''
+          const sep = raw.indexOf(':')
+          const user = sep >= 0 ? raw.slice(0, sep) : raw
+          const pass = sep >= 0 ? raw.slice(sep + 1) : ''
+          return (
+            <div className="mt-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Usuario</label>
+                  <input
+                    type="text"
+                    value={user}
+                    onChange={(e) => update('authValue', `${e.target.value}:${pass}`)}
+                    placeholder="usuario"
+                    className="w-full rounded border border-gray-300 px-3 py-2 text-sm font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700 mb-1">Contraseña</label>
+                  <input
+                    type="password"
+                    value={pass}
+                    onChange={(e) => update('authValue', `${user}:${e.target.value}`)}
+                    placeholder="contraseña"
+                    className="w-full rounded border border-gray-300 px-3 py-2 text-sm font-mono"
+                  />
+                </div>
+              </div>
+              <p className="mt-1 text-[11px] text-gray-500">
+                Se envía como <code>Authorization: Basic base64(usuario:contraseña)</code>.
+              </p>
+            </div>
+          )
+        })()}
 
         {bundle.authType === 'ApiKey' && (
           <div className="mt-3">

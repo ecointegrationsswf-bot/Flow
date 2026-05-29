@@ -27,6 +27,14 @@ public class InputField
     /// <summary>string | number | boolean | date | array</summary>
     public string DataType { get; set; } = "string";
 
+    /// <summary>
+    /// Formato de salida OPCIONAL para DataType=date (ej: "dd-MM-yyyy").
+    /// Si se especifica, el PayloadBuilder emite la fecha con ese formato .NET en
+    /// vez del ISO 8601 por defecto. Algunos brokers (ej: AFTA) exigen un formato
+    /// específico. Solo aplica a fechas; para otros tipos se ignora.
+    /// </summary>
+    public string? Format { get; set; }
+
     public bool Required { get; set; }
 
     /// <summary>Valor por defecto si no existe en la fuente (solo cuando Required=false).</summary>

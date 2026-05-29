@@ -36,23 +36,26 @@ public class ActionChainResolver(
         if (string.IsNullOrWhiteSpace(executedSlug) || string.IsNullOrWhiteSpace(rawResponseJson))
             return null;
 
-        // 1. Cargar la ActionDefinition correcta — preferir clon tenant-specific.
-        var candidates = await db.Set<ActionDefinition>()
-            .Where(a => a.IsActive && a.Name == executedSlug && (a.TenantId == tenantId || a.TenantId == null))
-            .ToListAsync(ct);
+        // 1. Resolver el contrato: per-tenant (Acción→Tenant→Contrato) → DefaultWebhookContract global.
+        var contractJson = await TenantActionContractLookup.ResolveContractJsonAsync(db, tenantId, executedSlug, ct);
+        if (string.IsNullOrWhiteSpace(contractJson))
+        {
+            var candidates = await db.Set<ActionDefinition>()
+                .Where(a => a.IsActive && a.Name == executedSlug && (a.TenantId == tenantId || a.TenantId == null))
+                .ToListAsync(ct);
+            var actionDef = candidates.FirstOrDefault(a => a.TenantId == tenantId)
+                            ?? candidates.FirstOrDefault(a => a.TenantId == null);
+            contractJson = actionDef?.DefaultWebhookContract;
+        }
 
-        var actionDef = candidates.FirstOrDefault(a => a.TenantId == tenantId)
-                        ?? candidates.FirstOrDefault(a => a.TenantId == null);
-
-        if (actionDef is null || string.IsNullOrWhiteSpace(actionDef.DefaultWebhookContract))
+        if (string.IsNullOrWhiteSpace(contractJson))
             return null;
 
         // 2. Deserializar contract → leer ChainRules.
         List<ChainRule>? rules;
         try
         {
-            var bundle = JsonSerializer.Deserialize<ActionConfigBundleJson>(
-                actionDef.DefaultWebhookContract, JsonOpts);
+            var bundle = JsonSerializer.Deserialize<ActionConfigBundleJson>(contractJson, JsonOpts);
             rules = bundle?.ChainRules;
         }
         catch (Exception ex)
