@@ -619,11 +619,15 @@ public class SuperAdminController(
         var tenant = await db.Tenants.FindAsync([tenantId], ct);
         if (tenant is null) return NotFound();
 
-        // Catálogo completo visible en el tab: globales + todas las acciones legacy
-        // (de cualquier tenant). El admin puede asignar cualquiera a este tenant.
-        // Se incluye OriginTenantName para que el admin vea de dónde viene cada una.
+        // Catálogo del tab: SOLO globales + clones legacy del propio tenant.
+        // Antes (mayo 2026) este endpoint devolvía clones de cualquier tenant —
+        // eso producía duplicados confusos en el listado (ej: AFTA veía dos
+        // "Notificar gestión al cliente" con badges de SOMOS y Prueba). Con la
+        // arquitectura nueva Acción global → TenantActionContract, los clones
+        // de OTROS tenants son basura legacy invisible para este tenant.
         var actions = await (
             from a in db.ActionDefinitions
+            where a.TenantId == null || a.TenantId == tenantId
             join t in db.Tenants on a.TenantId equals t.Id into gt
             from t in gt.DefaultIfEmpty()
             orderby a.TenantId == null ? 0 : 1, a.Name
