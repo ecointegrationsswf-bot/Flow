@@ -646,7 +646,13 @@ public class ProcessIncomingMessageHandler(
                         ShouldClose: false,
                         TokensUsed: 0);
                     conversation.Status = ConversationStatus.EscalatedToHuman;
-                    try { await transferChat.ExecuteIfApplicableAsync(conversation, ct); }
+                    try
+                    {
+                        // Pausa automática SOLO si el template tiene TRANSFER_CHAT vinculada.
+                        // Sin la acción, el agente sigue activo (comportamiento previo).
+                        var shouldPause = await transferChat.ExecuteIfApplicableAsync(conversation, ct);
+                        if (shouldPause) conversation.IsHumanHandled = true;
+                    }
                     catch (Exception exTc) { Console.WriteLine($"[Canned/TransferChat] {exTc.Message}"); }
                     try { await notifier.NotifyEscalationAsync(cmd.TenantId.ToString(), conversation.Id); }
                     catch { }
@@ -1216,7 +1222,13 @@ public class ProcessIncomingMessageHandler(
                 if (!isBrainControlled && agentResponse.ShouldEscalate)
                 {
                     conversation.Status = ConversationStatus.EscalatedToHuman;
-                    try { await transferChat.ExecuteIfApplicableAsync(conversation, ct); }
+                    try
+                    {
+                        // Pausa automática SOLO si el template tiene TRANSFER_CHAT vinculada.
+                        // Sin la acción, el agente sigue activo (comportamiento previo).
+                        var shouldPause = await transferChat.ExecuteIfApplicableAsync(conversation, ct);
+                        if (shouldPause) conversation.IsHumanHandled = true;
+                    }
                     catch (Exception ex) { Console.WriteLine($"[TransferChat] Error: {ex.Message}"); }
                     try { await notifier.NotifyEscalationAsync(cmd.TenantId.ToString(), conversation.Id); }
                     catch { }

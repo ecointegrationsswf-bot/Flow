@@ -38,30 +38,26 @@ public class TransferChatService(
     private const string ActionName = "TRANSFER_CHAT";
     private const int SummaryMessageCount = 10;
 
-    public async Task ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default)
+    public async Task<bool> ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default)
     {
         // 1) Solo aplica a conversaciones de campaña.
-        if (!conversation.CampaignId.HasValue) return;
+        if (!conversation.CampaignId.HasValue) return false;
 
-        // 2) Cooldown: 1 notificación por conversación.
-        if (conversation.LastTransferChatSentAt.HasValue)
-        {
-            log.LogInformation("[TransferChat] Conversación {Id} ya notificada el {When} — skip.",
-                conversation.Id, conversation.LastTransferChatSentAt.Value);
-            return;
-        }
-
-        // 3) Cargar campaña + template.
+        // 2) Cargar campaña + template (lo necesitamos para chequear TRANSFER_CHAT
+        //    ANTES del cooldown — el return value indica "el template tiene la
+        //    acción vinculada", y debe ser true aunque el cooldown ya haya parado
+        //    la notificación: la pausa del agente debe persistir mientras la
+        //    acción esté vinculada).
         var campaign = await db.Campaigns
             .Include(c => c.CampaignTemplate)
             .FirstOrDefaultAsync(c => c.Id == conversation.CampaignId.Value, ct);
-        if (campaign is null) return;
+        if (campaign is null) return false;
 
-        // 4) Verificar que el template tenga TRANSFER_CHAT vinculada.
+        // 3) Verificar que el template tenga TRANSFER_CHAT vinculada.
         if (campaign.CampaignTemplate is null || campaign.CampaignTemplate.ActionIds.Count == 0)
         {
             log.LogDebug("[TransferChat] Template de campaña {CampaignId} sin ActionIds — skip.", campaign.Id);
-            return;
+            return false;
         }
         var actionIds = campaign.CampaignTemplate.ActionIds.ToList();
         var hasTransferAction = await db.ActionDefinitions
@@ -70,7 +66,17 @@ public class TransferChatService(
         {
             log.LogDebug("[TransferChat] Template {TemplateId} no incluye TRANSFER_CHAT — skip.",
                 campaign.CampaignTemplate.Id);
-            return;
+            return false;
+        }
+
+        // 4) Cooldown: 1 NOTIFICACIÓN por conversación (no afecta la pausa).
+        //    Si ya se notificó, devolvemos true igual para que el caller mantenga
+        //    al agente pausado — el template SÍ tiene la acción vinculada.
+        if (conversation.LastTransferChatSentAt.HasValue)
+        {
+            log.LogInformation("[TransferChat] Conversación {Id} ya notificada el {When} — no re-notifico, pero el agente sigue pausado.",
+                conversation.Id, conversation.LastTransferChatSentAt.Value);
+            return true;
         }
 
         // 5) Resolver destinatarios según si la campaña es manual o automática.
@@ -86,7 +92,10 @@ public class TransferChatService(
             log.LogWarning("[TransferChat] Sin destinatarios para conversación {Id} (campaña {CampaignId}, automatic={Auto}). " +
                            "Verificar AppUsers IsActive=1 del tenant o LaunchedByUserId.",
                 conversation.Id, campaign.Id, isAutomatic);
-            return;
+            // El template tiene TRANSFER_CHAT vinculada → seguimos pausando al
+            // agente aunque no haya a quién notificar. Si no se pausara, el cliente
+            // recibiría respuestas de la IA cuando ya pidió humano.
+            return true;
         }
 
         // 6) Cargar últimos mensajes para el resumen.
@@ -156,6 +165,7 @@ public class TransferChatService(
             "[TransferChat] Conversación {Id} ({Client}) notificada: WA={Wa} Email={Em} (recipients={Total} · automatic={Auto})",
             conversation.Id, conversation.ClientName ?? conversation.ClientPhone,
             notifiedWa, notifiedEmail, recipients.Count, isAutomatic);
+        return true;
     }
 
     private record RecipientRow(string? Email, string? NotifyPhone, string? FullName);
