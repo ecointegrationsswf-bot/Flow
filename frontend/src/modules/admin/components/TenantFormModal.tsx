@@ -802,8 +802,11 @@ export function TenantFormModal({ tenant, onClose, mode = 'modal', tab: tabProp,
  */
 function Outer({ mode, children }: { mode: 'modal' | 'page'; children: React.ReactNode }) {
   if (mode === 'page') {
+    // El AdminLayout es sidebar lateral + <main className="flex-1 overflow-auto bg-gray-50 p-6">,
+    // sin header horizontal. h-full ocupa el área interna del <main> (descontando
+    // su padding), sin asumir un alto fijo.
     return (
-      <div className="flex h-[calc(100vh-64px)] w-full flex-col overflow-hidden bg-white">
+      <div className="flex h-full w-full flex-col overflow-hidden bg-white rounded-lg shadow-sm">
         {children}
       </div>
     )

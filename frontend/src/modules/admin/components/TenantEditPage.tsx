@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 import { useAdminTenants } from '@/modules/admin/hooks/useAdminTenants'
 import { TenantFormModal, type TenantFormTab } from './TenantFormModal'
@@ -13,17 +13,19 @@ const VALID_TABS: ReadonlyArray<TenantFormTab> = [
  *
  * Rutas que la usan:
  *   /admin/tenants/new                       → modo creación (solo tab General)
- *   /admin/tenants/:id/edit                  → modo edición (tab 'general' por default)
- *   /admin/tenants/:id/edit/:tab             → modo edición con tab seleccionado
+ *   /admin/tenants/:id/edit/*                → modo edición (la wildcard preserva
+ *                                              la instancia del componente al
+ *                                              cambiar de tab, conservando
+ *                                              selecciones/búsqueda del form)
  *
  * Reusa <TenantFormModal mode="page" ... /> para no duplicar la lógica del
- * formulario (886 líneas) — el modal y la página comparten el mismo cuerpo y
- * solo difieren en el chrome externo. La tab se sincroniza con la URL para
- * que las pestañas sean linkeables y refrescables.
+ * formulario — el modal y la página comparten el mismo cuerpo y solo difieren
+ * en el chrome externo.
  */
 export function TenantEditPage() {
   const navigate = useNavigate()
-  const { id, tab: tabParam } = useParams<{ id?: string; tab?: string }>()
+  const location = useLocation()
+  const { id } = useParams<{ id?: string }>()
   const isNew = id === 'new' || id === undefined
   const { data: tenants, isLoading } = useAdminTenants()
 
@@ -34,13 +36,15 @@ export function TenantEditPage() {
     return tenants?.find((t) => t.id === id)
   }, [tenants, id, isNew])
 
-  // Validar el tab del URL. Si el path trae algo inválido, default a 'general'.
+  // Extraer el tab del último segmento del pathname (la wildcard lo captura).
+  // No usamos useParams(':tab') porque cambiamos a una sola ruta con '*' para
+  // evitar el remount al navegar entre tabs.
   const activeTab: TenantFormTab = useMemo(() => {
-    if (!tabParam) return 'general'
-    return (VALID_TABS as readonly string[]).includes(tabParam)
-      ? (tabParam as TenantFormTab)
+    const last = location.pathname.split('/').filter(Boolean).pop() ?? ''
+    return (VALID_TABS as readonly string[]).includes(last)
+      ? (last as TenantFormTab)
       : 'general'
-  }, [tabParam])
+  }, [location.pathname])
 
   const handleTabChange = (next: TenantFormTab) => {
     if (isNew) return // en modo nuevo solo existe General

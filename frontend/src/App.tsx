@@ -77,8 +77,10 @@ export default function App() {
           <Route index element={<Navigate to="/admin/tenants" replace />} />
           <Route path="tenants" element={<TenantsPage />} />
           <Route path="tenants/new" element={<TenantEditPage />} />
-          <Route path="tenants/:id/edit" element={<TenantEditPage />} />
-          <Route path="tenants/:id/edit/:tab" element={<TenantEditPage />} />
+          {/* Wildcard /* mantiene UNA sola Route para todas las tabs, así
+              React Router no remonta el componente al cambiar de tab — el
+              estado del formulario (selecciones, búsqueda, etc.) se preserva. */}
+          <Route path="tenants/:id/edit/*" element={<TenantEditPage />} />
           <Route path="inbox" element={<InboxMonitorPage />} />
           <Route path="outbox" element={<OutboundMessagesPage />} />
           <Route path="agent-templates" element={<AgentTemplatesPage />} />
