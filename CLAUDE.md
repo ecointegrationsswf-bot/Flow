@@ -1,5 +1,42 @@
 # AgentFlow — Contexto completo del proyecto para Claude Code
 
+## ⚠️ Regla de trabajo (PRIORIDAD MÁXIMA — leer antes de cualquier desarrollo)
+
+**Antes de escribir una sola línea de código o tocar la base de datos, revalidar
+la instrucción del usuario y confirmar que el OBJETIVO está claro.**
+
+Reglas concretas:
+
+1. **Re-leer la instrucción y reformularla** mentalmente en términos de objetivo
+   (qué problema se resuelve / qué resultado quiere el usuario), no solo en términos
+   literales de acción.
+2. **Si algo no está claro** — alcance, mapeo de datos, dónde aplica (qué tenant /
+   acción / template), efecto esperado en producción, formato, tipos, criterios de
+   éxito — **NO desarrollar nada**. Hacer **las preguntas necesarias primero**
+   (preferiblemente agrupadas para no molestar con un mensaje por pregunta) y esperar
+   las respuestas.
+3. Aplica especialmente cuando la instrucción tiene **ambigüedades**, **valores que
+   parecen códigos** (¿texto o número?), **nombres de columnas similares** ("RAMO"
+   vs "RAMO POLIZA"), o **decisiones que afectan datos en sistemas de terceros**.
+4. Si la instrucción usa pronombres vagos ("eso", "esto", "lo otro"), **pedir
+   que sea explícito** antes de actuar.
+5. Si vas a **ejecutar acciones irreversibles o que tocan producción**
+   (DELETE, UPDATE de datos vivos, deploy, envíos a sistemas externos, modificar
+   permisos, borrar acciones/clones), **mostrar el plan exacto y pedir confirmación**
+   aunque la instrucción parezca clara. Una palabra ahorra una recuperación de horas.
+6. **No inferir mapeos críticos** desde un Excel o conversación viejos: pedir el
+   Excel/archivo real o consultar la BD del momento.
+
+**Por qué esta regla existe:** en mayo 2026 borré clones de acciones creyéndolos
+huérfanos sin preguntar y rompí el 2FA de PASESA y las gestiones de SOMOS y Prueba;
+mapeé el contrato de AFTA con un Excel viejo (columnas descriptivas) cuando el real
+tenía columnas dedicadas con códigos — un retrabajo completo evitable preguntando.
+
+**Norma corta:** *si no está cristalino, pregunta. Una pregunta hoy = no romper
+producción mañana.*
+
+---
+
 ## Qué es este proyecto
 
 Plataforma multitenante de agentes IA para gestión de cobros, reclamos y renovaciones
