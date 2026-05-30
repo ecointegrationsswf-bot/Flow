@@ -1,16 +1,17 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Building2, Plus, Users, Pencil, Power } from 'lucide-react'
 import { useAdminTenants, useUpdateTenant, type AdminTenant } from '@/modules/admin/hooks/useAdminTenants'
-import { TenantFormModal } from './TenantFormModal'
 import { TenantUsersModal } from './TenantUsersModal'
 import { confirmDialog } from '@/shared/components/dialog'
 
 export function TenantsPage() {
+  const navigate = useNavigate()
   const { data: tenants, isLoading } = useAdminTenants()
   const updateTenant = useUpdateTenant()
 
-  const [showForm, setShowForm] = useState(false)
-  const [editTenant, setEditTenant] = useState<AdminTenant | null>(null)
+  // Edición ahora es pantalla completa (ruta /admin/tenants/:id/edit). Solo
+  // mantenemos modal para la sub-pantalla de Usuarios.
   const [usersTenant, setUsersTenant] = useState<AdminTenant | null>(null)
 
   const handleToggleActive = async (tenant: AdminTenant) => {
@@ -34,7 +35,7 @@ export function TenantsPage() {
           <p className="text-sm text-gray-500">Administracion de tenants y organizaciones</p>
         </div>
         <button
-          onClick={() => { setEditTenant(null); setShowForm(true) }}
+          onClick={() => navigate('/admin/tenants/new')}
           className="flex items-center gap-2 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-gray-900 hover:bg-amber-400 disabled:opacity-50 transition-colors"
         >
           <Plus className="h-4 w-4" />
@@ -84,7 +85,7 @@ export function TenantsPage() {
                   <td className="px-4 py-3">
                     <div className="flex gap-1">
                       <button
-                        onClick={() => { setEditTenant(t); setShowForm(true) }}
+                        onClick={() => navigate(`/admin/tenants/${t.id}/edit`)}
                         className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
                         title="Editar"
                       >
@@ -113,13 +114,6 @@ export function TenantsPage() {
             </tbody>
           </table>
         </div>
-      )}
-
-      {showForm && (
-        <TenantFormModal
-          tenant={editTenant ?? undefined}
-          onClose={() => setShowForm(false)}
-        />
       )}
 
       {usersTenant && (

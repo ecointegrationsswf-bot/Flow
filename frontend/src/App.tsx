@@ -23,6 +23,7 @@ import { AdminLoginPage } from '@/modules/admin/components/AdminLoginPage'
 import { AdminProtectedRoute } from '@/modules/admin/components/AdminProtectedRoute'
 import { AdminLayout } from '@/modules/admin/components/AdminLayout'
 import { TenantsPage } from '@/modules/admin/components/TenantsPage'
+import { TenantEditPage } from '@/modules/admin/components/TenantEditPage'
 import { AgentTemplatesPage } from '@/modules/admin/components/AgentTemplatesPage'
 import { InboxMonitorPage } from '@/modules/admin/components/InboxMonitorPage'
 import { OutboundMessagesPage } from '@/modules/admin/components/OutboundMessagesPage'
@@ -75,6 +76,9 @@ export default function App() {
         <Route element={<AdminLayout />}>
           <Route index element={<Navigate to="/admin/tenants" replace />} />
           <Route path="tenants" element={<TenantsPage />} />
+          <Route path="tenants/new" element={<TenantEditPage />} />
+          <Route path="tenants/:id/edit" element={<TenantEditPage />} />
+          <Route path="tenants/:id/edit/:tab" element={<TenantEditPage />} />
           <Route path="inbox" element={<InboxMonitorPage />} />
           <Route path="outbox" element={<OutboundMessagesPage />} />
           <Route path="agent-templates" element={<AgentTemplatesPage />} />

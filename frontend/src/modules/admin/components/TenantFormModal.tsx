@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { X, Loader2, Building2, FileText, Zap, Check, Search, CircleDot, Globe, CheckCircle2, Settings, Webhook, Tag, Upload, Image as ImageIcon, Megaphone } from 'lucide-react'
+import { X, Loader2, Building2, FileText, Zap, Check, Search, CircleDot, Globe, CheckCircle2, Settings, Webhook, Tag, Upload, Image as ImageIcon, Megaphone, ArrowLeft } from 'lucide-react'
 import {
   useCreateTenant,
   useUpdateTenant,
@@ -33,11 +33,23 @@ const tenantSchema = z.object({
 
 type TenantForm = z.infer<typeof tenantSchema>
 
-type Tab = 'general' | 'config' | 'prompts' | 'actions' | 'webhooks' | 'labeling' | 'campaigns'
+export type TenantFormTab = 'general' | 'config' | 'prompts' | 'actions' | 'webhooks' | 'labeling' | 'campaigns'
+type Tab = TenantFormTab
 
 interface TenantFormModalProps {
   tenant?: AdminTenant
   onClose: () => void
+  /**
+   * 'modal' (default): renderiza con overlay + botón X + chrome de modal.
+   * 'page': renderiza sin overlay, ocupa todo el contenedor padre, header con
+   * botón "Volver" en vez de X. Usado por TenantEditPage para mostrar el
+   * mismo formulario como pantalla completa enrutable.
+   */
+  mode?: 'modal' | 'page'
+  /** Tab activa controlada externamente. Si se pasa, se ignora el useState interno. */
+  tab?: Tab
+  /** Notifica cambio de tab. Si se provee, el caller controla la tab (típicamente sincronizada con la URL). */
+  onTabChange?: (t: Tab) => void
 }
 
 function slugify(text: string): string {
@@ -49,7 +61,7 @@ function slugify(text: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
+export function TenantFormModal({ tenant, onClose, mode = 'modal', tab: tabProp, onTabChange }: TenantFormModalProps) {
   const isEdit = !!tenant
   const createTenant = useCreateTenant()
   const updateTenant = useUpdateTenant()
@@ -81,7 +93,14 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
     }
   }
   const [error, setError] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('general')
+  // Tab: si el caller controla (page mode con URL), usamos su valor; si no,
+  // mantenemos un useState interno (mode modal estándar).
+  const [tabInternal, setTabInternal] = useState<Tab>('general')
+  const tab = tabProp ?? tabInternal
+  const setTab = (t: Tab) => {
+    if (onTabChange) onTabChange(t)
+    else setTabInternal(t)
+  }
   const [search, setSearch] = useState('')
   const [selectedPromptIds, setSelectedPromptIds] = useState<Set<string>>(new Set())
   const [selectedActionIds, setSelectedActionIds] = useState<Set<string>>(new Set())
@@ -306,17 +325,39 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
 
   const isPending = createTenant.isPending || updateTenant.isPending
 
+  // ── Chrome: modal con overlay vs página completa ────────────────────────
+  // El contenido (tabs + cuerpo) es idéntico en ambos modos; solo cambia el
+  // wrapper externo y el header (X vs "Volver").
+  const title = isEdit ? `Editar Cliente — ${tenant.name}` : 'Nuevo Cliente'
+  const headerJsx = mode === 'page' ? (
+    <div className="flex items-center gap-3 border-b border-gray-200 px-6 py-4">
+      <button
+        type="button"
+        onClick={onClose}
+        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-gray-600 hover:bg-gray-100 hover:text-gray-900"
+        title="Volver al listado de clientes"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        Volver
+      </button>
+      <span className="h-5 w-px bg-gray-300" />
+      <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+    </div>
+  ) : (
+    <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
+      <h2 className="text-lg font-semibold text-gray-900">{title}</h2>
+      <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+        <X className="h-5 w-5" />
+      </button>
+    </div>
+  )
+
+  // Outer wrapper distinto según modo. Mantenemos el contenido (tabs + tab body)
+  // exactamente igual abajo para no duplicar código.
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2">
-      <div className="flex h-[96vh] w-[98vw] flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
-        <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
-          <h2 className="text-lg font-semibold text-gray-900">
-            {isEdit ? `Editar Cliente — ${tenant.name}` : 'Nuevo Cliente'}
-          </h2>
-          <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
-            <X className="h-5 w-5" />
-          </button>
-        </div>
+    <Outer mode={mode}>
+      <>
+        {headerJsx}
 
         {isEdit && (
           <div className="flex border-b border-gray-200 px-6">
@@ -739,16 +780,39 @@ export function TenantFormModal({ tenant, onClose }: TenantFormModalProps) {
         {isEdit && tab === 'campaigns' && tenant && (
           <AdminTenantCampaignsTab tenantId={tenant.id} />
         )}
-      </div>
 
-      {conflict && (
-        <AssignmentConflictModal
-          kind={conflict.kind}
-          conflicts={conflict.items}
-          tenantName={tenant?.name ?? ''}
-          onClose={() => setConflict(null)}
-        />
-      )}
+        {conflict && (
+          <AssignmentConflictModal
+            kind={conflict.kind}
+            conflicts={conflict.items}
+            tenantName={tenant?.name ?? ''}
+            onClose={() => setConflict(null)}
+          />
+        )}
+      </>
+    </Outer>
+  )
+}
+
+/**
+ * Wrapper externo que cambia según el modo:
+ * - 'modal': overlay con backdrop + caja centrada (comportamiento clásico).
+ * - 'page': contenedor de ancho completo sin overlay (se monta dentro de la
+ *   ruta `/admin/tenants/:id/edit`, ocupa todo el viewport del layout).
+ */
+function Outer({ mode, children }: { mode: 'modal' | 'page'; children: React.ReactNode }) {
+  if (mode === 'page') {
+    return (
+      <div className="flex h-[calc(100vh-64px)] w-full flex-col overflow-hidden bg-white">
+        {children}
+      </div>
+    )
+  }
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-2">
+      <div className="flex h-[96vh] w-[98vw] flex-col overflow-hidden rounded-xl bg-white shadow-2xl">
+        {children}
+      </div>
     </div>
   )
 }
