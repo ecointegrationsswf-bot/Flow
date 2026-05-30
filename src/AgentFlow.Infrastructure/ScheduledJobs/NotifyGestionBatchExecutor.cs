@@ -28,9 +28,15 @@ public class NotifyGestionBatchExecutor(
     AgentFlowDbContext db,
     IActionExecutorService actionExecutor,
     JobExecutionAuditor auditor,
+    AgentFlow.Domain.Interfaces.ITeamsNotifier teamsNotifier,
     ILogger<NotifyGestionBatchExecutor> log) : IScheduledJobExecutor
 {
     public string Slug => "NOTIFY_GESTION";
+
+    // Umbral para alertar a Teams (por tenant, al cierre del run):
+    // dispara con cualquiera de los dos — porcentaje O conteo absoluto.
+    private const double FailureRateThreshold = 0.20;   // 20%
+    private const int FailureAbsoluteThreshold = 10;
 
     public async Task<JobRunResult> ExecuteAsync(
         ScheduledWebhookJob job, ScheduledJobContext ctx, CancellationToken ct)
@@ -75,12 +81,38 @@ public class NotifyGestionBatchExecutor(
         var failed = 0;
         var errorMessages = new List<string>();
 
+        // Stats POR TENANT para alertar a Teams al cierre del run cuando un
+        // tenant supere el umbral (>=20% fallidos o >=10 fallos absolutos).
+        // Errores se agrupan por mensaje para mostrar el top 3 más frecuente.
+        var statsByTenant = new Dictionary<Guid, (int Sent, int Failed, Dictionary<string, int> Errors)>();
+        void Bump(Guid tenantId, bool isSuccess, string? errMsg)
+        {
+            if (!statsByTenant.TryGetValue(tenantId, out var s))
+                s = (0, 0, new Dictionary<string, int>(StringComparer.Ordinal));
+            if (isSuccess) s.Sent++;
+            else
+            {
+                s.Failed++;
+                var key = string.IsNullOrWhiteSpace(errMsg) ? "(sin detalle)"
+                        : errMsg.Length > 160 ? errMsg[..160] : errMsg;
+                s.Errors[key] = s.Errors.GetValueOrDefault(key) + 1;
+            }
+            statsByTenant[tenantId] = s;
+        }
+
         // Resolver nombre del cliente para mostrar en la UI cuando falla.
         var convIds = pending.Select(p => p.Id).ToList();
         var convNames = await db.Conversations
             .Where(c => convIds.Contains(c.Id))
             .Select(c => new { c.Id, c.ClientName, c.ClientPhone })
             .ToDictionaryAsync(c => c.Id, c => c.ClientName ?? c.ClientPhone, ct);
+
+        // Nombre del tenant para el mensaje de Teams.
+        var tenantIds = pending.Select(p => p.TenantId).Distinct().ToList();
+        var tenantNames = await db.Tenants
+            .Where(t => tenantIds.Contains(t.Id))
+            .Select(t => new { t.Id, t.Name })
+            .ToDictionaryAsync(t => t.Id, t => t.Name, ct);
 
         // Por cada conversación, iteramos los records del CampaignContact y disparamos
         // un webhook por cada KeyValue. Idempotencia per-KeyValue: si ya hubo un
@@ -158,12 +190,14 @@ public class NotifyGestionBatchExecutor(
                     if (result.Success)
                     {
                         sent++;
+                        Bump(p.TenantId, isSuccess: true, errMsg: null);
                         alreadySent.Add(keyValue); // evitar reenvíos en el mismo run
                     }
                     else
                     {
                         failed++;
                         var errMsg = result.ErrorMessage ?? "sin detalle";
+                        Bump(p.TenantId, isSuccess: false, errMsg);
                         if (errorMessages.Count < 5) errorMessages.Add($"conv {p.Id} kv {keyValue}: {errMsg}");
                         log.LogWarning("NotifyGestionBatch falló conv {Conv} kv {Kv}: {Err}", p.Id, keyValue, errMsg);
                         auditor.RecordFailure(
@@ -177,6 +211,7 @@ public class NotifyGestionBatchExecutor(
                 catch (Exception ex)
                 {
                     failed++;
+                    Bump(p.TenantId, isSuccess: false, ex.Message);
                     if (errorMessages.Count < 5) errorMessages.Add($"conv {p.Id} kv {keyValue}: {ex.Message}");
                     log.LogError(ex, "NotifyGestionBatch: excepción conv {Conv} kv {Kv}.", p.Id, keyValue);
                     auditor.RecordFailure(
@@ -190,6 +225,39 @@ public class NotifyGestionBatchExecutor(
         }
 
         await auditor.FlushAsync(ct);
+
+        // ── Alerta a Teams por tenant cuando supera el umbral ───────────────
+        // Dispara si: >= FailureAbsoluteThreshold fallos O >= FailureRateThreshold%
+        // del total procesado para ese tenant. Best-effort: si Teams falla, NO
+        // afecta el resultado del job.
+        foreach (var kv in statsByTenant)
+        {
+            var tenantId = kv.Key;
+            var (tSent, tFailed, tErrors) = kv.Value;
+            var tTotal = tSent + tFailed;
+            if (tTotal == 0 || tFailed == 0) continue;
+            var rate = (double)tFailed / tTotal;
+            if (tFailed < FailureAbsoluteThreshold && rate < FailureRateThreshold) continue;
+
+            var tenantName = tenantNames.TryGetValue(tenantId, out var n) ? n : tenantId.ToString();
+            var top3 = tErrors
+                .OrderByDescending(e => e.Value)
+                .Take(3)
+                .Select(e => $"   • ({e.Value}x) {e.Key}")
+                .ToList();
+
+            var msg =
+                $"⚠️ NOTIFY_GESTION con fallos altos\n" +
+                $"• Tenant: {tenantName}\n" +
+                $"• Procesados: {tTotal} · Exitosos: {tSent} · Fallidos: {tFailed} ({rate:P0})\n" +
+                $"• Umbral: ≥{FailureAbsoluteThreshold} fallos O ≥{FailureRateThreshold:P0}\n" +
+                (top3.Count > 0 ? $"• Top errores:\n{string.Join("\n", top3)}\n" : "") +
+                $"• Acción: revisar el contrato/credenciales del tenant en el panel admin → Webhook Builder. " +
+                $"Detalle por item en Scheduled Jobs → Historial.";
+
+            try { await teamsNotifier.NotifyAsync(msg, ct); }
+            catch (Exception ex) { log.LogWarning(ex, "[NotifyGestionBatch] Teams notify falló para tenant {Tenant}.", tenantName); }
+        }
 
         var summary = $"Total={pending.Count} · Enviadas={sent} · Fallos={failed}";
         if (errorMessages.Count > 0) summary += " · Errores: " + string.Join(" | ", errorMessages);
