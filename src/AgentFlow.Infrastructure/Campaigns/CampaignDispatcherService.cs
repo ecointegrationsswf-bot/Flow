@@ -620,8 +620,19 @@ public class CampaignDispatcherService(
                             }
                             else
                             {
+                                // Mensaje inicial de campaña — segmentado en burbujas si trae '~'
+                                // (mismo criterio que las respuestas del agente). Sin '~' = un único
+                                // mensaje. La primera llamada fuera del loop garantiza waResult.
+                                var bubbles = SplitIntoBubbles(message);
+                                if (bubbles.Count == 0) bubbles = new List<string> { message };
                                 var waResult = await waProvider.SendMessageAsync(
-                                    new SendMessageRequest(contact.PhoneNumber, message), ct);
+                                    new SendMessageRequest(contact.PhoneNumber, bubbles[0]), ct);
+                                for (var bi = 1; bi < bubbles.Count && waResult.Success; bi++)
+                                {
+                                    await Task.Delay(BubbleDelayMs, ct);
+                                    waResult = await waProvider.SendMessageAsync(
+                                        new SendMessageRequest(contact.PhoneNumber, bubbles[bi]), ct);
+                                }
 
                                 // Si el provider devolvió error de tipo "número no válido",
                                 // registramos en lista negra para futuras campañas.
@@ -1008,6 +1019,30 @@ por el sistema de protección anti-restricción.</p>
 
     private static string? Truncate(string? s, int max) =>
         s is null ? null : s.Length <= max ? s : s[..max];
+
+    // ── Segmentación de mensajes en "burbujas" ──────────────────────────────
+    // Algunos prompts (ej. AFTA) separan parrafos con '~' para que el cliente
+    // reciba mensajes WhatsApp SEPARADOS en vez de un solo recuadro. Aplica
+    // tambien al mensaje INICIAL de campaña. Sin '~' es un unico mensaje (igual
+    // que antes). Helper duplicado adrede de ProcessIncomingMessageCommand para
+    // no acoplar Application <-> Infrastructure por algo trivial.
+    private const int BubbleDelayMs = 1000;
+    private const int MaxBubbles = 6;
+
+    private static List<string> SplitIntoBubbles(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return new List<string>();
+        if (!text.Contains('~')) return new List<string> { text };
+        var parts = text
+            .Split('~', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Where(p => !string.IsNullOrWhiteSpace(p))
+            .ToList();
+        if (parts.Count == 0) return new List<string> { text };
+        if (parts.Count <= MaxBubbles) return parts;
+        var capped = parts.Take(MaxBubbles - 1).ToList();
+        capped.Add(string.Join("\n\n", parts.Skip(MaxBubbles - 1)));
+        return capped;
+    }
 
     /// <summary>
     /// Patrones que indican que el LLM emitió un mensaje "meta" — dirigido al
