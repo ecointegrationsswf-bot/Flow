@@ -463,6 +463,12 @@ public class CampaignDispatcherService(
                 int channelFailures = 0;
                 string? lastError = null;
                 DispatchAttemptResult? primaryDispatch = null;
+                // Descartes por número NO entregable (lista negra histórica / sin cuenta
+                // de WhatsApp). Se cuentan aparte: NO son fallos de la línea ni del provider,
+                // así que no deben disparar el cortocircuito de errores consecutivos ni la
+                // auto-pausa por tasa de fallo. Son "datos muertos" de la lista.
+                int channelUndeliverable = 0;
+                string? undeliverableReason = null;
 
                 foreach (var channel in enabledChannels)
                 {
@@ -607,16 +613,18 @@ public class CampaignDispatcherService(
 
                             if (preCheck is not null && !preCheck.IsValid)
                             {
+                                // Número no entregable (lista negra o sin cuenta de WhatsApp).
+                                // NO es un fallo de la línea/provider — es un dato muerto en la
+                                // lista. Lo tratamos como DESCARTE (Skipped), no como error: así
+                                // NO suma al cortocircuito de errores consecutivos ni a la tasa de
+                                // fallo del batch (que de otro modo auto-pausaría TODA la campaña
+                                // por culpa de números muertos).
                                 logger.LogInformation(
-                                    "Campaña {CampaignId}: contacto {Phone} NO enviado — {Source}: {Reason}",
+                                    "Campaña {CampaignId}: contacto {Phone} DESCARTADO (no entregable) — {Source}: {Reason}",
                                     campaignId, contact.PhoneNumber, preCheck.Source, preCheck.Reason);
-                                attempt = new DispatchAttemptResult(
-                                    Success: false,
-                                    ExternalId: null,
-                                    Error: preCheck.Reason ?? "Número no entregable",
-                                    SentContent: null,
-                                    Subject: null,
-                                    Recipient: contact.PhoneNumber);
+                                channelUndeliverable++;
+                                undeliverableReason = preCheck.Reason ?? "Número sin cuenta activa en WhatsApp.";
+                                // attempt queda null → el canal se omite en 'if (attempt is null) continue;'.
                             }
                             else
                             {
@@ -771,6 +779,22 @@ public class CampaignDispatcherService(
                         catch (Exception ex) { logger.LogWarning(ex, "[Dispatcher] Teams notify falló (errores consecutivos)."); }
                         break;
                     }
+                }
+                else if (channelUndeliverable > 0)
+                {
+                    // Descarte terminal: el número no puede recibir (lista negra / sin
+                    // cuenta de WhatsApp). NO cuenta como fallo y NO toca consecutiveErrors
+                    // — un número muerto no dice nada sobre la salud de la línea, así que no
+                    // debe frenar el lote ni auto-pausar la campaña. El contacto queda
+                    // Skipped (terminal) y sale del pool de Queued: en el próximo tick ya
+                    // no se vuelve a intentar.
+                    contact.DispatchStatus = DispatchStatus.Skipped;
+                    contact.DispatchError = Truncate(undeliverableReason, 2000);
+                    contact.LastContactAt = sendNow;
+                    contact.ClaimedAt = null;
+                    logger.LogInformation(
+                        "Campaña {CampaignId}: contacto {Phone} marcado Skipped (no entregable) — no afecta el cortocircuito.",
+                        campaignId, contact.PhoneNumber);
                 }
                 else
                 {
