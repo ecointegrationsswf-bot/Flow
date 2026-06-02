@@ -2,6 +2,7 @@ using System.Text.Json;
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Channels.UltraMsg;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -29,6 +30,7 @@ namespace AgentFlow.Infrastructure.ScheduledJobs;
 public class FollowUpSweepExecutor(
     AgentFlowDbContext db,
     IChannelProviderFactory providerFactory,
+    IUltraMsgInstanceService ultraMsgInstance,
     IBusinessHoursClock businessHours,
     JobExecutionAuditor auditor,
     ILogger<FollowUpSweepExecutor> log) : IScheduledJobExecutor
@@ -120,6 +122,21 @@ public class FollowUpSweepExecutor(
     {
         if (contacts.Count == 0) return (0, 0, 0, 0);
         var tenant = contacts[0].Campaign.Tenant;
+
+        // Pre-check de salud de la línea — SIMÉTRICO al dispatcher inicial.
+        // Si la línea WhatsApp está caída/desvinculada (IsActive=true pero
+        // LastStatus != "authenticated"), NO enviamos NADA a UltraMsg: diferimos
+        // TODOS los follow-ups de este tenant al próximo tick. Esto evita encolar
+        // mensajes en una instancia caída que, al reconectar, los dispararía en
+        // ráfaga (incidente SOMOS 18/05 → riesgo de ban de Meta).
+        var (lineHealthy, healthReason) = await EnsureTenantLineHealthyAsync(tenantId, ct);
+        if (!lineHealthy)
+        {
+            log.LogWarning(
+                "[FollowUpSweep] Tenant {Id}: línea no disponible — {Count} follow-up(s) diferido(s). {Reason}",
+                tenantId, contacts.Count, healthReason);
+            return (0, 0, 0, contacts.Count); // todos diferidos: ni enviados ni fallidos
+        }
 
         // Validar tope DIARIO antes de empezar — si ya se llegó, no procesamos
         // ningún contacto de este tenant en este tick.
@@ -219,6 +236,69 @@ public class FollowUpSweepExecutor(
             }
         }
         return (sent, skipped, failed, deferred);
+    }
+
+    /// <summary>
+    /// Pre-check de salud de la línea WhatsApp del tenant, simétrico al
+    /// EnsureWhatsAppLineHealthyAsync del CampaignDispatcherService.
+    ///
+    /// Verifica la PRIMERA línea activa (la misma que usa el ChannelProviderFactory
+    /// para enviar — OrderBy CreatedAt). Solo se hace ping a UltraMsg; MetaCloudApi
+    /// se asume sano (su API responde 4xx cuando la cuenta está mal, no necesita
+    /// pre-check). Política conservadora fail-closed: si el ping falla por timeout
+    /// o red, devolvemos NO-sano para no arriesgar bombardear una línea caída.
+    ///
+    /// Persistir LastStatus también alimenta al monitor diario: si detectamos la
+    /// caída en un tick, el badge de la UI ya lo refleja sin esperar al ping de las 6 AM.
+    /// </summary>
+    private async Task<(bool Healthy, string? Reason)> EnsureTenantLineHealthyAsync(
+        Guid tenantId, CancellationToken ct)
+    {
+        var line = await db.Set<WhatsAppLine>()
+            .Where(l => l.TenantId == tenantId && l.IsActive)
+            .OrderBy(l => l.CreatedAt)
+            .FirstOrDefaultAsync(ct);
+
+        if (line is null)
+            return (false, "Sin línea WhatsApp activa para el tenant.");
+
+        // Solo validamos UltraMsg. MetaCloudApi tiene mejor manejo de errores
+        // y no necesita pre-check (su API responde 4xx cuando la cuenta está mal).
+        if (line.Provider != ProviderType.UltraMsg)
+            return (true, null);
+
+        UltraMsgInstanceStatus status;
+        try
+        {
+            using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            cts.CancelAfter(TimeSpan.FromSeconds(5));
+            status = await ultraMsgInstance.GetStatusAsync(line.InstanceId, line.ApiToken, cts.Token);
+        }
+        catch (Exception ex)
+        {
+            // Timeout o error de red — NO podemos confirmar que la línea esté sana.
+            // Política conservadora: fail-closed. Mejor diferir el tick que arriesgar
+            // bombardear UltraMsg si la línea está caída y solo no respondió a tiempo.
+            log.LogWarning(ex, "[FollowUpSweep][LineHealth] Ping a UltraMsg falló para tenant {TenantId}.", tenantId);
+            line.ConsecutivePingFailures++;
+            line.LastStatusCheckedAt = DateTime.UtcNow;
+            try { await db.SaveChangesAsync(ct); } catch { }
+            return (false, $"No se pudo verificar el estado de la línea: {ex.Message}");
+        }
+
+        // Persistir el resultado del ping (igual que hace el job diario).
+        line.LastStatus = status.Status;
+        line.LastStatusCheckedAt = DateTime.UtcNow;
+        if (string.Equals(status.Status, "authenticated", StringComparison.OrdinalIgnoreCase))
+            line.ConsecutivePingFailures = 0;
+        else
+            line.ConsecutivePingFailures++;
+        try { await db.SaveChangesAsync(ct); } catch { }
+
+        if (!string.Equals(status.Status, "authenticated", StringComparison.OrdinalIgnoreCase))
+            return (false, $"Línea '{line.DisplayName}' en estado '{status.Status}' (no authenticated).");
+
+        return (true, null);
     }
 
     private enum DispatchOutcome { Sent, Skipped, Deferred, Failed }
