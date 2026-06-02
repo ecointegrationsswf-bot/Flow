@@ -19,6 +19,7 @@ public record CreateTenantRequest(string Name, string Slug, string Country, deci
 public record UpdateTenantRequest(string? Name, string? Country, decimal? MonthlyBillingAmount, bool? IsActive);
 public record CreateTenantUserRequest(string FullName, string Email, string Password, string Role, bool BypassTwoFactor = false);
 public record ChangePasswordRequest(string NewPassword);
+public record SetUserActiveRequest(bool IsActive);
 public record CreateAgentCategoryRequest(string Name);
 public record UpdateAgentCategoryRequest(string? Name, bool? IsActive);
 public record AgentTemplateRequest(
@@ -882,6 +883,25 @@ public class SuperAdminController(
         user.PasswordHash = AuthController.HashPassword(req.NewPassword);
         await db.SaveChangesAsync(ct);
         return Ok(new { message = "Contrasena actualizada." });
+    }
+
+    /// <summary>
+    /// Activa / inactiva un usuario de un tenant desde el portal SuperAdmin.
+    /// Inactivar bloquea el login (AuthController ya filtra IsActive) y, gracias
+    /// al chequeo OnTokenValidated en Program.cs, también corta cualquier sesión
+    /// ya abierta del usuario en su siguiente request (no espera a que expire el JWT).
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/users/{userId:guid}/active")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> SetTenantUserActive(Guid tenantId, Guid userId, [FromBody] SetUserActiveRequest req, CancellationToken ct)
+    {
+        var user = await db.AppUsers.FirstOrDefaultAsync(u => u.Id == userId && u.TenantId == tenantId, ct);
+        if (user is null) return NotFound(new { error = "Usuario no encontrado." });
+
+        user.IsActive = req.IsActive;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { user.Id, user.FullName, user.Email, Role = user.Role.ToString(), user.IsActive });
     }
 
     // ── Super Admin Users ─────────────────────────────────

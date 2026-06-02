@@ -141,6 +141,23 @@ export function useChangeTenantUserPassword() {
   })
 }
 
+/** Activa / inactiva un usuario de un tenant (portal SuperAdmin). */
+export function useSetTenantUserActive() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ tenantId, userId, isActive }: { tenantId: string; userId: string; isActive: boolean }) => {
+      const { data } = await adminClient.put(
+        `/admin/tenants/${tenantId}/users/${userId}/active`,
+        { isActive }
+      )
+      return data
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'tenants', vars.tenantId, 'users'] })
+    },
+  })
+}
+
 /** Sube el logo del corredor (PNG/JPG/WEBP/SVG, max 5MB) y devuelve la URL pública. */
 export function useUploadTenantLogo() {
   const qc = useQueryClient()

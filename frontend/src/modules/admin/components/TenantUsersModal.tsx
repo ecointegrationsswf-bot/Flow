@@ -2,12 +2,14 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { X, Loader2, KeyRound, UserPlus, Eye, EyeOff, ShieldOff, ShieldCheck } from 'lucide-react'
+import { X, Loader2, KeyRound, UserPlus, Eye, EyeOff, ShieldOff, ShieldCheck, UserX, UserCheck } from 'lucide-react'
 import {
   useAdminTenantUsers,
   useCreateTenantUser,
   useChangeTenantUserPassword,
+  useSetTenantUserActive,
   type AdminTenant,
+  type AdminTenantUser,
 } from '@/modules/admin/hooks/useAdminTenants'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
 
@@ -57,6 +59,7 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
   const { data: users, isLoading } = useAdminTenantUsers(tenant.id)
   const createUser = useCreateTenantUser()
   const changePassword = useChangeTenantUserPassword()
+  const setActive = useSetTenantUserActive()
   const tt = useTenantTime()
 
   const [showNewUser, setShowNewUser] = useState(false)
@@ -67,6 +70,8 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
   const [newPassword, setNewPassword] = useState('')
   const [passwordError, setPasswordError] = useState<string | null>(null)
   const [createError, setCreateError] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
+  const [toggleError, setToggleError] = useState<string | null>(null)
 
   const {
     register,
@@ -107,6 +112,24 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
     } catch (err: unknown) {
       const axiosErr = err as { response?: { data?: { error?: string } } }
       setPasswordError(axiosErr.response?.data?.error ?? 'Error al cambiar contraseña.')
+    }
+  }
+
+  const onToggleActive = async (user: AdminTenantUser) => {
+    const action = user.isActive ? 'inactivar' : 'activar'
+    const consequence = user.isActive
+      ? 'No podrá iniciar sesión y se cerrará su sesión activa en la próxima acción.'
+      : 'Volverá a poder iniciar sesión.'
+    if (!window.confirm(`¿Seguro que quieres ${action} a ${user.fullName}?\n\n${consequence}`)) return
+    setToggleError(null)
+    setTogglingId(user.id)
+    try {
+      await setActive.mutateAsync({ tenantId: tenant.id, userId: user.id, isActive: !user.isActive })
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { error?: string } } }
+      setToggleError(axiosErr.response?.data?.error ?? `Error al ${action} usuario.`)
+    } finally {
+      setTogglingId(null)
     }
   }
 
@@ -249,17 +272,37 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                           <div className="flex justify-end"><div className="w-40"><PasswordStrengthBar password={newPassword} /></div></div>
                         </div>
                       ) : (
-                        <button
-                          onClick={() => {
-                            setPasswordUserId(user.id)
-                            setNewPassword('')
-                            setPasswordError(null)
-                          }}
-                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                          title="Cambiar contraseña"
-                        >
-                          <KeyRound className="h-4 w-4" />
-                        </button>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={() => onToggleActive(user)}
+                            disabled={togglingId === user.id}
+                            className={`rounded-lg p-1.5 transition-colors disabled:opacity-50 ${
+                              user.isActive
+                                ? 'text-gray-400 hover:bg-red-50 hover:text-red-600'
+                                : 'text-gray-400 hover:bg-green-50 hover:text-green-600'
+                            }`}
+                            title={user.isActive ? 'Inactivar usuario (bloquea el acceso)' : 'Activar usuario'}
+                          >
+                            {togglingId === user.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : user.isActive ? (
+                              <UserX className="h-4 w-4" />
+                            ) : (
+                              <UserCheck className="h-4 w-4" />
+                            )}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setPasswordUserId(user.id)
+                              setNewPassword('')
+                              setPasswordError(null)
+                            }}
+                            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                            title="Cambiar contraseña"
+                          >
+                            <KeyRound className="h-4 w-4" />
+                          </button>
+                        </div>
                       )}
                     </td>
                   </tr>
@@ -278,6 +321,12 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
           {passwordError && (
             <div className="mt-2 rounded-md bg-red-50 p-2 text-sm text-red-600">
               {passwordError}
+            </div>
+          )}
+
+          {toggleError && (
+            <div className="mt-2 rounded-md bg-red-50 p-2 text-sm text-red-600">
+              {toggleError}
             </div>
           )}
 

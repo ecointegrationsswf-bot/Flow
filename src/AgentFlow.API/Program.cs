@@ -276,6 +276,34 @@ builder.Services.AddAuthentication(Microsoft.AspNetCore.Authentication.JwtBearer
                     ctx.Token = token;
                 return Task.CompletedTask;
             },
+            // Bloqueo INMEDIATO de usuarios inactivados. Aunque el JWT siga vigente
+            // (hasta 8h tenant / 12h super admin), si el usuario fue inactivado en BD
+            // se rechaza la petición. Así "inactivar" corta también las sesiones ya
+            // abiertas en su siguiente request — no solo los nuevos logins.
+            OnTokenValidated = async ctx =>
+            {
+                var principal = ctx.Principal;
+                if (principal is null) return;
+
+                // Tokens de propósito especial (p.ej. reset de contraseña) no
+                // representan una sesión de usuario — no se les aplica el chequeo.
+                if (principal.FindFirst("purpose") is not null) return;
+
+                var sub = principal.FindFirst("sub")?.Value
+                          ?? principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                if (string.IsNullOrEmpty(sub) || !Guid.TryParse(sub, out var uid))
+                    return;
+
+                var role = principal.FindFirst(System.Security.Claims.ClaimTypes.Role)?.Value;
+                var db = ctx.HttpContext.RequestServices.GetRequiredService<AgentFlowDbContext>();
+
+                var active = role == "super_admin"
+                    ? await db.SuperAdmins.AnyAsync(a => a.Id == uid && a.IsActive)
+                    : await db.AppUsers.AnyAsync(u => u.Id == uid && u.IsActive);
+
+                if (!active)
+                    ctx.Fail("Usuario inactivo.");
+            },
             OnAuthenticationFailed = ctx =>
             {
                 if (isDev) Console.WriteLine($"JWT AUTH FAILED: {ctx.Exception.GetType().Name}");
