@@ -12,6 +12,7 @@ import {
   type AdminTenantUser,
 } from '@/modules/admin/hooks/useAdminTenants'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
+import { confirmDialog } from '@/shared/components/dialog'
 
 const newUserSchema = z.object({
   fullName: z.string().min(1, 'El nombre es requerido'),
@@ -120,7 +121,13 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
     const consequence = user.isActive
       ? 'No podrá iniciar sesión y se cerrará su sesión activa en la próxima acción.'
       : 'Volverá a poder iniciar sesión.'
-    if (!window.confirm(`¿Seguro que quieres ${action} a ${user.fullName}?\n\n${consequence}`)) return
+    const ok = await confirmDialog({
+      title: `¿${action.charAt(0).toUpperCase() + action.slice(1)} a ${user.fullName}?`,
+      description: consequence,
+      variant: 'danger',
+      confirmLabel: user.isActive ? 'Inactivar' : 'Activar',
+    })
+    if (!ok) return
     setToggleError(null)
     setTogglingId(user.id)
     try {

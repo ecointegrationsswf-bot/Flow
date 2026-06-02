@@ -1,0 +1,15 @@
+#!/bin/sh
+# Pre-commit: bloquea el commit si hay alert/confirm/prompt nativos en el frontend.
+# La regla vive en frontend/eslint.config.mjs (no-alert). Se activa con:
+#   git config core.hooksPath .githooks   (lo hace el script "prepare" de frontend)
+if [ -d frontend ]; then
+  echo "[pre-commit] Verificando alert/confirm/prompt prohibidos (ESLint no-alert)..."
+  ( cd frontend && npm run -s lint ) || {
+    echo ""
+    echo "[pre-commit] ❌ Commit bloqueado: uso de alert/confirm/prompt nativo detectado."
+    echo "             Usá confirmDialog / alertDialog / promptDialog / toast de"
+    echo "             frontend/src/shared/components/dialog.tsx."
+    exit 1
+  }
+fi
+exit 0

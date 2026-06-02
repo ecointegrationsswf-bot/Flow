@@ -13,6 +13,7 @@ import {
 import { usePreviewEmailTemplate, useTestSendEmailTemplate, useParseEmailSample } from '@/shared/hooks/useCampaignTemplates'
 import { SUGGESTED_EMAIL_HTML, SUGGESTED_EMAIL_SUBJECT } from './suggestedEmailTemplate'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import { promptDialog } from '@/shared/components/dialog'
 
 type EditorMode = 'visual' | 'html'
 
@@ -860,15 +861,15 @@ function EditorToolbar({ editor }: { editor: Editor | null }) {
       {btn(editor.isActive('orderedList'), () => editor.chain().focus().toggleOrderedList().run(), ListOrdered, 'Lista numerada')}
       {btn(editor.isActive('blockquote'),  () => editor.chain().focus().toggleBlockquote().run(),  Quote,       'Cita')}
       <span className="mx-1 h-4 w-px bg-gray-300" />
-      {btn(editor.isActive('link'), () => {
+      {btn(editor.isActive('link'), async () => {
         const prev = editor.getAttributes('link').href as string | undefined
-        const url = window.prompt('URL del link', prev ?? 'https://')
+        const url = await promptDialog({ title: 'URL del link', defaultValue: prev ?? 'https://', inputType: 'url' })
         if (url === null) return
         if (url === '') editor.chain().focus().extendMarkRange('link').unsetLink().run()
         else            editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run()
       }, LinkIcon, 'Link')}
-      {btn(false, () => {
-        const url = window.prompt('URL de la imagen', 'https://')
+      {btn(false, async () => {
+        const url = await promptDialog({ title: 'URL de la imagen', defaultValue: 'https://', inputType: 'url' })
         if (url) editor.chain().focus().setImage({ src: url }).run()
       }, ImageIcon, 'Imagen')}
     </div>

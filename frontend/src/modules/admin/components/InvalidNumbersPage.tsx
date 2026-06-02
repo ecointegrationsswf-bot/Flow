@@ -4,6 +4,7 @@ import {
   useInvalidNumbers, useRestoreInvalidNumber, useAddInvalidNumber,
   type InvalidNumber,
 } from '@/modules/admin/hooks/useInvalidNumbers'
+import { confirmDialog } from '@/shared/components/dialog'
 
 const SOURCE_LABELS: Record<string, { label: string; className: string }> = {
   'ultramsg-precheck': { label: 'Pre-check UltraMsg', className: 'bg-purple-100 text-purple-700' },
@@ -35,8 +36,12 @@ export function InvalidNumbersPage() {
   const [newReason, setNewReason] = useState('')
   const [newIsGlobal, setNewIsGlobal] = useState(false)
 
-  const handleRestore = (item: InvalidNumber) => {
-    if (!confirm(`¿Restaurar ${item.phoneNumber}? Volverá a ser elegible para próximas campañas.`)) return
+  const handleRestore = async (item: InvalidNumber) => {
+    const ok = await confirmDialog({
+      title: `¿Restaurar ${item.phoneNumber}?`,
+      description: 'Volverá a ser elegible para próximas campañas.',
+    })
+    if (!ok) return
     restore.mutate(item.id)
   }
 

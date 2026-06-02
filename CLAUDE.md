@@ -379,6 +379,33 @@ Task<bool> ExistsAsync(Guid tenantId, string phone, CancellationToken ct)
 - Primary constructors C# 12 para inyección
 - EF configuraciones en IEntityTypeConfiguration<T> separadas
 - Nunca hardcodear API keys — usar variables de entorno / appsettings.Development.json
+- **🚫 Prohibido `alert` / `confirm` / `prompt` nativos en el frontend** — usar el
+  servicio de diálogos de `frontend/src/shared/components/dialog.tsx` (ver subsección abajo).
+
+### Diálogos en el frontend — NO usar alert/confirm/prompt nativos
+
+Los diálogos nativos del navegador (`window.alert`, `window.confirm`,
+`window.prompt` y las globales `alert` / `confirm` / `prompt`) están
+**terminantemente prohibidos**: rompen la estética del producto y filtran el
+dominio del sitio en el título (ej: *"...site4future.com dice"*).
+
+**Usar siempre** el servicio imperativo `frontend/src/shared/components/dialog.tsx`
+(requiere `<DialogHost />` montado — ya está en `App.tsx`):
+
+| En vez de | Usar |
+|---|---|
+| `window.confirm(msg)` | `await confirmDialog({ title, description, variant: 'danger' })` → `boolean` |
+| `window.alert(msg)` | `await alertDialog({ kind, title, description })` |
+| `window.prompt(msg)` | `await promptDialog({ title, defaultValue })` → `string \| null` (null = cancela) |
+| notificación efímera | `toast.success(msg)` / `toast.error(msg)` / `toast.info(msg)` |
+
+**Enforcement (no es opcional ni se puede saltar):**
+- ESLint `no-alert: error` en `frontend/eslint.config.mjs`, con `noInlineConfig`
+  → un `// eslint-disable-line no-alert` **NO** evade la regla.
+- Corre dentro de `npm run build` (`eslint --quiet && tsc && vite build`) → cualquier
+  uso prohibido **rompe el build y bloquea el deploy**.
+- Hook `.githooks/pre-commit` (activado por `core.hooksPath=.githooks`, que setea el
+  script `prepare` de `frontend` en cada `npm install`) → **rechaza el commit** local.
 
 ---
 

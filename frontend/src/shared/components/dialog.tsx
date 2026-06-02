@@ -3,12 +3,12 @@ import { AlertTriangle, CheckCircle, Info, X, XCircle } from 'lucide-react'
 import { MessageDialog, type MessageDialogKind } from './MessageDialog'
 
 // ── API imperativa ──────────────────────────────────────────────────────────
-// Reemplazo de window.confirm / window.alert por modales React.
-// Uso:
+// Reemplazo de window.confirm / window.alert / window.prompt por modales React.
+// 🚫 PROHIBIDO usar alert/confirm/prompt nativos (regla ESLint no-alert). Usar:
 //   if (await confirmDialog({ title: 'Eliminar?', description: '...' })) { ... }
 //   await alertDialog({ kind: 'error', title: 'Validación fallida', description: '...' })
-//   toast.error('Mensaje de error')
-//   toast.success('Listo')
+//   const url = await promptDialog({ title: 'URL del link', defaultValue: 'https://' })
+//   toast.error('Mensaje de error')  /  toast.success('Listo')
 
 export interface ConfirmOptions {
   title: string
@@ -28,19 +28,33 @@ export interface AlertOptions {
   closeLabel?: string
 }
 
+export interface PromptOptions {
+  title: string
+  description?: string
+  placeholder?: string
+  defaultValue?: string
+  confirmLabel?: string
+  cancelLabel?: string
+  inputType?: 'text' | 'url' | 'email' | 'number'
+}
+
 type ConfirmHandler = (opts: ConfirmOptions) => Promise<boolean>
 type AlertHandler = (opts: AlertOptions) => Promise<void>
+type PromptHandler = (opts: PromptOptions) => Promise<string | null>
 type ToastKind = 'info' | 'success' | 'error' | 'warning'
 type ToastHandler = (msg: string, kind?: ToastKind) => void
 
 let confirmHandler: ConfirmHandler | null = null
 let alertHandler: AlertHandler | null = null
+let promptHandler: PromptHandler | null = null
 let toastHandler: ToastHandler | null = null
 
 export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
   if (!confirmHandler) {
-    console.warn('DialogHost no está montado — fallback a window.confirm')
-    return Promise.resolve(window.confirm(`${opts.title}\n\n${opts.description ?? ''}`))
+    // Sin fallback nativo (window.confirm está prohibido). Si <DialogHost/> no
+    // está montado, devolvemos false y lo logueamos — nunca un diálogo nativo.
+    console.error('DialogHost no está montado — confirmDialog ignorado (devuelve false).')
+    return Promise.resolve(false)
   }
   return confirmHandler(opts)
 }
@@ -53,11 +67,23 @@ export function confirmDialog(opts: ConfirmOptions): Promise<boolean> {
  */
 export function alertDialog(opts: AlertOptions): Promise<void> {
   if (!alertHandler) {
-    console.warn('DialogHost no está montado — fallback a window.alert')
-    window.alert(`${opts.title}\n\n${opts.description ?? ''}`)
+    console.error('DialogHost no está montado — alertDialog ignorado.')
     return Promise.resolve()
   }
   return alertHandler(opts)
+}
+
+/**
+ * Modal imperativa de entrada de texto (reemplazo de window.prompt).
+ * Resuelve con el string ingresado, o `null` si el usuario cancela
+ * (misma semántica que window.prompt).
+ */
+export function promptDialog(opts: PromptOptions): Promise<string | null> {
+  if (!promptHandler) {
+    console.error('DialogHost no está montado — promptDialog ignorado (devuelve null).')
+    return Promise.resolve(null)
+  }
+  return promptHandler(opts)
 }
 
 export const toast = {
@@ -76,6 +102,10 @@ interface AlertState extends AlertOptions {
   resolve: () => void
 }
 
+interface PromptState extends PromptOptions {
+  resolve: (v: string | null) => void
+}
+
 interface ToastItem {
   id: number
   msg: string
@@ -85,6 +115,7 @@ interface ToastItem {
 export function DialogHost() {
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null)
   const [alertState, setAlertState] = useState<AlertState | null>(null)
+  const [promptState, setPromptState] = useState<PromptState | null>(null)
   const [toasts, setToasts] = useState<ToastItem[]>([])
 
   useEffect(() => {
@@ -93,6 +124,9 @@ export function DialogHost() {
 
     alertHandler = (opts) =>
       new Promise<void>((resolve) => setAlertState({ ...opts, resolve }))
+
+    promptHandler = (opts) =>
+      new Promise<string | null>((resolve) => setPromptState({ ...opts, resolve }))
 
     toastHandler = (msg, kind = 'info') => {
       const id = Date.now() + Math.random()
@@ -103,6 +137,7 @@ export function DialogHost() {
     return () => {
       confirmHandler = null
       alertHandler = null
+      promptHandler = null
       toastHandler = null
     }
   }, [])
@@ -115,6 +150,11 @@ export function DialogHost() {
   const closeAlert = () => {
     alertState?.resolve()
     setAlertState(null)
+  }
+
+  const closePrompt = (value: string | null) => {
+    promptState?.resolve(value)
+    setPromptState(null)
   }
 
   return (
@@ -139,7 +179,7 @@ export function DialogHost() {
                 <div className="flex-1">
                   <h3 className="text-base font-semibold text-gray-900">{confirmState.title}</h3>
                   {confirmState.description && (
-                    <p className="mt-1.5 text-sm text-gray-600">{confirmState.description}</p>
+                    <p className="mt-1.5 text-sm text-gray-600 whitespace-pre-wrap">{confirmState.description}</p>
                   )}
                 </div>
               </div>
@@ -166,6 +206,15 @@ export function DialogHost() {
         </div>
       )}
 
+      {/* Prompt modal (input) */}
+      {promptState && (
+        <PromptModal
+          state={promptState}
+          onCancel={() => closePrompt(null)}
+          onConfirm={(v) => closePrompt(v)}
+        />
+      )}
+
       {/* Alert / validation modal */}
       <MessageDialog
         open={!!alertState}
@@ -186,6 +235,66 @@ export function DialogHost() {
         </div>
       )}
     </>
+  )
+}
+
+function PromptModal({
+  state,
+  onCancel,
+  onConfirm,
+}: {
+  state: PromptState
+  onCancel: () => void
+  onConfirm: (value: string) => void
+}) {
+  const [value, setValue] = useState(state.defaultValue ?? '')
+
+  return (
+    <div
+      className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/50 p-4"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-md rounded-xl bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <form
+          className="p-6"
+          onSubmit={(e) => {
+            e.preventDefault()
+            onConfirm(value)
+          }}
+        >
+          <h3 className="text-base font-semibold text-gray-900">{state.title}</h3>
+          {state.description && (
+            <p className="mt-1.5 text-sm text-gray-600 whitespace-pre-wrap">{state.description}</p>
+          )}
+          <input
+            autoFocus
+            type={state.inputType ?? 'text'}
+            value={value}
+            placeholder={state.placeholder}
+            onChange={(e) => setValue(e.target.value)}
+            className="mt-4 block w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+          <div className="mt-6 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+            >
+              {state.cancelLabel ?? 'Cancelar'}
+            </button>
+            <button
+              type="submit"
+              className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+            >
+              {state.confirmLabel ?? 'Aceptar'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   )
 }
 
