@@ -16,6 +16,12 @@ public class WhatsAppLineConfiguration : IEntityTypeConfiguration<WhatsAppLine>
         b.Property(l => l.Provider).HasConversion<string>().HasMaxLength(50);
         b.Property(l => l.LastStatus).HasMaxLength(40);
 
+        // Credenciales Meta (nullable — solo líneas MetaCloudApi).
+        b.Property(l => l.MetaWabaId).HasMaxLength(100);
+        b.Property(l => l.MetaAccessToken); // nvarchar(max) — el token de Graph API es largo
+        b.Property(l => l.MetaAppSecret).HasMaxLength(200);
+        b.Property(l => l.MetaBusinessId).HasMaxLength(100);
+
         b.HasOne(l => l.Tenant)
             .WithMany(t => t.WhatsAppLines)
             .HasForeignKey(l => l.TenantId)

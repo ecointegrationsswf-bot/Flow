@@ -492,6 +492,17 @@ var app = builder.Build();
             BEGIN
                 ALTER TABLE ActionDelinquencyConfigs ADD AutoLaunchCampaigns bit NOT NULL DEFAULT 1;
             END");
+        // Credenciales Meta WhatsApp Cloud API por línea (aditivo, nullable). Las
+        // líneas UltraMsg las dejan en NULL. phone_number_id se reutiliza en InstanceId.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('WhatsAppLines') AND name = 'MetaWabaId')
+                ALTER TABLE WhatsAppLines ADD MetaWabaId nvarchar(100) NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('WhatsAppLines') AND name = 'MetaAccessToken')
+                ALTER TABLE WhatsAppLines ADD MetaAccessToken nvarchar(max) NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('WhatsAppLines') AND name = 'MetaAppSecret')
+                ALTER TABLE WhatsAppLines ADD MetaAppSecret nvarchar(200) NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('WhatsAppLines') AND name = 'MetaBusinessId')
+                ALTER TABLE WhatsAppLines ADD MetaBusinessId nvarchar(100) NULL;");
         // TenantActionContracts: contrato webhook por (accion, tenant). Tabla creada
         // via guard (no migracion EF por el drift). Las columnas matchean las
         // convenciones EF para que el DbSet mapee sin migracion.

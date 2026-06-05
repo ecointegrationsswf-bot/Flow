@@ -1,4 +1,7 @@
+using AgentFlow.Domain.Entities;
+using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Channels.MetaCloudApi;
 using AgentFlow.Infrastructure.Channels.UltraMsg;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -31,7 +34,7 @@ public class ChannelProviderFactory(AgentFlowDbContext db) : IChannelProviderFac
         if (line is null)
             return null;   // tenant no tiene línea WhatsApp configurada
 
-        return BuildProvider(line.InstanceId, line.ApiToken);
+        return BuildProvider(line);
     }
 
     public async Task<IChannelProvider?> GetProviderByLineAsync(Guid lineId, CancellationToken ct = default)
@@ -42,27 +45,36 @@ public class ChannelProviderFactory(AgentFlowDbContext db) : IChannelProviderFac
         if (line is null)
             return null;
 
-        return BuildProvider(line.InstanceId, line.ApiToken);
+        return BuildProvider(line);
     }
 
     /// <summary>
-    /// Construye un UltraMsgProvider con las credenciales de la línea.
-    /// Crea un HttpClient nuevo — para envíos puntuales esto es suficiente.
+    /// Construye el IChannelProvider correcto según line.Provider.
+    /// Aditivo: UltraMsg sigue siendo el default; MetaCloudApi usa las credenciales
+    /// Meta de la línea (InstanceId = phone_number_id). Crea un HttpClient nuevo —
+    /// para envíos puntuales esto es suficiente. Timeout duro de 15s (el default de
+    /// HttpClient es 100s; si el proveedor se cuelga, el flujo del agente esperaría
+    /// 100s y dispararía el debouncer/dispatcher como fallido).
     /// </summary>
-    private static UltraMsgProvider BuildProvider(string instanceId, string apiToken)
+    private static IChannelProvider BuildProvider(WhatsAppLine line)
     {
-        // Normalizar: UltraMsg espera "instance{numero}" en la URL
-        var normalizedId = instanceId.Trim();
+        var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+
+        if (line.Provider == ProviderType.MetaCloudApi)
+        {
+            // En Meta, InstanceId guarda el phone_number_id.
+            var metaOptions = new MetaCloudApiOptions(
+                PhoneNumberId: line.InstanceId.Trim(),
+                AccessToken: line.MetaAccessToken ?? string.Empty,
+                AppSecret: line.MetaAppSecret);
+            return new MetaCloudApiProvider(httpClient, metaOptions);
+        }
+
+        // UltraMsg (default): espera "instance{numero}" en la URL.
+        var normalizedId = line.InstanceId.Trim();
         if (!normalizedId.StartsWith("instance", StringComparison.OrdinalIgnoreCase))
             normalizedId = $"instance{normalizedId}";
 
-        // Timeout duro de 15s — el default de HttpClient es 100s y eso es
-        // demasiado: si UltraMsg se cuelga, el flujo del agente espera 100s y
-        // dispara el debouncer/dispatcher como fallido. 15s es generoso para
-        // un POST de texto sin media (típicamente < 1s).
-        var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
-        var options = new UltraMsgOptions(normalizedId, apiToken);
-
-        return new UltraMsgProvider(httpClient, options);
+        return new UltraMsgProvider(httpClient, new UltraMsgOptions(normalizedId, line.ApiToken));
     }
 }

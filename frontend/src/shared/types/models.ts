@@ -219,6 +219,13 @@ export interface WhatsAppLine {
   phoneNumber: string
   instanceId: string
   provider: ProviderType
+  // Campos Meta (solo provider === 'MetaCloudApi'). Los secretos no se devuelven
+  // en claro: solo flags de si están configurados.
+  metaWabaId?: string | null
+  metaBusinessId?: string | null
+  // Pista enmascarada (últimos 4 chars) si el secreto está guardado; null si no.
+  metaAccessTokenLast4?: string | null
+  metaAppSecretLast4?: string | null
   isActive: boolean
   createdAt: string
   updatedAt?: string

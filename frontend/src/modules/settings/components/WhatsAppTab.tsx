@@ -16,19 +16,39 @@ import {
 import type { WhatsAppLine } from '@/shared/types'
 
 // ── Schemas ───────────────────────────────────────
+// instanceId = ID de instancia UltraMsg, o phone_number_id en Meta.
 const createSchema = z.object({
+  provider: z.enum(['UltraMsg', 'MetaCloudApi']).default('UltraMsg'),
   displayName: z.string().min(2, 'Nombre requerido'),
   phoneNumber: z.string().optional().default(''),
-  instanceId: z.string().min(3, 'Instance ID requerido'),
-  apiToken: z.string().min(3, 'Token requerido'),
+  instanceId: z.string().min(3, 'Requerido'),
+  apiToken: z.string().optional().default(''),
+  metaWabaId: z.string().optional().default(''),
+  metaAccessToken: z.string().optional().default(''),
+  metaAppSecret: z.string().optional().default(''),
+  metaBusinessId: z.string().optional().default(''),
+}).superRefine((d, ctx) => {
+  if (d.provider === 'UltraMsg') {
+    if (!d.apiToken || d.apiToken.length < 3)
+      ctx.addIssue({ path: ['apiToken'], code: z.ZodIssueCode.custom, message: 'Token requerido' })
+  } else {
+    if (!d.metaWabaId) ctx.addIssue({ path: ['metaWabaId'], code: z.ZodIssueCode.custom, message: 'WABA ID requerido' })
+    if (!d.metaAccessToken) ctx.addIssue({ path: ['metaAccessToken'], code: z.ZodIssueCode.custom, message: 'Access Token requerido' })
+  }
 })
 type CreateForm = z.infer<typeof createSchema>
 
+// En edición los secretos vacíos = conservar el actual (no se re-exigen).
 const editSchema = z.object({
+  provider: z.enum(['UltraMsg', 'MetaCloudApi']).default('UltraMsg'),
   displayName: z.string().min(2, 'Nombre requerido'),
   phoneNumber: z.string().optional().default(''),
-  instanceId: z.string().min(3, 'Instance ID requerido'),
+  instanceId: z.string().min(3, 'Requerido'),
   apiToken: z.string().optional().default(''),
+  metaWabaId: z.string().optional().default(''),
+  metaAccessToken: z.string().optional().default(''),
+  metaAppSecret: z.string().optional().default(''),
+  metaBusinessId: z.string().optional().default(''),
   isActive: z.boolean(),
 })
 type EditForm = z.infer<typeof editSchema>
@@ -61,14 +81,19 @@ function LineCard({
   onShowQr: (lineId: string) => void
   onTestMessage: (lineId: string) => void
 }) {
-  const { data: statusData, isError } = useLineStatus(line.id)
+  // Meta Cloud API no usa instancia/QR/estado de UltraMsg: se desactiva el polling
+  // y se ocultan las acciones específicas de UltraMsg (el provider Meta es Fase B).
+  const isMeta = line.provider === 'MetaCloudApi'
+  const { data: statusData, isError } = useLineStatus(line.id, !isMeta)
   const restartMutation = useRestartLine()
   const logoutMutation = useLogoutLine()
 
   const currentStatus = statusData?.status ?? 'loading'
-  const sem = getSemaphore(isError ? 'disconnected' : currentStatus)
-  const isConnected = currentStatus === 'authenticated'
-  const needsQr = !isConnected || isError
+  const sem = isMeta
+    ? { color: 'bg-blue-500', pulse: false, label: 'Meta Cloud API' }
+    : getSemaphore(isError ? 'disconnected' : currentStatus)
+  const isConnected = !isMeta && currentStatus === 'authenticated'
+  const needsQr = !isMeta && (!isConnected || isError)
 
   const [showRestart, setShowRestart] = useState(false)
   const [showLogout, setShowLogout] = useState(false)
@@ -96,7 +121,7 @@ function LineCard({
                 {statusData?.phone || line.phoneNumber}
               </span>
             )}
-            <span className="text-gray-400">Instancia: {line.instanceId}</span>
+            <span className="text-gray-400">{isMeta ? 'Phone ID' : 'Instancia'}: {line.instanceId}</span>
             <span className={isConnected ? 'text-green-600 font-medium' : isError ? 'text-red-500' : 'text-gray-400'}>
               {sem.label}
             </span>
@@ -115,14 +140,26 @@ function LineCard({
             Vincular
           </button>
         )}
-        <button
-          onClick={() => setShowRestart(true)}
-          disabled={restartMutation.isPending}
-          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-50 transition-colors"
-          title="Reiniciar"
-        >
-          <RefreshCw className={`h-4 w-4 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
-        </button>
+        {!isMeta && (
+          <button
+            onClick={() => setShowRestart(true)}
+            disabled={restartMutation.isPending}
+            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 disabled:opacity-50 transition-colors"
+            title="Reiniciar"
+          >
+            <RefreshCw className={`h-4 w-4 ${restartMutation.isPending ? 'animate-spin' : ''}`} />
+          </button>
+        )}
+        {isMeta && (
+          <button
+            onClick={() => onTestMessage(line.id)}
+            className="flex items-center gap-1 rounded-lg bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-green-700 transition-colors"
+            title="Enviar mensaje de prueba por Meta"
+          >
+            <Send className="h-3.5 w-3.5" />
+            Probar
+          </button>
+        )}
         {isConnected && (
           <>
             <button
@@ -324,17 +361,34 @@ export function WhatsAppTab() {
   // Create form
   const createForm = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
-    defaultValues: { displayName: '', phoneNumber: '', instanceId: '', apiToken: '' },
+    defaultValues: {
+      provider: 'UltraMsg', displayName: '', phoneNumber: '', instanceId: '', apiToken: '',
+      metaWabaId: '', metaAccessToken: '', metaAppSecret: '', metaBusinessId: '',
+    },
   })
+  const createProvider = createForm.watch('provider')
 
   // Edit form
   const editForm = useForm<EditForm>({
     resolver: zodResolver(editSchema),
   })
 
+  const isMetaP = (p: string) => p === 'MetaCloudApi'
+
   const onCreateSubmit = async (data: CreateForm) => {
+    const meta = isMetaP(data.provider)
     try {
-      await createMutation.mutateAsync(data)
+      await createMutation.mutateAsync({
+        provider: data.provider,
+        displayName: data.displayName,
+        phoneNumber: data.phoneNumber ?? '',
+        instanceId: data.instanceId,
+        apiToken: meta ? undefined : data.apiToken,
+        metaWabaId: meta ? data.metaWabaId : undefined,
+        metaAccessToken: meta ? data.metaAccessToken : undefined,
+        metaAppSecret: meta ? (data.metaAppSecret || undefined) : undefined,
+        metaBusinessId: meta ? (data.metaBusinessId || undefined) : undefined,
+      })
       createForm.reset()
       setShowForm(false)
     } catch (err: unknown) {
@@ -347,23 +401,34 @@ export function WhatsAppTab() {
     setEditLine(line)
     setShowForm(false)
     editForm.reset({
+      provider: line.provider,
       displayName: line.displayName,
       phoneNumber: line.phoneNumber,
       instanceId: line.instanceId,
       apiToken: '',
+      metaWabaId: line.metaWabaId ?? '',
+      metaAccessToken: '',
+      metaAppSecret: '',
+      metaBusinessId: line.metaBusinessId ?? '',
       isActive: line.isActive,
     })
   }
 
   const onEditSubmit = async (data: EditForm) => {
     if (!editLine) return
+    const meta = isMetaP(data.provider)
     try {
       await updateMutation.mutateAsync({
         id: editLine.id,
+        provider: data.provider,
         displayName: data.displayName,
         phoneNumber: data.phoneNumber ?? '',
         instanceId: data.instanceId,
-        apiToken: data.apiToken || undefined,
+        apiToken: meta ? undefined : (data.apiToken || undefined),
+        metaWabaId: meta ? (data.metaWabaId || undefined) : undefined,
+        metaAccessToken: meta ? (data.metaAccessToken || undefined) : undefined,
+        metaAppSecret: meta ? (data.metaAppSecret || undefined) : undefined,
+        metaBusinessId: meta ? (data.metaBusinessId || undefined) : undefined,
         isActive: data.isActive,
       })
       setEditLine(null)
@@ -371,6 +436,8 @@ export function WhatsAppTab() {
       editForm.setError('displayName', { message: 'Error al actualizar' })
     }
   }
+
+  const editProvider = editForm.watch('provider')
 
   const handleDelete = async () => {
     if (!deleteTarget) return
@@ -415,6 +482,16 @@ export function WhatsAppTab() {
           className="rounded-lg border border-green-200 bg-green-50 p-4"
         >
           <h4 className="mb-3 text-sm font-medium text-gray-900">Nueva linea de WhatsApp</h4>
+          <div className="mb-3">
+            <label className="block text-xs font-medium text-gray-600 mb-1">Proveedor</label>
+            <select
+              {...createForm.register('provider')}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="UltraMsg">UltraMsg (vinculación por QR)</option>
+              <option value="MetaCloudApi">Meta WhatsApp Cloud API (oficial)</option>
+            </select>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <input
@@ -435,7 +512,7 @@ export function WhatsAppTab() {
             </div>
             <div>
               <input
-                placeholder="ID de Instancia (solo el número, ej: 140984)"
+                placeholder={createProvider === 'MetaCloudApi' ? 'Phone Number ID (ej: 1182595384934695)' : 'ID de Instancia (solo el número, ej: 140984)'}
                 {...createForm.register('instanceId')}
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
               />
@@ -443,17 +520,58 @@ export function WhatsAppTab() {
                 <p className="mt-1 text-xs text-red-600">{createForm.formState.errors.instanceId.message}</p>
               )}
             </div>
-            <div>
-              <input
-                placeholder="Token de UltraMsg"
-                type="password"
-                {...createForm.register('apiToken')}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-              />
-              {createForm.formState.errors.apiToken && (
-                <p className="mt-1 text-xs text-red-600">{createForm.formState.errors.apiToken.message}</p>
-              )}
-            </div>
+            {createProvider === 'MetaCloudApi' ? (
+              <>
+                <div>
+                  <input
+                    placeholder="WABA ID"
+                    {...createForm.register('metaWabaId')}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  {createForm.formState.errors.metaWabaId && (
+                    <p className="mt-1 text-xs text-red-600">{createForm.formState.errors.metaWabaId.message}</p>
+                  )}
+                </div>
+                <div>
+                  <input
+                    placeholder="Access Token (Bearer)"
+                    type="password"
+                    {...createForm.register('metaAccessToken')}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  {createForm.formState.errors.metaAccessToken && (
+                    <p className="mt-1 text-xs text-red-600">{createForm.formState.errors.metaAccessToken.message}</p>
+                  )}
+                </div>
+                <div>
+                  <input
+                    placeholder="App Secret (para firma del webhook)"
+                    type="password"
+                    {...createForm.register('metaAppSecret')}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <input
+                    placeholder="Business ID (opcional)"
+                    {...createForm.register('metaBusinessId')}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+              </>
+            ) : (
+              <div>
+                <input
+                  placeholder="Token de UltraMsg"
+                  type="password"
+                  {...createForm.register('apiToken')}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+                {createForm.formState.errors.apiToken && (
+                  <p className="mt-1 text-xs text-red-600">{createForm.formState.errors.apiToken.message}</p>
+                )}
+              </div>
+            )}
           </div>
           <div className="mt-3 flex items-center gap-2">
             <button
@@ -482,6 +600,16 @@ export function WhatsAppTab() {
           className="rounded-lg border border-amber-200 bg-amber-50 p-4"
         >
           <h4 className="mb-3 text-sm font-medium text-gray-900">Editar: {editLine.displayName}</h4>
+          <div className="mb-3">
+            <label className="block text-xs font-medium text-gray-600 mb-1">Proveedor</label>
+            <select
+              {...editForm.register('provider')}
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+            >
+              <option value="UltraMsg">UltraMsg (vinculación por QR)</option>
+              <option value="MetaCloudApi">Meta WhatsApp Cloud API (oficial)</option>
+            </select>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <input
@@ -499,7 +627,7 @@ export function WhatsAppTab() {
               className="rounded-md border border-gray-300 px-3 py-2 text-sm"
             />
             <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Instance ID</label>
+              <label className="block text-xs font-medium text-gray-500 mb-1">{editProvider === 'MetaCloudApi' ? 'Phone Number ID' : 'Instance ID'}</label>
               <input
                 {...editForm.register('instanceId')}
                 className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
@@ -508,15 +636,62 @@ export function WhatsAppTab() {
                 <p className="mt-1 text-xs text-red-600">{editForm.formState.errors.instanceId.message}</p>
               )}
             </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 mb-1">Token</label>
-              <input
-                type="password"
-                placeholder="Dejar vacio para no cambiar"
-                {...editForm.register('apiToken')}
-                className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
-              />
-            </div>
+            {editProvider === 'MetaCloudApi' ? (
+              <>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">WABA ID</label>
+                  <input
+                    {...editForm.register('metaWabaId')}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Access Token</label>
+                  <input
+                    type="password"
+                    placeholder={editLine.metaAccessTokenLast4 ? '•••• ' + editLine.metaAccessTokenLast4 + ' — dejar vacío para no cambiar' : 'Pegar Access Token'}
+                    {...editForm.register('metaAccessToken')}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  {editLine.metaAccessTokenLast4 ? (
+                    <p className="mt-1 text-xs text-green-600">✓ Configurado (termina en {editLine.metaAccessTokenLast4})</p>
+                  ) : (
+                    <p className="mt-1 text-xs text-gray-400">No configurado</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">App Secret</label>
+                  <input
+                    type="password"
+                    placeholder={editLine.metaAppSecretLast4 ? '•••• ' + editLine.metaAppSecretLast4 + ' — dejar vacío para no cambiar' : 'Pegar App Secret'}
+                    {...editForm.register('metaAppSecret')}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                  {editLine.metaAppSecretLast4 ? (
+                    <p className="mt-1 text-xs text-green-600">✓ Configurado (termina en {editLine.metaAppSecretLast4})</p>
+                  ) : (
+                    <p className="mt-1 text-xs text-gray-400">No configurado</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">Business ID</label>
+                  <input
+                    {...editForm.register('metaBusinessId')}
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                  />
+                </div>
+              </>
+            ) : (
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">Token</label>
+                <input
+                  type="password"
+                  placeholder="Dejar vacio para no cambiar"
+                  {...editForm.register('apiToken')}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm"
+                />
+              </div>
+            )}
           </div>
           <div className="mt-3 flex items-center gap-3">
             <label className="flex items-center gap-2 text-sm text-gray-700">

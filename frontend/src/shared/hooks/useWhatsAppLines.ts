@@ -14,11 +14,19 @@ export function useWhatsAppLines() {
   })
 }
 
-interface CreateLinePayload {
+interface MetaCredentials {
+  provider?: 'UltraMsg' | 'MetaCloudApi'
+  metaWabaId?: string
+  metaAccessToken?: string
+  metaAppSecret?: string
+  metaBusinessId?: string
+}
+
+interface CreateLinePayload extends MetaCredentials {
   displayName: string
   phoneNumber: string
   instanceId: string
-  apiToken: string
+  apiToken?: string
 }
 
 export function useCreateWhatsAppLine() {
@@ -32,7 +40,7 @@ export function useCreateWhatsAppLine() {
   })
 }
 
-interface UpdateLinePayload {
+interface UpdateLinePayload extends MetaCredentials {
   id: string
   displayName: string
   phoneNumber: string
