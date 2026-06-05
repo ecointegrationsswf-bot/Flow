@@ -857,14 +857,62 @@ public class WebhookController(
                             if (!string.IsNullOrEmpty(wamid) && await db.Messages.AnyAsync(x => x.ExternalMessageId == wamid, ct))
                                 continue;
 
-                            var text = ExtractMetaMessageText(m, mtype);
+                            string text;
+                            string? mediaUrl = null;
+                            string? mediaType = null;
+
+                            if (mtype is "image" or "document" or "audio" or "voice")
+                            {
+                                // Meta entrega un media_id (no URL). Hay que pedir la URL al
+                                // Graph API y descargar los bytes, ambos con Bearer del token de la línea.
+                                var mediaObj = m.TryGetProperty(mtype, out var mo) && mo.ValueKind == JsonValueKind.Object ? mo : default;
+                                var mediaId = mediaObj.ValueKind == JsonValueKind.Object && mediaObj.TryGetProperty("id", out var mid) ? mid.GetString() : null;
+                                var caption = mediaObj.ValueKind == JsonValueKind.Object && mediaObj.TryGetProperty("caption", out var cap) ? cap.GetString() : null;
+
+                                byte[]? bytes = null; string? mime = null;
+                                if (!string.IsNullOrEmpty(mediaId) && !string.IsNullOrEmpty(line.MetaAccessToken))
+                                {
+                                    var fetched = await FetchMetaMediaAsync(mediaId, line.MetaAccessToken!, ct);
+                                    if (fetched is not null) { bytes = fetched.Value.Bytes; mime = fetched.Value.Mime; }
+                                }
+
+                                if (mtype is "audio" or "voice")
+                                {
+                                    // Transcribir con Whisper (igual que UltraMsg). Fallback si no se pudo.
+                                    var trans = bytes is not null
+                                        ? await transcriptionService.TranscribeAsync(bytes, $"{wamid ?? Guid.NewGuid().ToString()}.ogg", ct)
+                                        : null;
+                                    text = !string.IsNullOrWhiteSpace(trans)
+                                        ? trans!
+                                        : "🎤 [Nota de voz recibida] No pude procesar el audio. ¿Puedes escribir tu mensaje?";
+                                }
+                                else // image / document
+                                {
+                                    mediaType = mtype == "document" ? "document" : "image";
+                                    if (bytes is not null)
+                                    {
+                                        try
+                                        {
+                                            var ext = mtype == "document" ? DetectDocExtension(mime, caption, null) : DetectImageExtension(mime);
+                                            var ctype = mime ?? (mtype == "document" ? "application/octet-stream" : "image/jpeg");
+                                            var blobName = $"conversations/{line.TenantId.Value}/{DateTime.UtcNow:yyyyMMdd}/{wamid ?? Guid.NewGuid().ToString()}.{ext}";
+                                            mediaUrl = await blobStorage.UploadWhatsAppMediaAsync(blobName, bytes, ctype, ct);
+                                        }
+                                        catch (Exception azEx) { Console.WriteLine($"[Meta][Azure] No se pudo subir media: {azEx.Message}"); }
+                                    }
+                                    text = !string.IsNullOrWhiteSpace(caption) ? caption! : (mtype == "document" ? "📄 [Documento]" : "📷 [Imagen]");
+                                }
+                            }
+                            else
+                            {
+                                text = ExtractMetaMessageText(m, mtype);
+                            }
+
                             if (string.IsNullOrWhiteSpace(text)) continue;
 
-                            // NOTA: la descarga de media de Meta (id → URL con Bearer) es un
-                            // refinamiento posterior; por ahora se pasa el caption/placeholder.
                             await DispatchAsync(
                                 line.TenantId.Value, fromPhone, text, ChannelType.WhatsApp,
-                                clientName, wamid, null, null, ct, whatsAppLineId: line.Id);
+                                clientName, wamid, mediaUrl, mediaType, ct, whatsAppLineId: line.Id);
                             processed++;
                         }
                     }
@@ -908,6 +956,42 @@ public class WebhookController(
                 return "🎤 [Nota de voz recibida] ¿Puedes escribir tu mensaje?";
             default:
                 return $"[{mtype}]";
+        }
+    }
+
+    /// <summary>
+    /// Descarga un archivo de media de Meta: GET /{media-id} (con Bearer) devuelve
+    /// la URL temporal, luego GET de esa URL (también con Bearer) devuelve los bytes.
+    /// Devuelve null si algo falla (no rompe el webhook).
+    /// </summary>
+    private async Task<(byte[] Bytes, string? Mime)?> FetchMetaMediaAsync(string mediaId, string accessToken, CancellationToken ct)
+    {
+        try
+        {
+            var http = httpClientFactory.CreateClient();
+            http.Timeout = TimeSpan.FromSeconds(30);
+
+            using var metaReq = new HttpRequestMessage(HttpMethod.Get, $"https://graph.facebook.com/v21.0/{mediaId}");
+            metaReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+            var metaResp = await http.SendAsync(metaReq, ct);
+            if (!metaResp.IsSuccessStatusCode) return null;
+
+            using var doc = JsonDocument.Parse(await metaResp.Content.ReadAsStringAsync(ct));
+            var url = doc.RootElement.TryGetProperty("url", out var u) ? u.GetString() : null;
+            var mime = doc.RootElement.TryGetProperty("mime_type", out var mm) ? mm.GetString() : null;
+            if (string.IsNullOrEmpty(url)) return null;
+
+            using var fileReq = new HttpRequestMessage(HttpMethod.Get, url);
+            fileReq.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", accessToken);
+            var fileResp = await http.SendAsync(fileReq, ct);
+            if (!fileResp.IsSuccessStatusCode) return null;
+
+            return (await fileResp.Content.ReadAsByteArrayAsync(ct), mime);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[Meta][Media] No se pudo descargar media {mediaId}: {ex.Message}");
+            return null;
         }
     }
 
