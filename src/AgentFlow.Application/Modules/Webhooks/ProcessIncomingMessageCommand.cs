@@ -267,7 +267,13 @@ public class ProcessIncomingMessageHandler(
         // al comportamiento previo.
         try
         {
-            var provider = await channelFactory.GetProviderAsync(cmd.TenantId, ct);
+            // Ruteo por línea: responder por la MISMA línea que recibió el mensaje
+            // (Meta→Meta, UltraMsg→UltraMsg). Fallback al default del tenant si no
+            // hay línea o no se pudo resolver. Para tenants de una sola línea es idéntico.
+            var provider = cmd.WhatsAppLineId.HasValue
+                ? (await channelFactory.GetProviderByLineAsync(cmd.WhatsAppLineId.Value, ct)
+                   ?? await channelFactory.GetProviderAsync(cmd.TenantId, ct))
+                : await channelFactory.GetProviderAsync(cmd.TenantId, ct);
             if (provider is not null)
             {
                 var bubbles = SplitIntoBubbles(decision.MessageToClient!);
@@ -1185,7 +1191,12 @@ public class ProcessIncomingMessageHandler(
                     // (lo usa el prompt de AFTA). Sin '~' es un único mensaje, igual que antes.
                     try
                     {
-                        var provider = await channelFactory.GetProviderAsync(cmd.TenantId, ct);
+                        // Ruteo por línea: la respuesta sale por la línea que recibió el
+                        // mensaje (multi-proveedor). Fallback al default del tenant.
+                        var provider = cmd.WhatsAppLineId.HasValue
+                            ? (await channelFactory.GetProviderByLineAsync(cmd.WhatsAppLineId.Value, ct)
+                               ?? await channelFactory.GetProviderAsync(cmd.TenantId, ct))
+                            : await channelFactory.GetProviderAsync(cmd.TenantId, ct);
                         if (provider is not null)
                         {
                             var bubbles = SplitIntoBubbles(replyText);
