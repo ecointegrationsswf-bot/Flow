@@ -729,6 +729,202 @@ public class WebhookController(
     }
 
     /// <summary>
+    /// Verificación GET del webhook único de Meta (mismo URL que el POST de eventos).
+    /// Meta hace GET con hub.challenge al registrar el callback. Callback URL a
+    /// configurar en Meta: /api/webhooks/meta
+    /// </summary>
+    [HttpGet("meta")]
+    public IActionResult MetaVerifyRoot(
+        [FromQuery(Name = "hub.mode")] string? mode,
+        [FromQuery(Name = "hub.challenge")] string? challenge,
+        [FromQuery(Name = "hub.verify_token")] string? verifyToken,
+        [FromServices] IConfiguration config)
+    {
+        var expected = config["Meta:VerifyToken"];
+        if (mode == "subscribe" && !string.IsNullOrEmpty(challenge) && verifyToken == expected
+            && int.TryParse(challenge, out var c))
+            return Ok(c);
+        return Forbid();
+    }
+
+    /// <summary>
+    /// Webhook ÚNICO multi-tenant de Meta Cloud API (POST de eventos).
+    /// Análogo al de UltraMsg pero resolviendo el tenant por value.metadata.phone_number_id
+    /// (= WhatsAppLine.InstanceId de una línea MetaCloudApi). Reusa el mismo DispatchAsync.
+    ///
+    /// Seguridad: valida la firma X-Hub-Signature-256 = HMAC-SHA256(rawBody, app_secret).
+    /// El app_secret se toma de la línea (MetaAppSecret) o, si no, de config Meta:AppSecret.
+    /// Si NO hay app_secret configurado, se procesa con warning (permite operar antes de
+    /// endurecer; recomendado configurarlo para producción).
+    ///
+    /// Siempre responde 200 — Meta reintenta agresivamente ante cualquier no-2xx.
+    /// </summary>
+    [HttpPost("meta")]
+    public async Task<IActionResult> MetaWebhook([FromServices] IConfiguration config, CancellationToken ct)
+    {
+        string body;
+        using (var reader = new StreamReader(Request.Body))
+            body = await reader.ReadToEndAsync(ct);
+
+        var signature = Request.Headers["X-Hub-Signature-256"].ToString();
+
+        var log = new AgentFlow.Domain.Entities.WebhookLog
+        {
+            Provider = "meta",
+            RawPayload = body?.Length > 4000 ? body[..4000] : body,
+            ReceivedAt = DateTime.UtcNow,
+            Status = "received",
+        };
+
+        if (string.IsNullOrWhiteSpace(body))
+        {
+            log.Status = "ignored"; log.StatusReason = "empty body";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+            return Ok();
+        }
+
+        JsonDocument doc;
+        try { doc = JsonDocument.Parse(body); }
+        catch (Exception ex)
+        {
+            log.Status = "error"; log.StatusReason = $"invalid json: {ex.Message}";
+            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+            return Ok(); // 200 para que Meta no reintente un payload corrupto
+        }
+
+        var processed = 0; var statusCount = 0; string? reason = null;
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("entry", out var entries) || entries.ValueKind != JsonValueKind.Array)
+            {
+                log.Status = "ignored"; log.StatusReason = "no entry";
+                db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+                return Ok();
+            }
+
+            foreach (var entry in entries.EnumerateArray())
+            {
+                if (!entry.TryGetProperty("changes", out var changes) || changes.ValueKind != JsonValueKind.Array) continue;
+                foreach (var change in changes.EnumerateArray())
+                {
+                    if (!change.TryGetProperty("value", out var value)) continue;
+
+                    var phoneNumberId = value.TryGetProperty("metadata", out var meta)
+                        && meta.TryGetProperty("phone_number_id", out var pid) ? pid.GetString() : null;
+                    if (string.IsNullOrEmpty(phoneNumberId)) continue;
+
+                    // Resolver línea Meta por phone_number_id (índice/único de instancia).
+                    var line = await db.WhatsAppLines
+                        .Include(l => l.Tenant)
+                        .Where(l => l.TenantId != null && l.IsActive
+                                 && l.Provider == AgentFlow.Domain.Enums.ProviderType.MetaCloudApi
+                                 && l.InstanceId == phoneNumberId)
+                        .FirstOrDefaultAsync(ct);
+
+                    if (line?.TenantId is null) { reason = $"unknown phone_number_id {phoneNumberId}"; continue; }
+                    log.TenantId = line.TenantId; log.InstanceId = phoneNumberId;
+
+                    // Validación de firma: secreto de la línea o global. Sin secreto → warning.
+                    var appSecret = !string.IsNullOrEmpty(line.MetaAppSecret) ? line.MetaAppSecret : config["Meta:AppSecret"];
+                    if (!string.IsNullOrEmpty(appSecret))
+                    {
+                        if (!ValidateMetaSignature(body, signature, appSecret))
+                        {
+                            log.Status = "ignored"; log.StatusReason = "firma HMAC inválida";
+                            db.WebhookLogs.Add(log); await db.SaveChangesAsync(ct);
+                            return Ok(); // 200: no reprocesar; pero no actuamos sobre el payload
+                        }
+                    }
+
+                    string? clientName = null;
+                    if (value.TryGetProperty("contacts", out var contacts) && contacts.ValueKind == JsonValueKind.Array && contacts.GetArrayLength() > 0
+                        && contacts[0].TryGetProperty("profile", out var prof) && prof.TryGetProperty("name", out var nm))
+                        clientName = nm.GetString();
+
+                    // Mensajes entrantes
+                    if (value.TryGetProperty("messages", out var messages) && messages.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var m in messages.EnumerateArray())
+                        {
+                            var wamid = m.TryGetProperty("id", out var midp) ? midp.GetString() : null;
+                            var from = m.TryGetProperty("from", out var fp) ? fp.GetString() : null;
+                            var mtype = m.TryGetProperty("type", out var tp) ? tp.GetString() ?? "text" : "text";
+                            if (string.IsNullOrEmpty(from)) continue;
+                            var fromPhone = from.StartsWith('+') ? from : $"+{from}";
+
+                            // Idempotencia por wamid
+                            if (!string.IsNullOrEmpty(wamid) && await db.Messages.AnyAsync(x => x.ExternalMessageId == wamid, ct))
+                                continue;
+
+                            var text = ExtractMetaMessageText(m, mtype);
+                            if (string.IsNullOrWhiteSpace(text)) continue;
+
+                            // NOTA: la descarga de media de Meta (id → URL con Bearer) es un
+                            // refinamiento posterior; por ahora se pasa el caption/placeholder.
+                            await DispatchAsync(
+                                line.TenantId.Value, fromPhone, text, ChannelType.WhatsApp,
+                                clientName, wamid, null, null, ct, whatsAppLineId: line.Id);
+                            processed++;
+                        }
+                    }
+
+                    // Estados de entrega (sent/delivered/read/failed) — registro por ahora.
+                    if (value.TryGetProperty("statuses", out var sts) && sts.ValueKind == JsonValueKind.Array)
+                        statusCount += sts.GetArrayLength();
+                }
+            }
+        }
+
+        log.Status = processed > 0 ? "processed" : statusCount > 0 ? "status" : "ignored";
+        log.StatusReason = reason ?? $"msgs={processed} statuses={statusCount}";
+        db.WebhookLogs.Add(log);
+        try { await db.SaveChangesAsync(ct); } catch { }
+        return Ok();
+    }
+
+    /// <summary>Texto a entregar al agente según el tipo de mensaje Meta.</summary>
+    private static string ExtractMetaMessageText(JsonElement m, string mtype)
+    {
+        switch (mtype)
+        {
+            case "text":
+                return m.TryGetProperty("text", out var t) && t.TryGetProperty("body", out var bdy) ? bdy.GetString() ?? "" : "";
+            case "button":
+                return m.TryGetProperty("button", out var btn) && btn.TryGetProperty("text", out var btt) ? btt.GetString() ?? "" : "";
+            case "interactive":
+                if (m.TryGetProperty("interactive", out var it))
+                {
+                    if (it.TryGetProperty("button_reply", out var br) && br.TryGetProperty("title", out var brt)) return brt.GetString() ?? "";
+                    if (it.TryGetProperty("list_reply", out var lr) && lr.TryGetProperty("title", out var lrt)) return lrt.GetString() ?? "";
+                }
+                return "";
+            case "image":
+                return m.TryGetProperty("image", out var im) && im.TryGetProperty("caption", out var imc) ? imc.GetString() ?? "📷 [Imagen]" : "📷 [Imagen]";
+            case "document":
+                return m.TryGetProperty("document", out var dc) && dc.TryGetProperty("caption", out var dcc) ? dcc.GetString() ?? "📄 [Documento]" : "📄 [Documento]";
+            case "audio":
+            case "voice":
+                return "🎤 [Nota de voz recibida] ¿Puedes escribir tu mensaje?";
+            default:
+                return $"[{mtype}]";
+        }
+    }
+
+    private static bool ValidateMetaSignature(string body, string? signatureHeader, string? appSecret)
+    {
+        if (string.IsNullOrEmpty(appSecret) || string.IsNullOrEmpty(signatureHeader)) return false;
+        var provided = signatureHeader.StartsWith("sha256=", StringComparison.OrdinalIgnoreCase)
+            ? signatureHeader["sha256=".Length..] : signatureHeader;
+        using var hmac = new System.Security.Cryptography.HMACSHA256(System.Text.Encoding.UTF8.GetBytes(appSecret));
+        var hash = hmac.ComputeHash(System.Text.Encoding.UTF8.GetBytes(body));
+        var computed = Convert.ToHexString(hash).ToLowerInvariant();
+        return System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            System.Text.Encoding.UTF8.GetBytes(computed),
+            System.Text.Encoding.UTF8.GetBytes(provided.ToLowerInvariant()));
+    }
+
+    /// <summary>
     /// Convierte un JID de WhatsApp ("5076000XXXX@c.us") al formato E.164 ("+5076000XXXX").
     /// </summary>
     private static string ExtractPhoneFromJid(string jid)
