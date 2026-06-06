@@ -320,7 +320,14 @@ public class CampaignsController(
         var campaign = await campaignRepo.GetByIdAsync(id, tenantCtx.TenantId, ct);
         if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
 
+        // Validar la línea/plantilla igual que al lanzar — no reanudar a una línea caída
+        // o a un maestro Meta sin plantilla aprobada (sería re-pausada al instante).
+        var lineCheck = await ValidateWhatsAppLineForLaunchAsync(id, tenantCtx.TenantId, ct);
+        if (lineCheck is not null) return BadRequest(new { error = lineCheck });
+
+        // Volver a Running (NO solo IsActive): el CampaignWorker filtra por Status==Running.
         campaign.IsActive = true;
+        campaign.Status = CampaignStatus.Running;
         await campaignRepo.UpdateAsync(campaign, ct);
 
         return Ok(new { message = "Campaña reactivada. El Worker la recogerá en el próximo tick." });

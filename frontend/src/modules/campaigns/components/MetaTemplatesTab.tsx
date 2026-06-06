@@ -98,15 +98,33 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
   const isEditing = !!form.id
 
   // Editor de mapeo {{n}}→campo (funciona incluso en plantillas aprobadas).
+  // Flujo: (1) subir el Excel de la campaña → (2) mapear con sus columnas reales.
   const [mappingTarget, setMappingTarget] = useState<MetaMessageTemplate | null>(null)
   const [mappingDraft, setMappingDraft] = useState<string[]>([])
+  const [mappingFields, setMappingFields] = useState<string[] | null>(null)  // null = falta subir Excel
+  const [mappingDragging, setMappingDragging] = useState(false)
+  const mappingFileRef = useRef<HTMLInputElement>(null)
   const mappingVarCount = mappingTarget ? countVars(mappingTarget.bodyText) : 0
 
   function openMapping(t: MetaMessageTemplate) {
     const n = countVars(t.bodyText)
     const draft = Array.from({ length: n }, (_, i) => t.bodyMapping?.[i] ?? '')
     setMappingDraft(draft)
+    setMappingFields(null)   // siempre pedir el Excel primero (columnas reales)
     setMappingTarget(t)
+  }
+
+  async function onMappingFile(file: File) {
+    try {
+      const parsed = await parseSampleMut.mutateAsync(file)
+      if (!parsed.columns || parsed.columns.length === 0) {
+        toast.error('No se detectaron columnas en el archivo. Revisá que tenga encabezados.'); return
+      }
+      setMappingFields(parsed.columns)
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'No se pudo leer el archivo.'
+      toast.error(msg)
+    }
   }
 
   async function saveMapping() {
@@ -320,30 +338,67 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
                 </div>
               </div>
             </div>
-            <div className="px-6 py-5 space-y-3">
-              <p className="text-xs text-gray-500">
-                Asigná a cada <span className="font-mono">{'{{n}}'}</span> el campo del que sale el dato al enviar.
-                Esto NO cambia el contenido aprobado por Meta — es solo para sustituir los valores.
-              </p>
-              <p className="rounded-lg bg-gray-50 border border-gray-200 p-2 text-sm text-gray-700 whitespace-pre-wrap">{mappingTarget.bodyText}</p>
-              <div className="space-y-2">
-                {Array.from({ length: mappingVarCount }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-2">
-                    <span className="w-10 shrink-0 font-mono text-xs font-semibold text-indigo-600">{`{{${i + 1}}}`}</span>
-                    <select value={mappingDraft[i] ?? ''}
-                      onChange={e => setMappingDraft(d => { const n = [...d]; n[i] = e.target.value; return n })}
-                      className="flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
-                      <option value="">— campo —</option>
-                      {(availableFields ?? []).map(fld => <option key={fld} value={fld}>{fld}</option>)}
-                    </select>
-                  </div>
-                ))}
+            <input ref={mappingFileRef} type="file" accept=".xlsx,.xls,.csv" className="hidden"
+              onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onMappingFile(f) }} />
+
+            {mappingFields === null ? (
+              /* ── Paso 1: subir el Excel de la campaña ── */
+              <div className="px-6 py-5 space-y-3">
+                <p className="text-sm text-gray-600">
+                  Subí el <b>Excel (o CSV)</b> que vas a usar en la campaña. Leeremos sus
+                  <b> columnas reales</b> para mapear cada variable de la plantilla.
+                </p>
+                <div
+                  onClick={() => !parseSampleMut.isPending && mappingFileRef.current?.click()}
+                  onDragOver={e => { e.preventDefault(); setMappingDragging(true) }}
+                  onDragLeave={() => setMappingDragging(false)}
+                  onDrop={e => { e.preventDefault(); setMappingDragging(false); const f = e.dataTransfer.files?.[0]; if (f) onMappingFile(f) }}
+                  className={`flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-6 py-10 text-center transition-colors ${
+                    mappingDragging ? 'border-[#1a3a6b] bg-blue-50' : 'border-gray-300 hover:border-[#2d5a9e] hover:bg-gray-50'
+                  } ${parseSampleMut.isPending ? 'pointer-events-none opacity-60' : ''}`}>
+                  {parseSampleMut.isPending ? (
+                    <><Loader2 size={32} className="animate-spin text-[#1a3a6b]" /><p className="text-sm font-medium text-gray-700">Leyendo columnas…</p></>
+                  ) : (
+                    <>
+                      <div className="flex h-14 w-14 items-center justify-center rounded-full bg-blue-100"><UploadCloud size={28} className="text-[#1a3a6b]" /></div>
+                      <p className="text-sm font-semibold text-gray-800">Arrastrá tu archivo aquí</p>
+                      <p className="text-xs text-gray-500">o <span className="font-medium text-[#1a3a6b]">hacé clic para elegir</span></p>
+                      <p className="mt-1 text-[11px] text-gray-400">Formatos: .xlsx · .xls · .csv</p>
+                    </>
+                  )}
+                </div>
+                <p className="text-[11px] text-gray-400">💡 Solo se leen los encabezados. No se guarda el archivo.</p>
               </div>
-            </div>
+            ) : (
+              /* ── Paso 2: mapear cada {{n}} a las columnas reales del archivo ── */
+              <div className="px-6 py-5 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-xs text-gray-500">
+                    Asigná cada <span className="font-mono">{'{{n}}'}</span> a una <b>columna del archivo</b>.
+                  </p>
+                  <button type="button" onClick={() => setMappingFields(null)} className="text-[11px] font-medium text-[#1a3a6b] hover:underline">Cambiar archivo</button>
+                </div>
+                <p className="rounded-lg bg-gray-50 border border-gray-200 p-2 text-sm text-gray-700 whitespace-pre-wrap">{mappingTarget.bodyText}</p>
+                <div className="space-y-2">
+                  {Array.from({ length: mappingVarCount }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="w-10 shrink-0 font-mono text-xs font-semibold text-indigo-600">{`{{${i + 1}}}`}</span>
+                      <select value={mappingDraft[i] ?? ''}
+                        onChange={e => setMappingDraft(d => { const n = [...d]; n[i] = e.target.value; return n })}
+                        className="flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
+                        <option value="">— columna —</option>
+                        {mappingFields.map(fld => <option key={fld} value={fld}>{fld}</option>)}
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
               <button type="button" onClick={() => setMappingTarget(null)} disabled={mappingMut.isPending}
                 className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancelar</button>
-              <button type="button" onClick={saveMapping} disabled={mappingMut.isPending}
+              <button type="button" onClick={saveMapping} disabled={mappingMut.isPending || mappingFields === null}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-[#1a3a6b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#234a85] disabled:opacity-50">
                 <Save size={15} /> Guardar mapeo
               </button>
