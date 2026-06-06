@@ -656,6 +656,9 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
             <input value={form.headerText} onChange={e => setForm(f => ({ ...f, headerText: e.target.value }))}
               placeholder="Hola {{1}}"
               className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
+            <span className="mt-1 block text-[11px] text-gray-400">
+              Texto plano: Meta no permite negritas ni formato (<span className="font-mono">* _ ~ `</span>) en el encabezado. El formato sí se permite en el cuerpo.
+            </span>
           </label>
           {headerVars === 1 && (
             <label className="block pl-3">

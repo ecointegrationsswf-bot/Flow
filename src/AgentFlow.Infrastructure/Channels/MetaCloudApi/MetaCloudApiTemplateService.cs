@@ -96,11 +96,7 @@ public class MetaCloudApiTemplateService(HttpClient http, ILogger<MetaCloudApiTe
             var root = doc.RootElement;
 
             if (root.TryGetProperty("error", out var err))
-            {
-                var msg = err.TryGetProperty("message", out var m) ? m.GetString() : err.ToString();
-                var code = err.TryGetProperty("code", out var c) ? c.ToString() : "";
-                return new MetaTemplateResult(false, null, null, $"Meta error {code}: {msg}");
-            }
+                return new MetaTemplateResult(false, null, null, FormatMetaError(err));
 
             var id = root.TryGetProperty("id", out var idp) ? idp.GetString() : null;
             var st = root.TryGetProperty("status", out var stp) ? stp.GetString() : "PENDING";
@@ -238,7 +234,9 @@ public class MetaCloudApiTemplateService(HttpClient http, ILogger<MetaCloudApiTe
             {
                 ["type"] = "HEADER",
                 ["format"] = "TEXT",
-                ["text"] = input.HeaderText,
+                // Meta NO admite formato (negritas *, itálicas _, etc.) en el HEADER.
+                // Lo limpiamos para que no rechace con "Invalid parameter".
+                ["text"] = StripWhatsAppFormatting(input.HeaderText),
             };
             if (input.HeaderSamples.Count > 0)
                 header["example"] = new Dictionary<string, object?> { ["header_text"] = input.HeaderSamples };
@@ -261,5 +259,47 @@ public class MetaCloudApiTemplateService(HttpClient http, ILogger<MetaCloudApiTe
             components.Add(new Dictionary<string, object?> { ["type"] = "FOOTER", ["text"] = input.FooterText });
 
         return components;
+    }
+
+    /// <summary>
+    /// Quita los caracteres de formato de WhatsApp (*negrita*, _itálica_, ~tachado~,
+    /// `mono`) del texto. El HEADER de Meta NO admite formato — si lo dejamos, Meta
+    /// rechaza con error 100. El BODY sí lo admite, así que esto solo se aplica al header.
+    /// </summary>
+    private static string StripWhatsAppFormatting(string? text)
+    {
+        if (string.IsNullOrEmpty(text)) return string.Empty;
+        var sb = new StringBuilder(text.Length);
+        foreach (var ch in text)
+            if (ch is not ('*' or '_' or '~' or '`')) sb.Append(ch);
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Arma un mensaje de error legible a partir del objeto <c>error</c> de Meta.
+    /// El campo <c>message</c> suele ser genérico ("Invalid parameter"); el detalle
+    /// accionable está en <c>error_user_title</c>, <c>error_user_msg</c> y
+    /// <c>error_data.details</c>. Los incluimos para que el usuario sepa QUÉ corregir.
+    /// </summary>
+    private static string FormatMetaError(JsonElement err)
+    {
+        string? message = err.TryGetProperty("message", out var m) ? m.GetString() : null;
+        string code = err.TryGetProperty("code", out var c) ? c.ToString() : "";
+        string? userTitle = err.TryGetProperty("error_user_title", out var ut) ? ut.GetString() : null;
+        string? userMsg = err.TryGetProperty("error_user_msg", out var um) ? um.GetString() : null;
+        string? details = null;
+        if (err.TryGetProperty("error_data", out var ed) && ed.ValueKind == JsonValueKind.Object
+            && ed.TryGetProperty("details", out var d))
+            details = d.GetString();
+
+        // Preferir el detalle más específico que dé Meta.
+        var specific = !string.IsNullOrWhiteSpace(userMsg) ? userMsg
+                     : !string.IsNullOrWhiteSpace(details) ? details
+                     : userTitle;
+        var baseMsg = !string.IsNullOrWhiteSpace(message) ? message : "Error de validación de Meta";
+
+        if (!string.IsNullOrWhiteSpace(specific) && !string.Equals(specific, baseMsg, StringComparison.OrdinalIgnoreCase))
+            return $"Meta error {code}: {baseMsg} — {specific}";
+        return $"Meta error {code}: {baseMsg}";
     }
 }
