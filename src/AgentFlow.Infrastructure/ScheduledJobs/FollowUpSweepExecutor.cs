@@ -132,7 +132,12 @@ public class FollowUpSweepExecutor(
         // TODOS los follow-ups de este tenant al próximo tick. Esto evita encolar
         // mensajes en una instancia caída que, al reconectar, los dispararía en
         // ráfaga (incidente SOMOS 18/05 → riesgo de ban de Meta).
-        var (lineHealthy, healthReason) = await EnsureTenantLineHealthyAsync(tenantId, ct);
+        // Línea del agente del primer contacto del lote (representativa del tenant en este tick).
+        var gateAgentLineId = await db.AgentDefinitions
+            .Where(a => a.Id == contacts[0].Campaign.AgentDefinitionId)
+            .Select(a => a.WhatsAppLineId)
+            .FirstOrDefaultAsync(ct);
+        var (lineHealthy, healthReason) = await EnsureTenantLineHealthyAsync(tenantId, gateAgentLineId, ct);
         if (!lineHealthy)
         {
             log.LogWarning(
@@ -255,15 +260,16 @@ public class FollowUpSweepExecutor(
     /// caída en un tick, el badge de la UI ya lo refleja sin esperar al ping de las 6 AM.
     /// </summary>
     private async Task<(bool Healthy, string? Reason)> EnsureTenantLineHealthyAsync(
-        Guid tenantId, CancellationToken ct)
+        Guid tenantId, Guid? agentLineId, CancellationToken ct)
     {
-        var line = await db.Set<WhatsAppLine>()
-            .Where(l => l.TenantId == tenantId && l.IsActive)
-            .OrderBy(l => l.CreatedAt)
-            .FirstOrDefaultAsync(ct);
+        // La LÍNEA DEL AGENTE (si está asignada), no la primera del tenant — para no
+        // diferir follow-ups Meta por una UltraMsg vieja caída en el mismo tenant.
+        var line = agentLineId.HasValue
+            ? await db.Set<WhatsAppLine>().FirstOrDefaultAsync(l => l.Id == agentLineId.Value && l.IsActive, ct)
+            : await db.Set<WhatsAppLine>().Where(l => l.TenantId == tenantId && l.IsActive).OrderBy(l => l.CreatedAt).FirstOrDefaultAsync(ct);
 
         if (line is null)
-            return (false, "Sin línea WhatsApp activa para el tenant.");
+            return (false, "Sin línea WhatsApp activa para el agente.");
 
         // Pre-check de salud por proveedor (igual que el dispatcher de campañas).
         //   • UltraMsg  → /instance/status.
@@ -354,8 +360,16 @@ public class FollowUpSweepExecutor(
         if (conv is null) return (DispatchOutcome.Skipped, 0, null);
         if (conv.Status != ConversationStatus.WaitingClient) return (DispatchOutcome.Skipped, 0, null);
 
-        var provider = await providerFactory.GetProviderAsync(contact.Campaign.TenantId, ct);
-        if (provider is null) return (DispatchOutcome.Failed, 0, "Tenant sin provider WhatsApp activo");
+        // Ruteo por la LÍNEA DEL AGENTE del maestro (no la primera del tenant).
+        var agentLineId = await db.AgentDefinitions
+            .Where(a => a.Id == contact.Campaign.AgentDefinitionId)
+            .Select(a => a.WhatsAppLineId)
+            .FirstOrDefaultAsync(ct);
+        var provider = agentLineId.HasValue
+            ? (await providerFactory.GetProviderByLineAsync(agentLineId.Value, ct)
+               ?? await providerFactory.GetProviderAsync(contact.Campaign.TenantId, ct))
+            : await providerFactory.GetProviderAsync(contact.Campaign.TenantId, ct);
+        if (provider is null) return (DispatchOutcome.Failed, 0, "Sin provider WhatsApp para la línea del agente");
 
         string resolved;          // texto final (lo que se persiste/muestra)
         SendMessageRequest sendReq;

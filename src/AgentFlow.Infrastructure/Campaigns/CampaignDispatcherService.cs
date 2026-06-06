@@ -194,7 +194,7 @@ public partial class CampaignDispatcherService(
         // (cada contacto recibe N mensajes, uno por canal).
         var agent = await db.AgentDefinitions
             .Where(a => a.Id == campaign.AgentDefinitionId)
-            .Select(a => new { a.Id, a.Name, a.EnabledChannels, a.IsActive })
+            .Select(a => new { a.Id, a.Name, a.EnabledChannels, a.IsActive, a.WhatsAppLineId })
             .FirstOrDefaultAsync(ct);
 
         if (agent is null || !agent.IsActive)
@@ -218,7 +218,14 @@ public partial class CampaignDispatcherService(
         IChannelProvider? waProvider = null;
         if (enabledChannels.Contains(ChannelType.WhatsApp))
         {
-            waProvider = await providerFactory.GetProviderAsync(tenant.Id, ct);
+            // Ruteo por la LÍNEA DEL AGENTE del maestro (no la primera línea del tenant).
+            // Un tenant puede tener varias líneas (ej. UltraMsg vieja + Meta); la campaña
+            // debe usar exactamente la línea configurada en su agente. Fallback a la
+            // primera línea del tenant solo si el agente no tiene línea asignada (legacy).
+            waProvider = agent.WhatsAppLineId.HasValue
+                ? (await providerFactory.GetProviderByLineAsync(agent.WhatsAppLineId.Value, ct)
+                   ?? await providerFactory.GetProviderAsync(tenant.Id, ct))
+                : await providerFactory.GetProviderAsync(tenant.Id, ct);
             if (waProvider is null)
             {
                 // Si el agente SOLO tiene WhatsApp y no hay línea, no podemos enviar.
@@ -236,7 +243,7 @@ public partial class CampaignDispatcherService(
                 // Llama UltraMsg /instance/status. Si != "authenticated" abortamos el
                 // batch, pausamos la campaña y notificamos al admin. Evita el escenario
                 // del 18/05 donde la línea estaba caída y UltraMsg encolaba 95 mensajes.
-                var (healthy, reason) = await EnsureWhatsAppLineHealthyAsync(tenant.Id, ct);
+                var (healthy, reason) = await EnsureWhatsAppLineHealthyAsync(tenant.Id, agent.WhatsAppLineId, ct);
                 if (!healthy)
                 {
                     logger.LogWarning("Campaña {CampaignId}: línea WhatsApp NO sana ({Reason}). Pausando campaña.",
@@ -629,9 +636,10 @@ public partial class CampaignDispatcherService(
                             WhatsAppLine? activeLine = null;
                             if (waProvider.ProviderType == ProviderType.UltraMsg)
                             {
-                                activeLine = await db.Set<WhatsAppLine>()
-                                    .Where(l => l.TenantId == tenant.Id && l.IsActive)
-                                    .FirstOrDefaultAsync(ct);
+                                // La línea del agente (no la primera del tenant) — coherente con el provider resuelto.
+                                activeLine = agent.WhatsAppLineId.HasValue
+                                    ? await db.Set<WhatsAppLine>().FirstOrDefaultAsync(l => l.Id == agent.WhatsAppLineId.Value && l.IsActive, ct)
+                                    : await db.Set<WhatsAppLine>().Where(l => l.TenantId == tenant.Id && l.IsActive).OrderBy(l => l.CreatedAt).FirstOrDefaultAsync(ct);
                             }
 
                             WhatsAppNumberValidationResult? preCheck = null;
@@ -754,7 +762,7 @@ public partial class CampaignDispatcherService(
                     // seguir bombardeando UltraMsg con requests que terminan en su cola.
                     if (waProvider is not null && sent > 0 && sent % LineHealthRecheckEveryN == 0)
                     {
-                        var (stillHealthy, midReason) = await EnsureWhatsAppLineHealthyAsync(tenant.Id, ct);
+                        var (stillHealthy, midReason) = await EnsureWhatsAppLineHealthyAsync(tenant.Id, agent.WhatsAppLineId, ct);
                         if (!stillHealthy)
                         {
                             logger.LogWarning(
@@ -1581,14 +1589,17 @@ por el sistema de protección anti-restricción.</p>
     /// refleja sin esperar al ping de las 6 AM siguiente.
     /// </summary>
     private async Task<(bool Healthy, string? Reason)> EnsureWhatsAppLineHealthyAsync(
-        Guid tenantId, CancellationToken ct)
+        Guid tenantId, Guid? agentLineId, CancellationToken ct)
     {
-        var line = await db.Set<WhatsAppLine>()
-            .Where(l => l.TenantId == tenantId && l.IsActive)
-            .FirstOrDefaultAsync(ct);
+        // Chequeamos la LÍNEA DEL AGENTE (si está asignada), no la primera del tenant.
+        // Crítico en tenants con varias líneas: una UltraMsg vieja caída no debe pausar
+        // una campaña cuyo agente usa la línea Meta.
+        var line = agentLineId.HasValue
+            ? await db.Set<WhatsAppLine>().FirstOrDefaultAsync(l => l.Id == agentLineId.Value && l.IsActive, ct)
+            : await db.Set<WhatsAppLine>().Where(l => l.TenantId == tenantId && l.IsActive).OrderBy(l => l.CreatedAt).FirstOrDefaultAsync(ct);
 
         if (line is null)
-            return (false, "Sin línea WhatsApp activa para el tenant.");
+            return (false, "Sin línea WhatsApp activa para el agente del maestro.");
 
         // Pre-check de salud por proveedor. Ambos proveedores se validan EN VIVO antes
         // de un lote (igual de crítico para Meta que para UltraMsg: una línea Meta
