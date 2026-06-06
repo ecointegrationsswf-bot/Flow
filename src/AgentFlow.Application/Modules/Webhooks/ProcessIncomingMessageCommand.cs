@@ -274,7 +274,21 @@ public class ProcessIncomingMessageHandler(
                 ? (await channelFactory.GetProviderByLineAsync(cmd.WhatsAppLineId.Value, ct)
                    ?? await channelFactory.GetProviderAsync(cmd.TenantId, ct))
                 : await channelFactory.GetProviderAsync(cmd.TenantId, ct);
-            if (provider is not null)
+
+            // Pre-check de salud SIN red: si la línea está confirmada caída (≥2 fallos)
+            // no intentamos el envío (fallaría igual y bombardearía una línea muerta).
+            // Marcamos la respuesta como Failed para que el monitor lo muestre.
+            var lineKnownDown = cmd.WhatsAppLineId.HasValue
+                && await channelFactory.IsLineKnownDownAsync(cmd.WhatsAppLineId.Value, ct);
+
+            if (lineKnownDown)
+            {
+                logger.LogWarning("[Brain][LineHealth] Línea {LineId} confirmada caída — no se envía respuesta a {Phone}.",
+                    cmd.WhatsAppLineId, cmd.FromPhone);
+                outbound.Status = MessageStatus.Failed;
+                await conversations.SaveChangesAsync(ct);
+            }
+            else if (provider is not null)
             {
                 var bubbles = SplitIntoBubbles(decision.MessageToClient!);
                 string? lastExternalId = null;
@@ -1197,7 +1211,19 @@ public class ProcessIncomingMessageHandler(
                             ? (await channelFactory.GetProviderByLineAsync(cmd.WhatsAppLineId.Value, ct)
                                ?? await channelFactory.GetProviderAsync(cmd.TenantId, ct))
                             : await channelFactory.GetProviderAsync(cmd.TenantId, ct);
-                        if (provider is not null)
+
+                        // Pre-check de salud SIN red: si la línea está confirmada caída
+                        // (≥2 fallos), no intentamos el envío y marcamos la respuesta Failed.
+                        var lineKnownDown = cmd.WhatsAppLineId.HasValue
+                            && await channelFactory.IsLineKnownDownAsync(cmd.WhatsAppLineId.Value, ct);
+
+                        if (lineKnownDown)
+                        {
+                            logger.LogWarning("[WhatsApp][LineHealth] Línea {LineId} confirmada caída — no se envía respuesta a {Phone}.",
+                                cmd.WhatsAppLineId, cmd.FromPhone);
+                            outbound.Status = MessageStatus.Failed;
+                        }
+                        else if (provider is not null)
                         {
                             var bubbles = SplitIntoBubbles(replyText);
                             string? lastExternalId = null;

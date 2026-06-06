@@ -1,6 +1,8 @@
 using System.Text;
 using AgentFlow.Domain.Entities;
+using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Channels.MetaCloudApi;
 using AgentFlow.Infrastructure.Channels.UltraMsg;
 using AgentFlow.Infrastructure.Email;
 using AgentFlow.Infrastructure.Persistence;
@@ -28,6 +30,7 @@ namespace AgentFlow.Infrastructure.ScheduledJobs;
 public class WhatsAppLineHealthCheckExecutor(
     AgentFlowDbContext db,
     IUltraMsgInstanceService ultra,
+    IMetaCloudApiHealthService metaHealth,
     IEmailService email,
     ITeamsNotifier teamsNotifier,
     ILogger<WhatsAppLineHealthCheckExecutor> log) : IScheduledJobExecutor
@@ -191,8 +194,23 @@ public class WhatsAppLineHealthCheckExecutor(
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             timeoutCts.CancelAfter(PingTimeout);
 
-            var result = await ultra.GetStatusAsync(line.InstanceId, line.ApiToken, timeoutCts.Token);
-            var status = string.IsNullOrWhiteSpace(result.Status) ? "unknown" : result.Status.ToLowerInvariant();
+            // Ping por proveedor. Una línea Meta NO se pingea contra UltraMsg
+            // /instance/status (daría siempre "caída" falsa): usa el health_status
+            // del Graph API, normalizado al mismo "authenticated" que UltraMsg para
+            // que el resto del flujo (correos, badges) funcione sin cambios.
+            string status;
+            if (line.Provider == ProviderType.MetaCloudApi)
+            {
+                var meta = await metaHealth.GetHealthAsync(
+                    line.InstanceId, line.MetaAccessToken ?? "", null, timeoutCts.Token);
+                status = string.IsNullOrWhiteSpace(meta.Status) ? "unknown" : meta.Status.ToLowerInvariant();
+            }
+            else
+            {
+                var result = await ultra.GetStatusAsync(line.InstanceId, line.ApiToken, timeoutCts.Token);
+                status = string.IsNullOrWhiteSpace(result.Status) ? "unknown" : result.Status.ToLowerInvariant();
+            }
+
             line.LastStatus = status;
 
             if (string.Equals(status, "authenticated", StringComparison.OrdinalIgnoreCase))
@@ -206,8 +224,8 @@ public class WhatsAppLineHealthCheckExecutor(
             // (puede ser flake nuestro); subimos el contador y dejamos LastStatus
             // como estaba. Al cabo de 2 ticks fallidos se trata como caída real.
             line.ConsecutivePingFailures++;
-            log.LogWarning(ex, "[WhatsAppHealth] Ping falló para {DisplayName} ({Instance}). Failures={Count}.",
-                line.DisplayName, line.InstanceId, line.ConsecutivePingFailures);
+            log.LogWarning(ex, "[WhatsAppHealth] Ping falló para {DisplayName} ({Instance}, {Provider}). Failures={Count}.",
+                line.DisplayName, line.InstanceId, line.Provider, line.ConsecutivePingFailures);
         }
     }
 

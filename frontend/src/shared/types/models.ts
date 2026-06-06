@@ -231,6 +231,35 @@ export interface WhatsAppLine {
   updatedAt?: string
 }
 
+// Plantilla HSM de Meta (Fase 1: gestión). Estado de aprobación de Meta (metaStatus)
+// es independiente de nuestro flag isEnabled y del estado de la campaña.
+export type MetaTemplateStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'PAUSED' | 'DISABLED'
+export type MetaTemplateCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
+
+export interface MetaMessageTemplate {
+  id: string
+  whatsAppLineId: string
+  name: string
+  language: string
+  category: MetaTemplateCategory
+  headerType?: string | null
+  headerText?: string | null
+  bodyText: string
+  footerText?: string | null
+  headerSamples: string[]
+  bodySamples: string[]
+  metaTemplateId?: string | null
+  metaStatus: MetaTemplateStatus
+  metaRejectedReason?: string | null
+  isEnabled: boolean
+  bubbleGroupId?: string | null
+  sequenceOrder: number
+  usable: boolean
+  createdAt: string
+  updatedAt?: string | null
+  lastSyncedAt?: string | null
+}
+
 export interface DashboardStats {
   totalConversations: number
   activeAgents: number

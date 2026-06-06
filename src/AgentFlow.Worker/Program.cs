@@ -263,6 +263,12 @@ builder.Services.AddHttpClient<
     AgentFlow.Infrastructure.Channels.UltraMsg.IUltraMsgInstanceService,
     AgentFlow.Infrastructure.Channels.UltraMsg.UltraMsgInstanceService>();
 
+// Meta Cloud API — salud de línea (equivalente al /instance/status de UltraMsg).
+// Usado por el dispatcher, el follow-up sweep y el job diario para líneas Meta.
+builder.Services.AddHttpClient<
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaCloudApiHealthService,
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaCloudApiHealthService>();
+
 // Validador de números WhatsApp (lista negra + UltraMsg /contacts/check)
 builder.Services.AddHttpClient<AgentFlow.Infrastructure.Channels.UltraMsg.UltraMsgContactsChecker>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWhatsAppNumberValidator,

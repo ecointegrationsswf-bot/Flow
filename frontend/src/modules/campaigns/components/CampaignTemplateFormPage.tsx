@@ -11,9 +11,11 @@ import { z } from 'zod'
 import { ArrowLeft, Plus, X, Clock, Zap, FileText, Webhook, Mail, MessageSquare, ChevronDown, ChevronUp, Globe, Tag, Paperclip, Maximize2 } from 'lucide-react'
 import { useAgents } from '@/shared/hooks/useAgents'
 import { useLabels } from '@/shared/hooks/useLabels'
+import { useWhatsAppLines } from '@/shared/hooks/useWhatsAppLines'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
 import { CampaignTemplateDocumentsSection } from './CampaignTemplateDocumentsSection'
 import { EmailTemplateTab, parseItemsConfig, DEFAULT_ITEMS_CONFIG, type ItemsConfigShape } from './EmailTemplateTab'
+import { MetaTemplatesTab } from './MetaTemplatesTab'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { useToast, ToastContainer } from '@/shared/components/Toast'
 import { MessageDialog, type MessageDialogKind } from '@/shared/components/MessageDialog'
@@ -119,7 +121,7 @@ export function CampaignTemplateFormPage() {
   // Webhook Contract Builder — modal state (Fase 5)
   const [webhookBuilderActionId, setWebhookBuilderActionId] = useState<string | null>(null)
   // Tab activa — General / Etiquetas / Acciones / Prompt / Documentos / Correo
-  const [activeTab, setActiveTab] = useState<'general' | 'labels' | 'actions' | 'prompt' | 'documents' | 'email'>('general')
+  const [activeTab, setActiveTab] = useState<'general' | 'labels' | 'actions' | 'prompt' | 'documents' | 'email' | 'metaTemplates'>('general')
   // Plantilla de correo (Fase 6) — solo se persiste si hay acción con sendsEmail vinculada.
   const [localEmailSubject, setLocalEmailSubject] = useState<string>(existing?.emailSubject ?? '')
   const [localEmailBodyHtml, setLocalEmailBodyHtml] = useState<string>(existing?.emailBodyHtml ?? '')
@@ -219,11 +221,18 @@ export function CampaignTemplateFormPage() {
   const selectedAgent = agents?.find(a => a.id === watchedAgentId)
   const hasEmailChannel = (selectedAgent?.enabledChannels ?? []).includes('Email')
 
+  // Tab "Plantillas Meta" — se habilita solo si el agente seleccionado está vinculado a
+  // una línea cuyo proveedor es Meta Cloud API. Las plantillas pertenecen a esa línea/WABA.
+  const { data: whatsAppLines } = useWhatsAppLines()
+  const agentLine = whatsAppLines?.find(l => l.id === selectedAgent?.whatsAppLineId)
+  const metaLineId = agentLine?.provider === 'MetaCloudApi' ? agentLine.id : null
+
   // Si el usuario quita el canal Email del agente mientras está parado en el tab
   // Correo, devolvemos al tab General. Debe estar antes del early-return.
   useEffect(() => {
     if (!hasEmailChannel && activeTab === 'email') setActiveTab('general')
-  }, [hasEmailChannel, activeTab])
+    if (!metaLineId && activeTab === 'metaTemplates') setActiveTab('general')
+  }, [hasEmailChannel, metaLineId, activeTab])
 
   const addFollowUp = () => {
     const h = parseInt(newHour)
@@ -581,6 +590,9 @@ export function CampaignTemplateFormPage() {
     ...(hasEmailChannel
       ? [{ key: 'email' as const, label: 'Correo', icon: Mail, badge: localEmailBodyHtml ? 1 : 0 }]
       : []),
+    ...(metaLineId
+      ? [{ key: 'metaTemplates' as const, label: 'Plantillas Meta', icon: MessageSquare }]
+      : []),
     // Badge: solo contamos las acciones que ESTÁN en availableActions (las asignadas
     // al tenant). Si selectedActionIds tiene Ids huérfanos (acciones borradas o
     // desasignadas del tenant), no se muestran en la lista pero quedarían contados
@@ -598,9 +610,10 @@ export function CampaignTemplateFormPage() {
         </button>
       </div>
 
-      {/* ─── Tabs en el encabezado: Etiquetas | Acciones | Prompt | Documentos ─── */}
+      {/* ─── Tabs en el encabezado: Etiquetas | Acciones | Prompt | Documentos | Plantillas Meta ─── */}
+      {/* flex-wrap: si no caben en una fila, bajan a la siguiente (sin scroll horizontal). */}
       <div className="mb-6 rounded-lg bg-white shadow-sm">
-        <div className="flex border-b border-gray-200 overflow-x-auto">
+        <div className="flex flex-wrap border-b border-gray-200">
           {tabs.map(tab => {
             const Icon = tab.icon
             const isActive = activeTab === tab.key
@@ -609,7 +622,7 @@ export function CampaignTemplateFormPage() {
                 key={tab.key}
                 type="button"
                 onClick={() => setActiveTab(tab.key)}
-                className={`flex items-center gap-2 px-5 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors ${
                   isActive
                     ? 'border-blue-600 text-blue-700 bg-blue-50/50'
                     : 'border-transparent text-gray-600 hover:text-gray-900 hover:bg-gray-50'
@@ -1275,6 +1288,11 @@ export function CampaignTemplateFormPage() {
                 onUmbralChange={setLocalUmbralCorporativo}
                 onSampleDataChange={setLocalSampleDataJson}
               />
+            )}
+
+            {/* ─── TAB: Plantillas Meta (solo si el agente usa línea Meta) ─── */}
+            {activeTab === 'metaTemplates' && metaLineId && (
+              <MetaTemplatesTab lineId={metaLineId} campaignTemplateId={id} baseName={watch('name') || undefined} />
             )}
           </div>
         </div>

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using AgentFlow.Application.Modules.Webhooks;
+using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Messaging;
@@ -760,7 +761,10 @@ public class WebhookController(
     /// Siempre responde 200 — Meta reintenta agresivamente ante cualquier no-2xx.
     /// </summary>
     [HttpPost("meta")]
-    public async Task<IActionResult> MetaWebhook([FromServices] IConfiguration config, CancellationToken ct)
+    public async Task<IActionResult> MetaWebhook(
+        [FromServices] IConfiguration config,
+        [FromServices] AgentFlow.Domain.Interfaces.IWhatsAppNumberValidator numberValidator,
+        CancellationToken ct)
     {
         string body;
         using (var reader = new StreamReader(Request.Body))
@@ -792,7 +796,7 @@ public class WebhookController(
             return Ok(); // 200 para que Meta no reintente un payload corrupto
         }
 
-        var processed = 0; var statusCount = 0; string? reason = null;
+        var processed = 0; var statusCount = 0; var statusFailedBlacklisted = 0; string? reason = null;
         using (doc)
         {
             var root = doc.RootElement;
@@ -809,6 +813,17 @@ public class WebhookController(
                 foreach (var change in changes.EnumerateArray())
                 {
                     if (!change.TryGetProperty("value", out var value)) continue;
+
+                    // ── Estado de aprobación de plantilla (WABA-level, sin phone_number_id) ──
+                    var field = change.TryGetProperty("field", out var fld) ? fld.GetString() : null;
+                    if (string.Equals(field, "message_template_status_update", StringComparison.OrdinalIgnoreCase))
+                    {
+                        var wabaId = entry.TryGetProperty("id", out var eid) ? eid.GetString() : null;
+                        var updated = await HandleTemplateStatusUpdateAsync(wabaId, value, ct);
+                        statusCount += updated; // reutilizamos el contador para el log (no es msg entrante)
+                        reason ??= updated > 0 ? "template_status_updated" : "template_status_no_match";
+                        continue;
+                    }
 
                     var phoneNumberId = value.TryGetProperty("metadata", out var meta)
                         && meta.TryGetProperty("phone_number_id", out var pid) ? pid.GetString() : null;
@@ -917,21 +932,120 @@ public class WebhookController(
                         }
                     }
 
-                    // Estados de entrega (sent/delivered/read/failed) — registro por ahora.
+                    // Estados de entrega (sent/delivered/read/failed). Para los 'failed'
+                    // cuya causa es "número no es WhatsApp" (códigos 131026 / 131021),
+                    // auto-registramos el destinatario en la lista negra del tenant —
+                    // equivalente reactivo a la pre-validación /contacts/check de UltraMsg,
+                    // ya que Meta no ofrece pre-check y solo reporta el número malo al fallar.
                     if (value.TryGetProperty("statuses", out var sts) && sts.ValueKind == JsonValueKind.Array)
+                    {
                         statusCount += sts.GetArrayLength();
+                        foreach (var st in sts.EnumerateArray())
+                        {
+                            var stStatus = st.TryGetProperty("status", out var ss) ? ss.GetString() : null;
+                            if (!string.Equals(stStatus, "failed", StringComparison.OrdinalIgnoreCase)) continue;
+
+                            var recipient = st.TryGetProperty("recipient_id", out var rid) ? rid.GetString() : null;
+                            if (string.IsNullOrWhiteSpace(recipient)) continue;
+                            var recipientPhone = recipient.StartsWith('+') ? recipient : $"+{recipient}";
+
+                            // Tomar el primer error reportado (code + title).
+                            int errCode = -1; string? errTitle = null;
+                            if (st.TryGetProperty("errors", out var errs) && errs.ValueKind == JsonValueKind.Array && errs.GetArrayLength() > 0)
+                            {
+                                var e0 = errs[0];
+                                if (e0.TryGetProperty("code", out var ec) && ec.ValueKind == JsonValueKind.Number) errCode = ec.GetInt32();
+                                errTitle = e0.TryGetProperty("title", out var et) ? et.GetString()
+                                         : e0.TryGetProperty("message", out var em) ? em.GetString() : null;
+                            }
+
+                            // Solo códigos que indican NÚMERO inválido. Otros 'failed'
+                            // (131047 re-engagement/ventana 24h, 131051 tipo no soportado,
+                            // 131026 a veces es transitorio pero típicamente número malo)
+                            // NO deben ensuciar la lista negra.
+                            if (errCode is 131026 or 131021)
+                            {
+                                try
+                                {
+                                    await numberValidator.RegisterAsBlacklistedAsync(
+                                        recipientPhone,
+                                        reason: $"Meta status=failed (code {errCode}): {errTitle ?? "número no entregable"}",
+                                        source: "meta-status-failed",
+                                        tenantId: line.TenantId,
+                                        campaignId: null,
+                                        userId: null,
+                                        ct: ct);
+                                    statusFailedBlacklisted++;
+                                }
+                                catch (Exception bex)
+                                {
+                                    Console.WriteLine($"[Meta][status-failed] No se pudo blacklistear {recipientPhone}: {bex.Message}");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
 
         log.Status = processed > 0 ? "processed" : statusCount > 0 ? "status" : "ignored";
-        log.StatusReason = reason ?? $"msgs={processed} statuses={statusCount}";
+        log.StatusReason = reason ?? $"msgs={processed} statuses={statusCount}"
+            + (statusFailedBlacklisted > 0 ? $" blacklisted={statusFailedBlacklisted}" : "");
         db.WebhookLogs.Add(log);
         try { await db.SaveChangesAsync(ct); } catch { }
         return Ok();
     }
 
     /// <summary>Texto a entregar al agente según el tipo de mensaje Meta.</summary>
+    /// <summary>
+    /// Procesa un evento message_template_status_update de Meta (aprobación/rechazo de
+    /// plantilla). Resuelve la plantilla por su MetaTemplateId, o por (nombre+idioma)
+    /// dentro del WABA que envió el evento — garantizando que pertenece al tenant dueño
+    /// de ese WABA (nunca cruza tenants). Devuelve cuántas plantillas actualizó.
+    /// </summary>
+    private async Task<int> HandleTemplateStatusUpdateAsync(string? wabaId, JsonElement value, CancellationToken ct)
+    {
+        var ev = value.TryGetProperty("event", out var e) ? e.GetString() : null;            // APPROVED/REJECTED/...
+        var metaTemplateId = value.TryGetProperty("message_template_id", out var mid)
+            ? (mid.ValueKind == JsonValueKind.Number ? mid.GetRawText() : mid.GetString())
+            : null;
+        var name = value.TryGetProperty("message_template_name", out var nm) ? nm.GetString() : null;
+        var lang = value.TryGetProperty("message_template_language", out var lg) ? lg.GetString() : null;
+        var rejReason = value.TryGetProperty("reason", out var rs) ? rs.GetString() : null;
+        if (string.IsNullOrEmpty(ev)) return 0;
+
+        // Candidatas: por MetaTemplateId, o por (nombre+idioma) restringido al WABA del evento.
+        var query = db.MetaMessageTemplates.AsQueryable();
+        MetaMessageTemplate? template = null;
+
+        if (!string.IsNullOrEmpty(metaTemplateId))
+            template = await query.FirstOrDefaultAsync(t => t.MetaTemplateId == metaTemplateId, ct);
+
+        if (template is null && !string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(wabaId))
+        {
+            // Resolver por (nombre+idioma) SOLO entre plantillas cuyas líneas tienen este WABA
+            // → blindaje por-tenant: el WABA pertenece a la línea de un tenant específico.
+            var lineIds = await db.WhatsAppLines
+                .Where(l => l.MetaWabaId == wabaId)
+                .Select(l => l.Id)
+                .ToListAsync(ct);
+            template = await query.FirstOrDefaultAsync(
+                t => lineIds.Contains(t.WhatsAppLineId) && t.Name == name
+                  && (lang == null || t.Language == lang), ct);
+        }
+
+        if (template is null) return 0;
+
+        template.MetaStatus = ev!.ToUpperInvariant();
+        template.MetaRejectedReason = string.Equals(ev, "REJECTED", StringComparison.OrdinalIgnoreCase)
+            ? rejReason : null;
+        if (!string.IsNullOrEmpty(metaTemplateId) && string.IsNullOrEmpty(template.MetaTemplateId))
+            template.MetaTemplateId = metaTemplateId;
+        template.LastSyncedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return 1;
+    }
+
     private static string ExtractMetaMessageText(JsonElement m, string mtype)
     {
         switch (mtype)

@@ -1,6 +1,7 @@
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Channels.MetaCloudApi;
 using AgentFlow.Infrastructure.Channels.UltraMsg;
 using AgentFlow.Infrastructure.Email;
 using AgentFlow.Infrastructure.Persistence;
@@ -39,6 +40,7 @@ public class CampaignDispatcherService(
     IEmailService emailService,
     EmailTemplateRenderer emailRenderer,
     IUltraMsgInstanceService ultraMsgInstance,
+    IMetaCloudApiHealthService metaHealth,
     ITeamsNotifier teamsNotifier,
     IWhatsAppNumberValidator whatsAppValidator,
     ILogger<CampaignDispatcherService> logger)
@@ -1508,24 +1510,27 @@ por el sistema de protección anti-restricción.</p>
         if (line is null)
             return (false, "Sin línea WhatsApp activa para el tenant.");
 
-        // Solo validamos UltraMsg. MetaCloudApi tiene mejor manejo de errores
-        // y no necesita pre-check (su API responde 4xx cuando la cuenta está mal).
-        if (line.Provider != ProviderType.UltraMsg)
-            return (true, null);
-
-        UltraMsgInstanceStatus status;
+        // Pre-check de salud por proveedor. Ambos proveedores se validan EN VIVO antes
+        // de un lote (igual de crítico para Meta que para UltraMsg: una línea Meta
+        // bloqueada o con token vencido debe pausar la campaña, no encolar fallos).
+        //   • UltraMsg  → /instance/status (estado "authenticated").
+        //   • Meta      → Graph API health_status (normalizado a "authenticated").
+        string status;
         try
         {
             using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             cts.CancelAfter(TimeSpan.FromSeconds(5));
-            status = await ultraMsgInstance.GetStatusAsync(line.InstanceId, line.ApiToken, cts.Token);
+            status = line.Provider == ProviderType.MetaCloudApi
+                ? (await metaHealth.GetHealthAsync(line.InstanceId, line.MetaAccessToken ?? "", null, cts.Token)).Status
+                : (await ultraMsgInstance.GetStatusAsync(line.InstanceId, line.ApiToken, cts.Token)).Status;
         }
         catch (Exception ex)
         {
             // Timeout o error de red — NO podemos confirmar que la línea esté sana.
             // Política conservadora: fail-closed. Mejor abortar batch que arriesgar
-            // bombardear UltraMsg si la línea está caída y solo no respondió a tiempo.
-            logger.LogWarning(ex, "[LineHealth] Ping a UltraMsg falló para tenant {TenantId}.", tenantId);
+            // bombardear el proveedor si la línea está caída y solo no respondió a tiempo.
+            logger.LogWarning(ex, "[LineHealth] Ping de salud falló para tenant {TenantId} ({Provider}).",
+                tenantId, line.Provider);
             line.ConsecutivePingFailures++;
             line.LastStatusCheckedAt = DateTime.UtcNow;
             try { await db.SaveChangesAsync(ct); } catch { }
@@ -1533,16 +1538,16 @@ por el sistema de protección anti-restricción.</p>
         }
 
         // Persistir el resultado del ping (igual que hace el job diario).
-        line.LastStatus = status.Status;
+        line.LastStatus = status;
         line.LastStatusCheckedAt = DateTime.UtcNow;
-        if (string.Equals(status.Status, "authenticated", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(status, "authenticated", StringComparison.OrdinalIgnoreCase))
             line.ConsecutivePingFailures = 0;
         else
             line.ConsecutivePingFailures++;
         try { await db.SaveChangesAsync(ct); } catch { }
 
-        if (!string.Equals(status.Status, "authenticated", StringComparison.OrdinalIgnoreCase))
-            return (false, $"Línea '{line.DisplayName}' en estado '{status.Status}' (no authenticated).");
+        if (!string.Equals(status, "authenticated", StringComparison.OrdinalIgnoreCase))
+            return (false, $"Línea '{line.DisplayName}' en estado '{status}' (no authenticated).");
 
         return (true, null);
     }

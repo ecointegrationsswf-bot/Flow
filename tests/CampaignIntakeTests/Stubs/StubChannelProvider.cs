@@ -35,4 +35,8 @@ public class StubChannelProviderFactory(IChannelProvider provider) : IChannelPro
 
     public Task<IChannelProvider?> GetProviderByLineAsync(Guid lineId, CancellationToken ct = default)
         => Task.FromResult<IChannelProvider?>(provider);
+
+    // En tests la línea nunca está "caída" salvo que un test lo necesite explícitamente.
+    public Task<bool> IsLineKnownDownAsync(Guid lineId, CancellationToken ct = default)
+        => Task.FromResult(false);
 }

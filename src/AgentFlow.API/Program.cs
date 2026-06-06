@@ -168,6 +168,10 @@ builder.Services.AddSingleton<AgentFlow.Domain.Interfaces.IBusinessHoursClock,
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInitialMessageGenerator,
     AgentFlow.Infrastructure.AI.InitialMessageGenerator>();
 
+// Generador de plantillas Meta desde el prompt del maestro (botón "Generar desde el prompt").
+builder.Services.AddScoped<AgentFlow.Infrastructure.AI.IMetaTemplateGenerator,
+    AgentFlow.Infrastructure.AI.MetaTemplateGenerator>();
+
 // ── Reportes ─────────────────────────────────────────────
 // QuestPDF Community License (free para uso comercial < $1M revenue).
 // Settings.License debe configurarse UNA vez al inicializar la app.
@@ -316,6 +320,16 @@ builder.Services.AddAuthorization();
 // ── UltraMsg (gestion de instancias WhatsApp) ───────────
 builder.Services.AddHttpClient<IUltraMsgInstanceService, UltraMsgInstanceService>();
 builder.Services.AddHttpClient(); // IHttpClientFactory para descargar media de UltraMsg
+
+// ── Meta Cloud API (salud de línea — equivalente a UltraMsg /instance/status) ──
+builder.Services.AddHttpClient<
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaCloudApiHealthService,
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaCloudApiHealthService>();
+
+// ── Meta Cloud API (plantillas HSM — gestión por WABA del tenant) ──
+builder.Services.AddHttpClient<
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaTemplateService,
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaCloudApiTemplateService>();
 builder.Services.AddScoped<IChannelProviderFactory, AgentFlow.Infrastructure.Channels.ChannelProviderFactory>();
 
 // Validador de números WhatsApp (lista negra + UltraMsg /contacts/check)
@@ -521,6 +535,46 @@ var app = builder.Build();
                 CREATE UNIQUE INDEX UX_TenantActionContract_Action_Tenant
                     ON TenantActionContracts (ActionDefinitionId, TenantId);
             END");
+        // MetaMessageTemplates: plantillas HSM de Meta por linea/WABA. Tabla creada via
+        // guard (no migracion EF por el drift). Columnas match a las convenciones EF.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'MetaMessageTemplates')
+            BEGIN
+                CREATE TABLE MetaMessageTemplates (
+                    Id uniqueidentifier NOT NULL CONSTRAINT PK_MetaMessageTemplates PRIMARY KEY,
+                    TenantId uniqueidentifier NOT NULL,
+                    WhatsAppLineId uniqueidentifier NOT NULL,
+                    Name nvarchar(512) NOT NULL,
+                    Language nvarchar(20) NOT NULL,
+                    Category nvarchar(40) NOT NULL,
+                    HeaderType nvarchar(20) NULL,
+                    HeaderText nvarchar(200) NULL,
+                    BodyText nvarchar(max) NULL,
+                    FooterText nvarchar(120) NULL,
+                    VariableSamplesJson nvarchar(max) NULL,
+                    MetaTemplateId nvarchar(100) NULL,
+                    MetaStatus nvarchar(40) NOT NULL,
+                    MetaRejectedReason nvarchar(1000) NULL,
+                    IsEnabled bit NOT NULL DEFAULT 1,
+                    CreatedAt datetime2 NOT NULL DEFAULT SYSUTCDATETIME(),
+                    UpdatedAt datetime2 NULL,
+                    LastSyncedAt datetime2 NULL,
+                    CreatedByUserId uniqueidentifier NULL,
+                    ParameterMappingJson nvarchar(max) NULL,
+                    CONSTRAINT FK_MetaMessageTemplates_WhatsAppLines FOREIGN KEY (WhatsAppLineId)
+                        REFERENCES WhatsAppLines (Id) ON DELETE CASCADE
+                );
+                CREATE INDEX IX_MetaMessageTemplates_TenantId ON MetaMessageTemplates (TenantId);
+                CREATE INDEX IX_MetaMessageTemplates_WhatsAppLineId ON MetaMessageTemplates (WhatsAppLineId);
+                CREATE UNIQUE INDEX UX_MetaMessageTemplate_Line_Name_Lang
+                    ON MetaMessageTemplates (WhatsAppLineId, Name, Language);
+            END");
+        // Secuencia de burbujas (split por '~') — columnas agregadas por guard idempotente.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('MetaMessageTemplates') AND name = 'BubbleGroupId')
+                ALTER TABLE MetaMessageTemplates ADD BubbleGroupId uniqueidentifier NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('MetaMessageTemplates') AND name = 'SequenceOrder')
+                ALTER TABLE MetaMessageTemplates ADD SequenceOrder int NOT NULL DEFAULT 1;");
         Console.WriteLine("[Startup] Columnas de seguridad verificadas.");
     }
     catch (Exception ex)

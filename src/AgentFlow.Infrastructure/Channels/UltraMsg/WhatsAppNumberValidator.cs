@@ -1,4 +1,5 @@
 using AgentFlow.Domain.Entities;
+using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -67,6 +68,17 @@ public class WhatsAppNumberValidator(
         var cacheKey = $"wa:valid:{phoneNumber}";
         if (cache.TryGetValue<bool>(cacheKey, out var cachedValid) && cachedValid)
             return new(true, "cache", null);
+
+        // ── Líneas Meta: sin pre-validación proactiva ────────────
+        // Meta Cloud API NO expone un endpoint /contacts/check (el viejo /contacts
+        // está deprecado). Llamar al /contacts/check de UltraMsg con credenciales
+        // Meta (InstanceId = phone_number_id, ApiToken vacío) sería incorrecto.
+        // Para Meta nos apoyamos en: lista negra (capa 1, ya consultada arriba) +
+        // registro reactivo cuando el envío real falla (dispatch-error) + cosecha
+        // de statuses 'failed' del webhook (error 131026 = número no es WhatsApp).
+        // Por eso aquí permitimos el envío (la línea ya pasó el pre-check de salud).
+        if (line.Provider == ProviderType.MetaCloudApi)
+            return new(true, "meta-no-precheck", null);
 
         // ── Capa 3 — UltraMsg /contacts/check ────────────────────
         var existsInWa = await checker.ExistsInWhatsAppAsync(line.InstanceId, line.ApiToken, phoneNumber, ct);

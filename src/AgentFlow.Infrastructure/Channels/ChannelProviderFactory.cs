@@ -49,6 +49,28 @@ public class ChannelProviderFactory(AgentFlowDbContext db) : IChannelProviderFac
     }
 
     /// <summary>
+    /// Umbral de "caída confirmada": mismo criterio CRÍTICO del job diario y los
+    /// pre-checks de campaña (≥2 fallos consecutivos). Tolera 1 parpadeo puntual.
+    /// </summary>
+    private const int KnownDownFailureThreshold = 2;
+
+    public async Task<bool> IsLineKnownDownAsync(Guid lineId, CancellationToken ct = default)
+    {
+        // Proyección mínima — solo los dos campos de salud, sin red ni el resto de la fila.
+        var snap = await db.WhatsAppLines
+            .Where(l => l.Id == lineId)
+            .Select(l => new { l.LastStatus, l.ConsecutivePingFailures })
+            .FirstOrDefaultAsync(ct);
+
+        if (snap is null) return false;                       // línea desconocida → no bloquear
+        if (string.IsNullOrEmpty(snap.LastStatus)) return false; // nunca pingeada → no bloquear
+
+        var down = !string.Equals(snap.LastStatus, "authenticated", StringComparison.OrdinalIgnoreCase)
+                   && snap.ConsecutivePingFailures >= KnownDownFailureThreshold;
+        return down;
+    }
+
+    /// <summary>
     /// Construye el IChannelProvider correcto según line.Provider.
     /// Aditivo: UltraMsg sigue siendo el default; MetaCloudApi usa las credenciales
     /// Meta de la línea (InstanceId = phone_number_id). Crea un HttpClient nuevo —

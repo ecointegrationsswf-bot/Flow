@@ -21,4 +21,15 @@ public interface IChannelProviderFactory
     /// Útil cuando el agente ya sabe qué línea usar (ej: agente vinculado a una línea).
     /// </summary>
     Task<IChannelProvider?> GetProviderByLineAsync(Guid lineId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Snapshot SIN red del estado de salud persistido de una línea (LastStatus /
+    /// ConsecutivePingFailures que escriben el job diario y los pre-checks de campaña).
+    /// Devuelve <c>true</c> solo cuando la línea está CONFIRMADA caída: estado distinto
+    /// de "authenticated" y ≥2 fallos consecutivos. Si nunca se pingeó (LastStatus null)
+    /// devuelve <c>false</c> (no bloquear por falta de datos). Pensado para que la ruta
+    /// de respuesta del agente no intente enviar por una línea muerta, sin agregar
+    /// latencia (cero llamadas al proveedor). Aplica a UltraMsg y Meta por igual.
+    /// </summary>
+    Task<bool> IsLineKnownDownAsync(Guid lineId, CancellationToken ct = default);
 }
