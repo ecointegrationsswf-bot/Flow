@@ -269,6 +269,11 @@ builder.Services.AddHttpClient<
     AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaCloudApiHealthService,
     AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaCloudApiHealthService>();
 
+// Renderer de plantillas Meta (sustitución {{n}}) — usado por dispatcher y follow-up sweep.
+builder.Services.AddSingleton<
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaTemplateRenderer,
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaTemplateRenderer>();
+
 // Validador de números WhatsApp (lista negra + UltraMsg /contacts/check)
 builder.Services.AddHttpClient<AgentFlow.Infrastructure.Channels.UltraMsg.UltraMsgContactsChecker>();
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IWhatsAppNumberValidator,

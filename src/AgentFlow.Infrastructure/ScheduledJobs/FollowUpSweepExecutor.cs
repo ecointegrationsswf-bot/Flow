@@ -33,6 +33,7 @@ public class FollowUpSweepExecutor(
     IChannelProviderFactory providerFactory,
     IUltraMsgInstanceService ultraMsgInstance,
     IMetaCloudApiHealthService metaHealth,
+    IMetaTemplateRenderer metaRenderer,
     IBusinessHoursClock businessHours,
     JobExecutionAuditor auditor,
     ILogger<FollowUpSweepExecutor> log) : IScheduledJobExecutor
@@ -319,7 +320,8 @@ public class FollowUpSweepExecutor(
             return (DispatchOutcome.Skipped, 0, null);
 
         if (template.FollowUpHours.Count == 0) return (DispatchOutcome.Skipped, 0, null);
-        if (string.IsNullOrEmpty(template.FollowUpMessagesJson)) return (DispatchOutcome.Skipped, 0, null);
+        // Nota: FollowUpMessagesJson (texto) solo es requerido para UltraMsg; Meta usa
+        // FollowUpTemplateIdsJson. La validación por proveedor se hace abajo.
 
         var sentIndices = ParseIndices(contact.FollowUpsSentJson);
 
@@ -352,22 +354,63 @@ public class FollowUpSweepExecutor(
         if (conv is null) return (DispatchOutcome.Skipped, 0, null);
         if (conv.Status != ConversationStatus.WaitingClient) return (DispatchOutcome.Skipped, 0, null);
 
-        // Resolver mensaje
-        List<string>? messages;
-        try { messages = JsonSerializer.Deserialize<List<string>>(template.FollowUpMessagesJson); }
-        catch { return (DispatchOutcome.Skipped, 0, null); }
-        if (messages is null || dueIndex.Value >= messages.Count
-            || string.IsNullOrWhiteSpace(messages[dueIndex.Value]))
-            return (DispatchOutcome.Skipped, 0, null);
-
-        var resolved = ResolveVariables(messages[dueIndex.Value], contact);
-
-        // Enviar
         var provider = await providerFactory.GetProviderAsync(contact.Campaign.TenantId, ct);
         if (provider is null) return (DispatchOutcome.Failed, 0, "Tenant sin provider WhatsApp activo");
 
-        var sendResult = await provider.SendMessageAsync(
-            new SendMessageRequest(contact.PhoneNumber, resolved), ct);
+        string resolved;          // texto final (lo que se persiste/muestra)
+        SendMessageRequest sendReq;
+
+        if (provider.ProviderType == ProviderType.MetaCloudApi)
+        {
+            // ── Seguimiento por PLANTILLA aprobada (Meta exige plantilla fuera de 24h) ──
+            var tplId = ParseFollowUpTemplateId(template.FollowUpTemplateIdsJson, dueIndex.Value);
+            if (tplId is null)
+            {
+                log.LogInformation("[FollowUpSweep] idx={Idx} {Phone}: sin plantilla Meta configurada para este seguimiento — se salta.",
+                    dueIndex.Value, contact.PhoneNumber);
+                return (DispatchOutcome.Skipped, 0, null);
+            }
+
+            var tpl = await db.Set<MetaMessageTemplate>()
+                .FirstOrDefaultAsync(x => x.Id == tplId.Value && x.TenantId == contact.Campaign.TenantId, ct);
+            if (tpl is null || tpl.MetaStatus != MetaTemplateStatuses.Approved || !tpl.IsEnabled
+                || tpl.Purpose != MetaTemplatePurposes.FollowUp)
+            {
+                log.LogWarning("[FollowUpSweep] idx={Idx} {Phone}: plantilla {Tpl} no usable (no aprobada/activa/seguimiento) — se salta.",
+                    dueIndex.Value, contact.PhoneNumber, tplId);
+                return (DispatchOutcome.Skipped, 0, null);
+            }
+
+            var render = metaRenderer.Render(tpl, contact);
+            if (!render.Success)
+            {
+                log.LogWarning("[FollowUpSweep] idx={Idx} {Phone}: no se pudo renderizar '{Name}' — {Err}. Se salta.",
+                    dueIndex.Value, contact.PhoneNumber, tpl.Name, render.Error);
+                return (DispatchOutcome.Skipped, 0, null);
+            }
+
+            resolved = render.RenderedBody;
+            sendReq = new SendMessageRequest(
+                To: contact.PhoneNumber, Body: tpl.BodyText,
+                TemplateName: tpl.Name, TemplateLanguage: tpl.Language,
+                TemplateBodyParams: render.BodyParams, TemplateHeaderParam: render.HeaderParam);
+        }
+        else
+        {
+            // ── Texto libre (UltraMsg) ──
+            if (string.IsNullOrEmpty(template.FollowUpMessagesJson)) return (DispatchOutcome.Skipped, 0, null);
+            List<string>? messages;
+            try { messages = JsonSerializer.Deserialize<List<string>>(template.FollowUpMessagesJson); }
+            catch { return (DispatchOutcome.Skipped, 0, null); }
+            if (messages is null || dueIndex.Value >= messages.Count
+                || string.IsNullOrWhiteSpace(messages[dueIndex.Value]))
+                return (DispatchOutcome.Skipped, 0, null);
+
+            resolved = ResolveVariables(messages[dueIndex.Value], contact);
+            sendReq = new SendMessageRequest(contact.PhoneNumber, resolved);
+        }
+
+        var sendResult = await provider.SendMessageAsync(sendReq, ct);
         if (!sendResult.Success) return (DispatchOutcome.Failed, 0, sendResult.Error ?? "Provider WhatsApp respondió error sin detalle");
 
         // Persistir Message + actualizar FollowUpsSentJson + LastActivityAt.
@@ -403,6 +446,22 @@ public class FollowUpSweepExecutor(
         if (string.IsNullOrWhiteSpace(json)) return new List<int>();
         try { return JsonSerializer.Deserialize<List<int>>(json) ?? new List<int>(); }
         catch { return new List<int>(); }
+    }
+
+    /// <summary>
+    /// Lee el ID de plantilla Meta configurado para el follow-up de índice <paramref name="index"/>
+    /// desde FollowUpTemplateIdsJson (List&lt;Guid?&gt; paralelo a FollowUpHours). null si no hay.
+    /// </summary>
+    private static Guid? ParseFollowUpTemplateId(string? json, int index)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            var ids = JsonSerializer.Deserialize<List<Guid?>>(json);
+            if (ids is not null && index >= 0 && index < ids.Count) return ids[index];
+        }
+        catch { }
+        return null;
     }
 
     private static string ResolveVariables(string template, CampaignContact c)

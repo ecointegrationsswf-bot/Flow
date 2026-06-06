@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
@@ -30,7 +32,7 @@ namespace AgentFlow.Infrastructure.Campaigns;
 /// - El claim atómico (Queued→Claimed con ExecuteUpdate filtrado por DispatchStatus)
 ///   garantiza que dos instancias del Worker NUNCA tomen el mismo CampaignContact.
 /// </summary>
-public class CampaignDispatcherService(
+public partial class CampaignDispatcherService(
     AgentFlowDbContext db,
     IChannelProviderFactory providerFactory,
     IWebhookEventDispatcher eventDispatcher,
@@ -41,6 +43,7 @@ public class CampaignDispatcherService(
     EmailTemplateRenderer emailRenderer,
     IUltraMsgInstanceService ultraMsgInstance,
     IMetaCloudApiHealthService metaHealth,
+    IMetaTemplateRenderer metaRenderer,
     ITeamsNotifier teamsNotifier,
     IWhatsAppNumberValidator whatsAppValidator,
     ILogger<CampaignDispatcherService> logger)
@@ -422,6 +425,23 @@ public class CampaignDispatcherService(
         var failed = 0;
         var consecutiveErrors = 0;
 
+        // ── Fase 2: si la línea es Meta, cargamos las plantillas APROBADAS+ACTIVAS
+        // del maestro UNA vez por batch, ordenadas por secuencia de burbujas. La
+        // campaña enviará estas plantillas (no texto libre del LLM). La validación
+        // de lanzamiento ya garantiza que haya ≥1; acá es defensivo.
+        List<MetaMessageTemplate> metaCampaignTemplates = [];
+        if (waProvider?.ProviderType == ProviderType.MetaCloudApi && campaign.CampaignTemplateId.HasValue)
+        {
+            metaCampaignTemplates = await db.Set<MetaMessageTemplate>()
+                .Where(t => t.TenantId == tenant.Id
+                         && t.CampaignTemplateId == campaign.CampaignTemplateId
+                         && t.Purpose == MetaTemplatePurposes.Launch
+                         && t.MetaStatus == MetaTemplateStatuses.Approved
+                         && t.IsEnabled)
+                .OrderBy(t => t.SequenceOrder)
+                .ToListAsync(ct);
+        }
+
         // Try/finally para garantizar que cualquier contacto que quede Claimed
         // por nosotros pero NO fue procesado (porque el ct cancelló durante
         // Task.Delay, o una excepción no controlada burbujeó del send), vuelva
@@ -494,6 +514,14 @@ public class CampaignDispatcherService(
                     {
                         if (waProvider is null) continue; // sin línea, ya logueado arriba
                         if (string.IsNullOrWhiteSpace(contact.PhoneNumber)) continue;
+
+                        // ── Fase 2: línea Meta → enviar PLANTILLAS aprobadas del maestro (no LLM) ──
+                        if (waProvider.ProviderType == ProviderType.MetaCloudApi)
+                        {
+                            attempt = await SendMetaCampaignAsync(campaign, contact, metaCampaignTemplates, waProvider, ct);
+                        }
+                        else
+                        {
 
                         string? message = null;
                         string? generationError = null;
@@ -676,6 +704,7 @@ public class CampaignDispatcherService(
                                     Recipient: contact.PhoneNumber);
                             }
                         }
+                        } // ── cierre del else no-Meta (flujo UltraMsg: LLM + texto libre) ──
                     }
                     else
                     {
@@ -1045,6 +1074,57 @@ por el sistema de protección anti-restricción.</p>
 
     private static string? Truncate(string? s, int max) =>
         s is null ? null : s.Length <= max ? s : s[..max];
+
+    // ────────────────────────── Fase 2: envío por plantillas Meta ──────────────────────────
+
+    /// <summary>
+    /// Envía las plantillas Meta aprobadas del maestro a un contacto, EN SECUENCIA
+    /// (SequenceOrder). La sustitución de {{n}} la hace el renderer compartido. Si falta
+    /// el mapeo o un campo viene vacío, marca el contacto como FALLIDO (no manda un
+    /// mensaje roto ni arriesga rechazo en masa de Meta).
+    /// </summary>
+    private async Task<DispatchAttemptResult> SendMetaCampaignAsync(
+        Campaign campaign, CampaignContact contact,
+        List<MetaMessageTemplate> templates, IChannelProvider provider, CancellationToken ct)
+    {
+        if (templates.Count == 0)
+            return new DispatchAttemptResult(false, null,
+                "El maestro no tiene plantillas de Meta aprobadas y activas. Aprobá al menos una en la pestaña Plantillas Meta.",
+                null, null, contact.PhoneNumber);
+
+        string? lastExternalId = null;
+        var sentBodies = new List<string>();
+
+        for (var i = 0; i < templates.Count; i++)
+        {
+            var t = templates[i];
+            if (i > 0) await Task.Delay(BubbleDelayMs, ct);
+
+            var render = metaRenderer.Render(t, contact);
+            if (!render.Success)
+                return new DispatchAttemptResult(false, null, render.Error, null, null, contact.PhoneNumber);
+
+            var res = await provider.SendMessageAsync(new SendMessageRequest(
+                To: contact.PhoneNumber,
+                Body: t.BodyText,
+                TemplateName: t.Name,
+                TemplateLanguage: t.Language,
+                TemplateBodyParams: render.BodyParams,
+                TemplateHeaderParam: render.HeaderParam), ct);
+
+            if (!res.Success)
+                return new DispatchAttemptResult(false, res.ExternalMessageId,
+                    $"Falló el envío de la plantilla '{t.Name}': {res.Error}",
+                    null, null, contact.PhoneNumber);
+
+            lastExternalId = res.ExternalMessageId;
+            sentBodies.Add(render.RenderedBody);
+        }
+
+        // SentContent = texto con valores sustituidos (separado por '~' si fueron varias burbujas) para el monitor.
+        return new DispatchAttemptResult(true, lastExternalId, null,
+            string.Join("\n~\n", sentBodies), null, contact.PhoneNumber);
+    }
 
     // ── Segmentación de mensajes en "burbujas" ──────────────────────────────
     // Algunos prompts (ej. AFTA) separan parrafos con '~' para que el cliente

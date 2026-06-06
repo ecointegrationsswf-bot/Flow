@@ -235,6 +235,7 @@ export interface WhatsAppLine {
 // es independiente de nuestro flag isEnabled y del estado de la campaña.
 export type MetaTemplateStatus = 'DRAFT' | 'PENDING' | 'APPROVED' | 'REJECTED' | 'PAUSED' | 'DISABLED'
 export type MetaTemplateCategory = 'MARKETING' | 'UTILITY' | 'AUTHENTICATION'
+export type MetaTemplatePurpose = 'Launch' | 'FollowUp'
 
 export interface MetaMessageTemplate {
   id: string
@@ -254,6 +255,9 @@ export interface MetaMessageTemplate {
   isEnabled: boolean
   bubbleGroupId?: string | null
   sequenceOrder: number
+  campaignTemplateId?: string | null
+  purpose: MetaTemplatePurpose
+  bodyMapping: string[]
   usable: boolean
   createdAt: string
   updatedAt?: string | null

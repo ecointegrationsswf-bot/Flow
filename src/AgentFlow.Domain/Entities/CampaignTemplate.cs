@@ -45,6 +45,14 @@ public class CampaignTemplate
     /// </summary>
     public string? FollowUpMessagesJson { get; set; }
 
+    /// <summary>
+    /// JSON array (List&lt;Guid?&gt;) de IDs de plantilla Meta de seguimiento, paralelo a
+    /// FollowUpHours. Índice i → plantilla a usar en el follow-up i cuando la línea es
+    /// Meta (en vez del texto libre de FollowUpMessagesJson, inválido fuera de 24h).
+    /// null en un índice = sin plantilla configurada (el Worker salta ese seguimiento).
+    /// </summary>
+    public string? FollowUpTemplateIdsJson { get; set; }
+
     // Cierre automático — horas después de enviada
     public int AutoCloseHours { get; set; } = 72;
 

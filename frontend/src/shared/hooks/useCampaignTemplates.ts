@@ -29,6 +29,8 @@ export interface CampaignTemplate {
   followUpHours: number[]
   /** JSON array de mensajes de seguimiento, paralelo a followUpHours (Fase 2). NULL = sin seguimientos automáticos. */
   followUpMessagesJson: string | null
+  /** JSON array de IDs de plantilla Meta de seguimiento, paralelo a followUpHours. NULL si no aplica. */
+  followUpTemplateIdsJson: string | null
   autoCloseHours: number
   /** Mensaje enviado al cerrar automáticamente la campaña (Fase 2). NULL = cerrar sin avisar. */
   autoCloseMessage: string | null
@@ -72,6 +74,7 @@ export interface CampaignTemplatePayload {
   agentDefinitionId: string
   followUpHours: number[]
   followUpMessagesJson?: string | null
+  followUpTemplateIdsJson?: string | null
   autoCloseHours: number
   autoCloseMessage?: string | null
   labelIds: string[]

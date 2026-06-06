@@ -31,9 +31,13 @@ public class MetaCloudApiProvider(HttpClient http, MetaCloudApiOptions options) 
         if (string.IsNullOrWhiteSpace(options.PhoneNumberId) || string.IsNullOrWhiteSpace(options.AccessToken))
             return new SendResult(false, null, "Meta: línea sin Phone Number ID o Access Token configurados.");
 
-        // Payload según tipo. Media por link (Meta descarga la URL).
+        // Payload según tipo. Plantilla (type=template) tiene prioridad — es el único
+        // formato válido para iniciar conversación en frío (fuera de la ventana de 24h).
+        // Si no, media por link, o texto libre.
         object payload =
-            !string.IsNullOrEmpty(req.MediaUrl) && req.MediaType == "image"
+            !string.IsNullOrWhiteSpace(req.TemplateName)
+                ? BuildTemplatePayload(req)
+          : !string.IsNullOrEmpty(req.MediaUrl) && req.MediaType == "image"
                 ? new { messaging_product = "whatsapp", to = req.To, type = "image", image = new { link = req.MediaUrl, caption = req.Body } }
           : !string.IsNullOrEmpty(req.MediaUrl) && req.MediaType == "document"
                 ? new { messaging_product = "whatsapp", to = req.To, type = "document", document = new { link = req.MediaUrl, filename = req.Filename ?? "documento.pdf", caption = req.Body } }
@@ -50,6 +54,46 @@ public class MetaCloudApiProvider(HttpClient http, MetaCloudApiOptions options) 
 
         var body = await response.Content.ReadAsStringAsync(ct);
         return InterpretMetaResponse(body, response.StatusCode);
+    }
+
+    /// <summary>
+    /// Arma el payload type=template. Solo agrega componentes con parámetros
+    /// (header con 1 var, body con N vars). Una plantilla sin variables va sin
+    /// componentes (solo name+language). El orden de los body params corresponde
+    /// a {{1}},{{2}}… El idioma cae a "es" si no viene.
+    /// </summary>
+    private object BuildTemplatePayload(SendMessageRequest req)
+    {
+        var components = new List<object>();
+
+        if (!string.IsNullOrWhiteSpace(req.TemplateHeaderParam))
+            components.Add(new
+            {
+                type = "header",
+                parameters = new[] { new { type = "text", text = req.TemplateHeaderParam } },
+            });
+
+        if (req.TemplateBodyParams is { Count: > 0 })
+            components.Add(new
+            {
+                type = "body",
+                parameters = req.TemplateBodyParams.Select(p => new { type = "text", text = p ?? "" }).ToArray(),
+            });
+
+        var template = components.Count > 0
+            ? (object)new
+            {
+                name = req.TemplateName,
+                language = new { code = string.IsNullOrWhiteSpace(req.TemplateLanguage) ? "es" : req.TemplateLanguage },
+                components,
+            }
+            : new
+            {
+                name = req.TemplateName,
+                language = new { code = string.IsNullOrWhiteSpace(req.TemplateLanguage) ? "es" : req.TemplateLanguage },
+            };
+
+        return new { messaging_product = "whatsapp", to = req.To, type = "template", template };
     }
 
     /// <summary>

@@ -23,7 +23,15 @@ public record SendMessageRequest(
     string? MediaUrl = null,
     string? MediaType = null,   // "image" | "document" | "audio"
     string? Filename = null,    // nombre de archivo para documentos
-    string? ExternalId = null
+    string? ExternalId = null,
+    // ── Envío como plantilla de Meta (type=template) ──────────────────────
+    // Si TemplateName != null, el provider Meta arma el payload de plantilla
+    // (arranque en frío fuera de la ventana de 24h) en vez de texto libre.
+    // UltraMsg ignora estos campos. Los parámetros van en el orden {{1}},{{2}}…
+    string? TemplateName = null,
+    string? TemplateLanguage = null,
+    IReadOnlyList<string>? TemplateBodyParams = null,
+    string? TemplateHeaderParam = null
 );
 
 public record SendResult(

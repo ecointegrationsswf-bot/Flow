@@ -6,11 +6,11 @@ import {
 import {
   useMetaTemplates, useCreateMetaTemplate, useUpdateMetaTemplate,
   useToggleMetaTemplate, useSyncMetaTemplate, useSyncAllMetaTemplates, useGenerateFromPrompt,
-  useSubmitMetaTemplate, useDeleteMetaTemplate,
+  useSubmitMetaTemplate, useDeleteMetaTemplate, useAvailableFields,
   type MetaTemplatePayload,
 } from '@/shared/hooks/useMetaTemplates'
 import { useParseEmailSample } from '@/shared/hooks/useCampaignTemplates'
-import type { MetaMessageTemplate, MetaTemplateCategory, MetaTemplateStatus } from '@/shared/types/models'
+import type { MetaMessageTemplate, MetaTemplateCategory, MetaTemplateStatus, MetaTemplatePurpose } from '@/shared/types/models'
 import { confirmDialog, toast } from '@/shared/components/dialog'
 
 /** Cuenta los placeholders distintos {{n}} en un texto y devuelve el máximo n. */
@@ -56,17 +56,19 @@ interface FormState {
   name: string
   language: string
   category: MetaTemplateCategory
+  purpose: MetaTemplatePurpose
   headerText: string
   bodyText: string
   footerText: string
   headerSamples: string[]
   bodySamples: string[]
+  bodyMapping: string[]   // campo para cada {{n}} del cuerpo
 }
 
 const EMPTY_FORM: FormState = {
-  name: '', language: 'es', category: 'UTILITY',
+  name: '', language: 'es', category: 'UTILITY', purpose: 'Launch',
   headerText: '', bodyText: '', footerText: '',
-  headerSamples: [], bodySamples: [],
+  headerSamples: [], bodySamples: [], bodyMapping: [],
 }
 
 export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
@@ -75,7 +77,7 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
   baseName?: string
 }) {
   const { data: templates, isLoading } = useMetaTemplates(lineId)
-  const createMut = useCreateMetaTemplate(lineId)
+  const createMut = useCreateMetaTemplate(lineId, campaignTemplateId)
   const updateMut = useUpdateMetaTemplate(lineId)
   const toggleMut = useToggleMetaTemplate(lineId)
   const syncMut = useSyncMetaTemplate(lineId)
@@ -94,6 +96,9 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
   const [showCatHelp, setShowCatHelp] = useState(false)
   const isEditing = !!form.id
 
+  // Campos del maestro para mapear {{n}}→campo (estándar + columnas del proceso/Excel).
+  const { data: availableFields } = useAvailableFields(campaignTemplateId)
+
   const headerVars = useMemo(() => Math.min(countVars(form.headerText), 1), [form.headerText])
   const bodyVars = useMemo(() => countVars(form.bodyText), [form.bodyText])
 
@@ -107,11 +112,13 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
       name: t.name,
       language: t.language,
       category: t.category,
+      purpose: t.purpose ?? 'Launch',
       headerText: t.headerText ?? '',
       bodyText: t.bodyText,
       footerText: t.footerText ?? '',
       headerSamples: t.headerSamples ?? [],
       bodySamples: t.bodySamples ?? [],
+      bodyMapping: t.bodyMapping ?? [],
     })
     setShowForm(true)
   }
@@ -124,6 +131,14 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
     })
   }
 
+  function setMapping(idx: number, value: string) {
+    setForm(f => {
+      const arr = [...f.bodyMapping]
+      arr[idx] = value
+      return { ...f, bodyMapping: arr }
+    })
+  }
+
   async function submit(submitToMeta: boolean) {
     // Validación cliente — alinea con el backend para evitar rebotes.
     if (!form.name.trim()) { toast.error('El nombre es obligatorio.'); return }
@@ -132,16 +147,22 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
     const bSamples = form.bodySamples.slice(0, bodyVars).filter(s => s.trim())
     if (hSamples.length !== headerVars) { toast.error('Completá el ejemplo del encabezado.'); return }
     if (bSamples.length !== bodyVars) { toast.error(`Completá los ${bodyVars} ejemplo(s) del cuerpo.`); return }
+    const bMapping = form.bodyMapping.slice(0, bodyVars).map(s => (s ?? '').trim())
+    if (bMapping.some(f2 => !f2) || bMapping.length !== bodyVars) {
+      toast.error(`Asigná el campo de cada variable {{n}} (mapeo). Faltan ${bodyVars - bMapping.filter(Boolean).length}.`); return
+    }
 
     const payload: MetaTemplatePayload = {
       name: form.name.trim(),
       language: form.language.trim() || 'es',
       category: form.category,
+      purpose: form.purpose,
       headerText: form.headerText.trim() || null,
       bodyText: form.bodyText.trim(),
       footerText: form.footerText.trim() || null,
       headerSamples: hSamples,
       bodySamples: bSamples,
+      bodyMapping: bMapping,
       submitToMeta,
     }
 
@@ -376,13 +397,23 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
             <button type="button" onClick={resetForm} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium text-gray-600">Nombre (se normaliza a snake_case)</span>
               <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
                 placeholder="recordatorio_pago"
                 className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm" />
             </label>
+            <label className="block">
+              <span className="text-xs font-medium text-gray-600">Tipo de uso</span>
+              <select value={form.purpose} onChange={e => setForm(f => ({ ...f, purpose: e.target.value as MetaTemplatePurpose }))}
+                className="mt-1 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm">
+                <option value="Launch">Lanzamiento (mensaje inicial)</option>
+                <option value="FollowUp">Seguimiento</option>
+              </select>
+            </label>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <label className="block">
               <span className="text-xs font-medium text-gray-600">Idioma</span>
               <input value={form.language} onChange={e => setForm(f => ({ ...f, language: e.target.value }))}
@@ -458,14 +489,22 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
           </label>
           {bodyVars > 0 && (
             <div className="pl-3 space-y-2">
-              <span className="text-xs text-gray-500">Ejemplos del cuerpo (Meta los exige):</span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <span className="text-xs text-gray-500">
+                Variables del cuerpo — asigná a cada <span className="font-mono">{'{{n}}'}</span> el <b>campo</b> (de dónde sale el dato al enviar) y un <b>ejemplo</b> (Meta lo exige):
+              </span>
+              <div className="space-y-2">
                 {Array.from({ length: bodyVars }).map((_, i) => (
-                  <label key={i} className="block">
-                    <span className="text-xs text-gray-500">{`{{${i + 1}}}`}</span>
+                  <div key={i} className="flex flex-wrap items-center gap-2">
+                    <span className="w-10 shrink-0 font-mono text-xs font-semibold text-indigo-600">{`{{${i + 1}}}`}</span>
+                    <select value={form.bodyMapping[i] ?? ''} onChange={e => setMapping(i, e.target.value)}
+                      className="min-w-[10rem] flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
+                      <option value="">— campo —</option>
+                      {(availableFields ?? []).map(fld => <option key={fld} value={fld}>{fld}</option>)}
+                    </select>
                     <input value={form.bodySamples[i] ?? ''} onChange={e => setSample('body', i, e.target.value)}
-                      className="mt-0.5 w-full rounded-lg border border-gray-300 px-3 py-1.5 text-sm" />
-                  </label>
+                      placeholder="ejemplo (ej: Juan)"
+                      className="min-w-[8rem] flex-1 rounded-lg border border-gray-300 px-3 py-1.5 text-sm" />
+                  </div>
                 ))}
               </div>
             </div>
@@ -515,6 +554,9 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-mono text-sm font-semibold text-gray-900">{t.name}</span>
+                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${t.purpose === 'FollowUp' ? 'bg-teal-100 text-teal-700' : 'bg-violet-100 text-violet-700'}`}>
+                        {t.purpose === 'FollowUp' ? 'Seguimiento' : 'Lanzamiento'}
+                      </span>
                       {groupSize > 1 && (
                         <span className="inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5 text-xs font-medium"
                           title="Estas plantillas se envían en secuencia en la campaña (replican las burbujas del prompt)">

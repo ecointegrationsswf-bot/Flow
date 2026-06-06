@@ -330,6 +330,11 @@ builder.Services.AddHttpClient<
 builder.Services.AddHttpClient<
     AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaTemplateService,
     AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaCloudApiTemplateService>();
+
+// Renderer de plantillas Meta (sustitución {{n}}) — compartido dispatcher + follow-ups.
+builder.Services.AddSingleton<
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaTemplateRenderer,
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaTemplateRenderer>();
 builder.Services.AddScoped<IChannelProviderFactory, AgentFlow.Infrastructure.Channels.ChannelProviderFactory>();
 
 // Validador de números WhatsApp (lista negra + UltraMsg /contacts/check)
@@ -575,6 +580,16 @@ var app = builder.Build();
                 ALTER TABLE MetaMessageTemplates ADD BubbleGroupId uniqueidentifier NULL;
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('MetaMessageTemplates') AND name = 'SequenceOrder')
                 ALTER TABLE MetaMessageTemplates ADD SequenceOrder int NOT NULL DEFAULT 1;");
+        // Fase 2: vínculo plantilla → maestro de campaña.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('MetaMessageTemplates') AND name = 'CampaignTemplateId')
+                ALTER TABLE MetaMessageTemplates ADD CampaignTemplateId uniqueidentifier NULL;");
+        // Seguimientos: tipo de plantilla + IDs de plantilla por follow-up.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('MetaMessageTemplates') AND name = 'Purpose')
+                ALTER TABLE MetaMessageTemplates ADD Purpose nvarchar(20) NOT NULL DEFAULT 'Launch';
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'FollowUpTemplateIdsJson')
+                ALTER TABLE CampaignTemplates ADD FollowUpTemplateIdsJson nvarchar(max) NULL;");
         Console.WriteLine("[Startup] Columnas de seguridad verificadas.");
     }
     catch (Exception ex)

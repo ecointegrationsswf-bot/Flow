@@ -45,7 +45,8 @@ public class CampaignsController(
     AgentFlowDbContext db,
     IConfiguration cfg,
     IHttpClientFactory httpClientFactory,
-    IUltraMsgInstanceService ultraMsg) : ControllerBase
+    IUltraMsgInstanceService ultraMsg,
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaCloudApiHealthService metaHealth) : ControllerBase
 {
     // Devuelve el nombre completo del usuario autenticado (claim full_name),
     // con fallback a email y luego a "system".
@@ -198,7 +199,7 @@ public class CampaignsController(
     {
         var campaign = await db.Campaigns
             .Where(c => c.Id == campaignId && c.TenantId == tenantId)
-            .Select(c => new { c.Channel, c.AgentDefinitionId })
+            .Select(c => new { c.Channel, c.AgentDefinitionId, c.CampaignTemplateId })
             .FirstOrDefaultAsync(ct);
 
         if (campaign is null) return null; // El handler maneja el 404
@@ -223,10 +224,51 @@ public class CampaignsController(
         if (!line.IsActive)
             return $"La línea de WhatsApp \"{line.DisplayName}\" está deshabilitada. Actívala en Configuración → WhatsApp antes de lanzar la campaña.";
 
-        // Ping en vivo (5s de timeout máximo).
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         cts.CancelAfter(TimeSpan.FromSeconds(5));
 
+        // ── Línea Meta: salud vía Graph API + exigir plantilla aprobada del maestro ──
+        if (line.Provider == ProviderType.MetaCloudApi)
+        {
+            string metaStatus;
+            try
+            {
+                var h = await metaHealth.GetHealthAsync(line.InstanceId, line.MetaAccessToken ?? "", null, cts.Token);
+                metaStatus = h.Status;
+            }
+            catch
+            {
+                return $"No fue posible verificar el estado de la línea Meta \"{line.DisplayName}\". Intenta de nuevo en unos segundos.";
+            }
+
+            line.LastStatus = metaStatus;
+            line.LastStatusCheckedAt = DateTime.UtcNow;
+            if (string.Equals(metaStatus, "authenticated", StringComparison.OrdinalIgnoreCase))
+                line.ConsecutivePingFailures = 0;
+            await db.SaveChangesAsync(ct);
+
+            if (!string.Equals(metaStatus, "authenticated", StringComparison.OrdinalIgnoreCase))
+                return $"La línea Meta \"{line.DisplayName}\" no está operativa (estado: {metaStatus}). Revisá el token/WABA en Configuración → WhatsApp.";
+
+            // Regla Fase 2: Meta exige plantilla aprobada para iniciar en frío. El maestro
+            // debe tener al menos UNA plantilla aprobada y activa.
+            var approvedTemplates = campaign.CampaignTemplateId.HasValue
+                ? await db.Set<Domain.Entities.MetaMessageTemplate>().CountAsync(t =>
+                    t.TenantId == tenantId
+                    && t.CampaignTemplateId == campaign.CampaignTemplateId
+                    && t.Purpose == Domain.Entities.MetaTemplatePurposes.Launch
+                    && t.MetaStatus == Domain.Entities.MetaTemplateStatuses.Approved
+                    && t.IsEnabled, ct)
+                : 0;
+
+            if (approvedTemplates == 0)
+                return "No se puede lanzar la campaña: el maestro no tiene plantillas de Meta de tipo Lanzamiento aprobadas y activas. " +
+                       "Creá o aprobá al menos una en el maestro → pestaña \"Plantillas Meta\" (y esperá la aprobación de Meta) antes de lanzar.";
+
+            return null;
+        }
+
+        // ── Línea UltraMsg: ping en vivo /instance/status ──
         string status;
         try
         {

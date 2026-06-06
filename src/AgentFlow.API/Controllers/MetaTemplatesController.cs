@@ -17,13 +17,18 @@ public record CreateMetaTemplateRequest(
     Guid LineId, string Name, string? Language, string? Category,
     string? HeaderText, string BodyText, string? FooterText,
     List<string>? HeaderSamples, List<string>? BodySamples,
-    bool SubmitToMeta = true);
+    bool SubmitToMeta = true,
+    Guid? CampaignTemplateId = null,
+    string? Purpose = null,
+    List<string>? BodyMapping = null);   // campo {{n}}→field, paralelo a BodySamples
 
 public record UpdateMetaTemplateRequest(
     string Name, string? Language, string? Category,
     string? HeaderText, string BodyText, string? FooterText,
     List<string>? HeaderSamples, List<string>? BodySamples,
-    bool SubmitToMeta = true);
+    bool SubmitToMeta = true,
+    string? Purpose = null,
+    List<string>? BodyMapping = null);
 
 [ApiController]
 [Route("api/meta-templates")]
@@ -44,6 +49,14 @@ public partial class MetaTemplatesController(
             .OrderByDescending(t => t.CreatedAt).ThenBy(t => t.SequenceOrder)
             .ToListAsync(ct);
         return Ok(items.Select(Project));
+    }
+
+    // ── CAMPOS DISPONIBLES para el mapeo {{n}}→campo (form manual) ───────
+    [HttpGet("available-fields")]
+    public async Task<IActionResult> AvailableFields([FromQuery] Guid campaignTemplateId, CancellationToken ct)
+    {
+        var fields = await templateGenerator.GetAvailableFieldsAsync(tenantCtx.TenantId, campaignTemplateId, ct);
+        return Ok(new { fields });
     }
 
     // ── CREAR (+ enviar a Meta, salvo SubmitToMeta=false → DRAFT local) ──
@@ -82,8 +95,11 @@ public partial class MetaTemplatesController(
             BodyText = req.BodyText.Trim(),
             FooterText = string.IsNullOrWhiteSpace(req.FooterText) ? null : req.FooterText!.Trim(),
             VariableSamplesJson = SerializeSamples(req.HeaderSamples, req.BodySamples),
+            ParameterMappingJson = SerializeMapping(req.BodyMapping),
+            Purpose = MetaTemplatePurposes.IsValid(req.Purpose) ? req.Purpose! : MetaTemplatePurposes.Launch,
             MetaStatus = MetaTemplateStatuses.Draft,
             IsEnabled = true,
+            CampaignTemplateId = req.CampaignTemplateId,
             CreatedAt = DateTime.UtcNow,
             CreatedByUserId = CurrentUserId(),
         };
@@ -175,6 +191,7 @@ public partial class MetaTemplatesController(
                 IsEnabled = true,
                 BubbleGroupId = groupId,
                 SequenceOrder = i + 1,
+                CampaignTemplateId = req.CampaignTemplateId,
                 CreatedAt = createdAt,
                 CreatedByUserId = userId,
             });
@@ -229,6 +246,8 @@ public partial class MetaTemplatesController(
         entity.BodyText = req.BodyText.Trim();
         entity.FooterText = string.IsNullOrWhiteSpace(req.FooterText) ? null : req.FooterText!.Trim();
         entity.VariableSamplesJson = SerializeSamples(req.HeaderSamples, req.BodySamples);
+        entity.ParameterMappingJson = SerializeMapping(req.BodyMapping);
+        if (MetaTemplatePurposes.IsValid(req.Purpose)) entity.Purpose = req.Purpose!;
         entity.UpdatedAt = DateTime.UtcNow;
 
         if (req.SubmitToMeta)
@@ -518,6 +537,27 @@ public partial class MetaTemplatesController(
         return lowered;
     }
 
+    /// <summary>Serializa el mapeo {{n}}→campo como { "body": ["NombreCliente", ...] }.</summary>
+    private static string? SerializeMapping(List<string>? bodyMapping)
+    {
+        var body = (bodyMapping ?? new()).Select(s => s ?? "").ToList();
+        if (body.Count == 0) return null;
+        return JsonSerializer.Serialize(new { body });
+    }
+
+    private static List<string> DeserializeMapping(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("body", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                return arr.EnumerateArray().Select(e => e.GetString() ?? "").ToList();
+        }
+        catch { }
+        return new();
+    }
+
     private static string? SerializeSamples(List<string>? header, List<string>? body)
     {
         var obj = new
@@ -573,6 +613,9 @@ public partial class MetaTemplatesController(
             t.IsEnabled,
             t.BubbleGroupId,
             t.SequenceOrder,
+            t.CampaignTemplateId,
+            t.Purpose,
+            BodyMapping = DeserializeMapping(t.ParameterMappingJson),
             // Utilizable en campaña (Fase 2): aprobada + habilitada.
             Usable = t.MetaStatus == MetaTemplateStatuses.Approved && t.IsEnabled,
             t.CreatedAt,

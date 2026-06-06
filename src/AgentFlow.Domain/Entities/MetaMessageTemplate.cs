@@ -27,6 +27,15 @@ public class MetaMessageTemplate
     public Guid WhatsAppLineId { get; set; }
     public WhatsAppLine? WhatsAppLine { get; set; }
 
+    /// <summary>
+    /// Maestro de campaña al que pertenece esta plantilla (Fase 2). Las generadas desde
+    /// el prompt y las creadas desde la pestaña del maestro se estampan con su id. La
+    /// campaña Meta envía SOLO las plantillas de SU maestro (aprobadas + activas), en
+    /// orden de <see cref="SequenceOrder"/>. Null = plantilla de línea sin maestro
+    /// (ej. importada de Meta) — no se usa automáticamente en un envío de campaña.
+    /// </summary>
+    public Guid? CampaignTemplateId { get; set; }
+
     /// <summary>Nombre Meta: snake_case minúsculas. Único por (línea/WABA, idioma).</summary>
     public string Name { get; set; } = string.Empty;
 
@@ -70,6 +79,13 @@ public class MetaMessageTemplate
     /// <summary>Nuestro flag activar/desactivar para uso en campañas.</summary>
     public bool IsEnabled { get; set; } = true;
 
+    /// <summary>
+    /// Uso de la plantilla: <see cref="MetaTemplatePurposes.Launch"/> (mensaje inicial
+    /// de campaña, validado al lanzar) o <see cref="MetaTemplatePurposes.FollowUp"/>
+    /// (seguimientos automáticos, seleccionables por índice en el maestro). Tipo único.
+    /// </summary>
+    public string Purpose { get; set; } = MetaTemplatePurposes.Launch;
+
     // ── Secuencia de burbujas (split por '~') ────────────────────────────
     /// <summary>
     /// Agrupa las plantillas que nacieron de un mismo mensaje partido en burbujas
@@ -103,6 +119,15 @@ public static class MetaTemplateCategories
 
     public static bool IsValid(string? c) =>
         c is Marketing or Utility or Authentication;
+}
+
+/// <summary>Uso de la plantilla dentro del maestro de campaña.</summary>
+public static class MetaTemplatePurposes
+{
+    public const string Launch = "Launch";       // mensaje inicial de campaña
+    public const string FollowUp = "FollowUp";   // seguimientos automáticos
+
+    public static bool IsValid(string? p) => p is Launch or FollowUp;
 }
 
 /// <summary>Estados de aprobación de Meta (más nuestro DRAFT local).</summary>

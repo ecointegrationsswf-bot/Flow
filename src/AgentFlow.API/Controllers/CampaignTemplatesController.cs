@@ -29,6 +29,7 @@ public record CampaignTemplateRequest(
     string OutOfContextPolicy = "Contain",
     // Fase 2 — Campaign Automation Worker
     string? FollowUpMessagesJson = null,
+    string? FollowUpTemplateIdsJson = null,   // plantillas Meta de seguimiento por índice
     string? AutoCloseMessage = null,
     // Plantilla de correo personalizable (Fase 4 — tab "Correo")
     string? EmailSubject = null,
@@ -234,7 +235,7 @@ public class CampaignTemplatesController(
                 // Necesario en el frontend para evitar que el dropdown deje seleccionar
                 // maestros cuyo agente esté inactivo.
                 AgentIsActive = db.AgentDefinitions.Where(a => a.Id == t.AgentDefinitionId).Select(a => (bool?)a.IsActive).FirstOrDefault(),
-                t.FollowUpHours, t.FollowUpMessagesJson,
+                t.FollowUpHours, t.FollowUpMessagesJson, t.FollowUpTemplateIdsJson,
                 t.AutoCloseHours, t.AutoCloseMessage,
                 t.LabelIds,
                 t.SendEmail, t.EmailAddress,
@@ -262,7 +263,7 @@ public class CampaignTemplatesController(
             {
                 x.Id, x.Name, x.AgentDefinitionId,
                 AgentName = db.AgentDefinitions.Where(a => a.Id == x.AgentDefinitionId).Select(a => a.Name).FirstOrDefault(),
-                x.FollowUpHours, x.FollowUpMessagesJson,
+                x.FollowUpHours, x.FollowUpMessagesJson, x.FollowUpTemplateIdsJson,
                 x.AutoCloseHours, x.AutoCloseMessage,
                 x.LabelIds,
                 x.SendEmail, x.EmailAddress,
@@ -319,6 +320,7 @@ public class CampaignTemplatesController(
             IsPrimaryForAgent = swap.NewTemplateShouldBePrimary,
             FollowUpHours = req.FollowUpHours,
             FollowUpMessagesJson = req.FollowUpMessagesJson,
+            FollowUpTemplateIdsJson = req.FollowUpTemplateIdsJson,
             AutoCloseHours = req.AutoCloseHours,
             AutoCloseMessage = req.AutoCloseMessage,
             LabelIds = req.LabelIds,
@@ -391,6 +393,7 @@ public class CampaignTemplatesController(
         template.AgentDefinitionId = req.AgentDefinitionId;
         template.FollowUpHours = req.FollowUpHours;
         template.FollowUpMessagesJson = req.FollowUpMessagesJson;
+        template.FollowUpTemplateIdsJson = req.FollowUpTemplateIdsJson;
         template.AutoCloseHours = req.AutoCloseHours;
         template.AutoCloseMessage = req.AutoCloseMessage;
         template.LabelIds = req.LabelIds;
@@ -576,6 +579,7 @@ public class CampaignTemplatesController(
             IsPrimaryForAgent = false,
             FollowUpHours = [.. original.FollowUpHours],
             FollowUpMessagesJson = original.FollowUpMessagesJson,
+            FollowUpTemplateIdsJson = original.FollowUpTemplateIdsJson,
             AutoCloseHours = original.AutoCloseHours,
             AutoCloseMessage = original.AutoCloseMessage,
             LabelIds = [.. original.LabelIds],

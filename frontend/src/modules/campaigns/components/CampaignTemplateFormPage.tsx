@@ -12,6 +12,7 @@ import { ArrowLeft, Plus, X, Clock, Zap, FileText, Webhook, Mail, MessageSquare,
 import { useAgents } from '@/shared/hooks/useAgents'
 import { useLabels } from '@/shared/hooks/useLabels'
 import { useWhatsAppLines } from '@/shared/hooks/useWhatsAppLines'
+import { useMetaTemplates } from '@/shared/hooks/useMetaTemplates'
 import { WebhookBuilderModal } from '@/modules/webhookBuilder/components/WebhookBuilderModal'
 import { CampaignTemplateDocumentsSection } from './CampaignTemplateDocumentsSection'
 import { EmailTemplateTab, parseItemsConfig, DEFAULT_ITEMS_CONFIG, type ItemsConfigShape } from './EmailTemplateTab'
@@ -86,6 +87,15 @@ export function CampaignTemplateFormPage() {
     } catch { /* ignore */ }
     return existing.followUpHours.map(() => '')
   })
+  /** IDs de plantilla Meta de seguimiento, paralelos a followUpHours (solo agentes Meta). */
+  const [followUpTemplateIds, setFollowUpTemplateIds] = useState<string[]>(() => {
+    if (!existing?.followUpTemplateIdsJson) return existing?.followUpHours.map(() => '') ?? []
+    try {
+      const parsed = JSON.parse(existing.followUpTemplateIdsJson)
+      if (Array.isArray(parsed)) return parsed.map(s => (s ? String(s) : ''))
+    } catch { /* ignore */ }
+    return existing.followUpHours.map(() => '')
+  })
   const [selectedLabelIds, setSelectedLabelIds] = useState<string[]>(existing?.labelIds ?? [])
   const [selectedActionIds, setSelectedActionIds] = useState<string[]>(existing?.actionIds ?? [])
   const [selectedPromptIds, setSelectedPromptIds] = useState<string[]>(existing?.promptTemplateIds ?? [])
@@ -149,6 +159,19 @@ export function CampaignTemplateFormPage() {
       } catch { /* ignore parse errors */ }
     } else if (existing.followUpHours.length > 0) {
       setFollowUpMessages(existing.followUpHours.map(() => ''))
+    }
+    // Igual para los IDs de plantilla de seguimiento (Meta).
+    if (existing.followUpTemplateIdsJson) {
+      try {
+        const parsed = JSON.parse(existing.followUpTemplateIdsJson)
+        if (Array.isArray(parsed)) {
+          const normalized = parsed.map(s => (s ? String(s) : ''))
+          while (normalized.length < existing.followUpHours.length) normalized.push('')
+          setFollowUpTemplateIds(normalized.slice(0, existing.followUpHours.length))
+        }
+      } catch { /* ignore */ }
+    } else if (existing.followUpHours.length > 0) {
+      setFollowUpTemplateIds(existing.followUpHours.map(() => ''))
     }
     if (existing.labelIds.length > 0) setSelectedLabelIds(existing.labelIds)
     if (existing.actionIds.length > 0) setSelectedActionIds(existing.actionIds)
@@ -227,6 +250,11 @@ export function CampaignTemplateFormPage() {
   const agentLine = whatsAppLines?.find(l => l.id === selectedAgent?.whatsAppLineId)
   const metaLineId = agentLine?.provider === 'MetaCloudApi' ? agentLine.id : null
 
+  // Plantillas de SEGUIMIENTO aprobadas+activas de este maestro (para el selector por follow-up).
+  const { data: lineTemplates } = useMetaTemplates(metaLineId)
+  const followUpTemplateOptions = (lineTemplates ?? []).filter(
+    t => t.purpose === 'FollowUp' && t.usable && t.campaignTemplateId === id)
+
   // Si el usuario quita el canal Email del agente mientras está parado en el tab
   // Correo, devolvemos al tab General. Debe estar antes del early-return.
   useEffect(() => {
@@ -238,10 +266,15 @@ export function CampaignTemplateFormPage() {
     const h = parseInt(newHour)
     if (!h || h < 1 || followUpHours.includes(h)) return
     // Insertamos preservando el orden ascendente; mensajes paralelos quedan alineados.
-    const merged = [...followUpHours, h].map((hour, i) => ({ hour, msg: i < followUpHours.length ? followUpMessages[i] ?? '' : '' }))
+    const merged = [...followUpHours, h].map((hour, i) => ({
+      hour,
+      msg: i < followUpHours.length ? followUpMessages[i] ?? '' : '',
+      tpl: i < followUpHours.length ? followUpTemplateIds[i] ?? '' : '',
+    }))
     merged.sort((a, b) => a.hour - b.hour)
     setFollowUpHours(merged.map(x => x.hour))
     setFollowUpMessages(merged.map(x => x.msg))
+    setFollowUpTemplateIds(merged.map(x => x.tpl))
     setNewHour('')
   }
 
@@ -250,10 +283,20 @@ export function CampaignTemplateFormPage() {
     if (idx < 0) return
     setFollowUpHours(followUpHours.filter((_, i) => i !== idx))
     setFollowUpMessages(followUpMessages.filter((_, i) => i !== idx))
+    setFollowUpTemplateIds(followUpTemplateIds.filter((_, i) => i !== idx))
   }
 
   const updateFollowUpMessage = (index: number, value: string) => {
     setFollowUpMessages(prev => {
+      const next = [...prev]
+      while (next.length < followUpHours.length) next.push('')
+      next[index] = value
+      return next
+    })
+  }
+
+  const updateFollowUpTemplate = (index: number, value: string) => {
+    setFollowUpTemplateIds(prev => {
       const next = [...prev]
       while (next.length < followUpHours.length) next.push('')
       next[index] = value
@@ -507,10 +550,17 @@ export function CampaignTemplateFormPage() {
       ? JSON.stringify(trimmedMessages)
       : null
 
+    // Plantillas de seguimiento (Meta): array de IDs (o null) paralelo a followUpHours.
+    const trimmedTplIds = followUpTemplateIds.slice(0, followUpHours.length).map(t => (t && t.trim() ? t : null))
+    const followUpTemplateIdsJson = trimmedTplIds.some(t => t)
+      ? JSON.stringify(trimmedTplIds)
+      : null
+
     const payload = {
       ...data,
       followUpHours,
       followUpMessagesJson,
+      followUpTemplateIdsJson,
       autoCloseMessage: data.autoCloseMessage?.trim() ? data.autoCloseMessage : null,
       labelIds: selectedLabelIds,
       actionIds: selectedActionIds,
@@ -786,16 +836,38 @@ export function CampaignTemplateFormPage() {
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
-                  <textarea
-                    value={followUpMessages[idx] ?? ''}
-                    onChange={e => updateFollowUpMessage(idx, e.target.value)}
-                    rows={3}
-                    placeholder={`Mensaje a enviar a las ${h}h. Ej: "Hola {nombre}, queriamos saber si recibiste nuestro mensaje sobre la poliza {poliza}."`}
-                    className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                  <p className="mt-1 text-[11px] text-gray-500">
-                    Si dejas el mensaje vacio, este seguimiento se omitira.
-                  </p>
+                  {metaLineId ? (
+                    <>
+                      <select
+                        value={followUpTemplateIds[idx] ?? ''}
+                        onChange={e => updateFollowUpTemplate(idx, e.target.value)}
+                        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      >
+                        <option value="">— Elegí una plantilla de seguimiento —</option>
+                        {followUpTemplateOptions.map(t => (
+                          <option key={t.id} value={t.id}>{t.name} ({t.language})</option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-[11px] text-gray-500">
+                        {followUpTemplateOptions.length === 0
+                          ? 'No hay plantillas de Seguimiento aprobadas y activas. Creá una en la pestaña “Plantillas Meta” (tipo Seguimiento) y esperá su aprobación.'
+                          : 'Solo se listan plantillas tipo Seguimiento aprobadas por Meta y activas. Sin plantilla, este seguimiento se omite.'}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <textarea
+                        value={followUpMessages[idx] ?? ''}
+                        onChange={e => updateFollowUpMessage(idx, e.target.value)}
+                        rows={3}
+                        placeholder={`Mensaje a enviar a las ${h}h. Ej: "Hola {nombre}, queriamos saber si recibiste nuestro mensaje sobre la poliza {poliza}."`}
+                        className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                      />
+                      <p className="mt-1 text-[11px] text-gray-500">
+                        Si dejas el mensaje vacio, este seguimiento se omitira.
+                      </p>
+                    </>
+                  )}
                 </div>
               ))}
             </div>

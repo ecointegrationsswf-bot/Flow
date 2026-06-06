@@ -20,6 +20,7 @@ public class MetaMessageTemplateConfiguration : IEntityTypeConfiguration<MetaMes
         b.Property(t => t.VariableSamplesJson);      // nvarchar(max)
         b.Property(t => t.MetaTemplateId).HasMaxLength(100);
         b.Property(t => t.MetaStatus).HasMaxLength(40).IsRequired();
+        b.Property(t => t.Purpose).HasMaxLength(20).IsRequired();
         b.Property(t => t.MetaRejectedReason).HasMaxLength(1000);
         b.Property(t => t.ParameterMappingJson);     // nvarchar(max) — Fase 2
 
@@ -31,6 +32,7 @@ public class MetaMessageTemplateConfiguration : IEntityTypeConfiguration<MetaMes
         b.HasIndex(t => t.TenantId);
         b.HasIndex(t => t.WhatsAppLineId);
         b.HasIndex(t => t.BubbleGroupId);
+        b.HasIndex(t => t.CampaignTemplateId);
         // Meta no permite duplicar nombre+idioma dentro de un mismo WABA/línea.
         b.HasIndex(t => new { t.WhatsAppLineId, t.Name, t.Language }).IsUnique();
     }

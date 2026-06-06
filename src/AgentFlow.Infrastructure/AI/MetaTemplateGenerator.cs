@@ -35,6 +35,14 @@ public interface IMetaTemplateGenerator
         Guid tenantId, Guid campaignTemplateId,
         IReadOnlyList<string>? providedColumns, string? providedSampleJson,
         CancellationToken ct = default);
+
+    /// <summary>
+    /// Campos disponibles para mapear {{n}} en el formulario manual: estándar +
+    /// columnas del proceso de descarga (ActionFieldMapping) o del Excel de ejemplo
+    /// (SampleDataJson). Nunca bloquea — al menos devuelve los estándar.
+    /// </summary>
+    Task<IReadOnlyList<string>> GetAvailableFieldsAsync(
+        Guid tenantId, Guid campaignTemplateId, CancellationToken ct = default);
 }
 
 public record GeneratedVar(int Placeholder, string Field, string Sample);
@@ -146,6 +154,42 @@ public class MetaTemplateGenerator(
         }
 
         return ParseResponse(raw, fields);
+    }
+
+    public async Task<IReadOnlyList<string>> GetAvailableFieldsAsync(
+        Guid tenantId, Guid campaignTemplateId, CancellationToken ct = default)
+    {
+        var maestro = await db.CampaignTemplates
+            .FirstOrDefaultAsync(t => t.Id == campaignTemplateId && t.TenantId == tenantId, ct);
+
+        var fields = new List<string>();
+
+        if (maestro is not null)
+        {
+            var delinqConfig = await db.Set<ActionDelinquencyConfig>()
+                .Where(c => c.CampaignTemplateId == campaignTemplateId && c.TenantId == tenantId && c.IsActive)
+                .FirstOrDefaultAsync(ct);
+
+            if (delinqConfig is not null)
+            {
+                var cols = await db.Set<ActionFieldMapping>()
+                    .Where(m => m.ActionDefinitionId == delinqConfig.ActionDefinitionId && m.IsEnabled)
+                    .OrderBy(m => m.SortOrder)
+                    .Select(m => m.ColumnKey)
+                    .ToListAsync(ct);
+                fields.AddRange(cols.Where(c => !string.IsNullOrWhiteSpace(c)));
+            }
+            else
+            {
+                fields.AddRange(ExtractColumns(maestro.SampleDataJson));
+            }
+        }
+
+        // Estándar siempre disponibles.
+        foreach (var s in StandardFields)
+            if (!fields.Contains(s, StringComparer.OrdinalIgnoreCase)) fields.Add(s);
+
+        return fields.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     private static string BuildSystemPrompt(List<string> fields)

@@ -1,8 +1,20 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/shared/api/client'
-import type { MetaMessageTemplate, MetaTemplateCategory } from '@/shared/types/models'
+import type { MetaMessageTemplate, MetaTemplateCategory, MetaTemplatePurpose } from '@/shared/types/models'
 
 const key = (lineId: string) => ['meta-templates', lineId]
+
+// Campos disponibles para mapear {{n}} (estándar + columnas del proceso/Excel del maestro).
+export function useAvailableFields(campaignTemplateId: string | null | undefined) {
+  return useQuery({
+    queryKey: ['meta-template-fields', campaignTemplateId ?? ''],
+    enabled: !!campaignTemplateId,
+    queryFn: async () => {
+      const { data } = await api.get<{ fields: string[] }>('/meta-templates/available-fields', { params: { campaignTemplateId } })
+      return data.fields
+    },
+  })
+}
 
 export function useMetaTemplates(lineId: string | null | undefined) {
   return useQuery({
@@ -25,13 +37,15 @@ export interface MetaTemplatePayload {
   headerSamples: string[]
   bodySamples: string[]
   submitToMeta: boolean
+  purpose: MetaTemplatePurpose
+  bodyMapping: string[]   // campo para cada {{n}} del cuerpo
 }
 
-export function useCreateMetaTemplate(lineId: string) {
+export function useCreateMetaTemplate(lineId: string, campaignTemplateId?: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: async (payload: MetaTemplatePayload) => {
-      const { data } = await api.post<MetaMessageTemplate>('/meta-templates', { lineId, ...payload })
+      const { data } = await api.post<MetaMessageTemplate>('/meta-templates', { lineId, campaignTemplateId, ...payload })
       return data
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: key(lineId) }),
