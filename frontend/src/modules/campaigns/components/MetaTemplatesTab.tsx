@@ -548,6 +548,18 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {/* Generar con IA: solo visible dentro del formulario de plantilla
+              (oculto en la vista de grid/listado). */}
+          {showForm && (
+            <button type="button" onClick={onGenerate}
+              disabled={!campaignTemplateId || generateMut.isPending}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-purple-300 bg-purple-50 px-3 py-2 text-sm font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50"
+              title={campaignTemplateId
+                ? 'Genera borradores leyendo el prompt del maestro (una plantilla por burbuja ~)'
+                : 'Guardá el maestro primero para poder generar desde su prompt'}>
+              <Sparkles size={16} className={generateMut.isPending ? 'animate-pulse' : ''} /> Generar desde el prompt
+            </button>
+          )}
           <button type="button" onClick={onSyncAll} disabled={syncAllMut.isPending}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             title="Importar/actualizar las plantillas que ya existen en Meta">
