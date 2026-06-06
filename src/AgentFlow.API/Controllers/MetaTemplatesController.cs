@@ -271,6 +271,32 @@ public partial class MetaTemplatesController(
         return Ok(Project(entity));
     }
 
+    // ── MAPEO de variables {{n}}→campo (metadata local, permitido en APROBADAS) ──
+    // El mapeo NO cambia el contenido aprobado por Meta; es nuestro para sustituir al
+    // enviar. Por eso se puede ajustar en cualquier estado (incluida APPROVED).
+    public record UpdateMappingRequest(List<string> BodyMapping, string? Purpose = null);
+
+    [HttpPut("{id:guid}/mapping")]
+    public async Task<IActionResult> UpdateMapping(Guid id, [FromBody] UpdateMappingRequest req, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var entity = await db.MetaMessageTemplates
+            .FirstOrDefaultAsync(t => t.Id == id && t.TenantId == tenantId, ct);
+        if (entity is null) return NotFound();
+
+        var bodyVars = CountPlaceholders(entity.BodyText);
+        var mapping = (req.BodyMapping ?? new()).Select(s => (s ?? "").Trim()).ToList();
+        var filledCount = mapping.Take(bodyVars).Count(s => s.Length > 0);
+        if (filledCount < bodyVars)
+            return BadRequest(new { error = $"El cuerpo tiene {bodyVars} variable(s); asigná un campo a cada una ({filledCount}/{bodyVars})." });
+
+        entity.ParameterMappingJson = SerializeMapping(mapping.Take(bodyVars).ToList());
+        if (MetaTemplatePurposes.IsValid(req.Purpose)) entity.Purpose = req.Purpose!;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+        return Ok(Project(entity));
+    }
+
     // ── HABILITAR / DESHABILITAR (flag nuestro, separado de Meta) ───────
     [HttpPost("{id:guid}/enable")]
     public Task<IActionResult> Enable(Guid id, CancellationToken ct) => SetEnabled(id, true, ct);

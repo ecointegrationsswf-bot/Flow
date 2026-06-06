@@ -1,12 +1,12 @@
 import { useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
 import {
   Plus, RefreshCw, Pencil, Trash2, X, CheckCircle2, Clock, XCircle, FileText, Send, Save, HelpCircle, Sparkles,
-  UploadCloud, FileSpreadsheet, Loader2,
+  UploadCloud, FileSpreadsheet, Loader2, Variable,
 } from 'lucide-react'
 import {
   useMetaTemplates, useCreateMetaTemplate, useUpdateMetaTemplate,
   useToggleMetaTemplate, useSyncMetaTemplate, useSyncAllMetaTemplates, useGenerateFromPrompt,
-  useSubmitMetaTemplate, useDeleteMetaTemplate, useAvailableFields,
+  useSubmitMetaTemplate, useDeleteMetaTemplate, useAvailableFields, useUpdateMetaTemplateMapping,
   type MetaTemplatePayload,
 } from '@/shared/hooks/useMetaTemplates'
 import { useParseEmailSample } from '@/shared/hooks/useCampaignTemplates'
@@ -85,6 +85,7 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
   const generateMut = useGenerateFromPrompt(lineId)
   const submitMut = useSubmitMetaTemplate(lineId)
   const deleteMut = useDeleteMetaTemplate(lineId)
+  const mappingMut = useUpdateMetaTemplateMapping(lineId)
   const parseSampleMut = useParseEmailSample()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [showExcelModal, setShowExcelModal] = useState(false)
@@ -95,6 +96,33 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [showCatHelp, setShowCatHelp] = useState(false)
   const isEditing = !!form.id
+
+  // Editor de mapeo {{n}}→campo (funciona incluso en plantillas aprobadas).
+  const [mappingTarget, setMappingTarget] = useState<MetaMessageTemplate | null>(null)
+  const [mappingDraft, setMappingDraft] = useState<string[]>([])
+  const mappingVarCount = mappingTarget ? countVars(mappingTarget.bodyText) : 0
+
+  function openMapping(t: MetaMessageTemplate) {
+    const n = countVars(t.bodyText)
+    const draft = Array.from({ length: n }, (_, i) => t.bodyMapping?.[i] ?? '')
+    setMappingDraft(draft)
+    setMappingTarget(t)
+  }
+
+  async function saveMapping() {
+    if (!mappingTarget) return
+    if (mappingDraft.slice(0, mappingVarCount).some(v => !v)) {
+      toast.error('Asigná un campo a cada variable {{n}}.'); return
+    }
+    try {
+      await mappingMut.mutateAsync({ id: mappingTarget.id, bodyMapping: mappingDraft.slice(0, mappingVarCount) })
+      toast.success('Mapeo guardado. Ya podés probar la plantilla.')
+      setMappingTarget(null)
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'No se pudo guardar el mapeo.'
+      toast.error(msg)
+    }
+  }
 
   // Campos del maestro para mapear {{n}}→campo (estándar + columnas del proceso/Excel).
   const { data: availableFields } = useAvailableFields(campaignTemplateId)
@@ -277,6 +305,52 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
     <div className="space-y-4">
       {/* Input oculto: lo dispara el botón del modal. */}
       <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={onExcelSelected} />
+
+      {/* ── Modal: mapeo {{n}}→campo (funciona incluso en aprobadas) ── */}
+      {mappingTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+          onClick={() => !mappingMut.isPending && setMappingTarget(null)}>
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={ev => ev.stopPropagation()}>
+            <div className="bg-gradient-to-br from-[#1a3a6b] via-[#1e457e] to-[#2d5a9e] px-6 py-5 text-white">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20"><Variable size={22} /></div>
+                <div>
+                  <h3 className="text-base font-bold leading-tight">Mapeo de variables</h3>
+                  <p className="text-xs text-white/85 font-mono">{mappingTarget.name}</p>
+                </div>
+              </div>
+            </div>
+            <div className="px-6 py-5 space-y-3">
+              <p className="text-xs text-gray-500">
+                Asigná a cada <span className="font-mono">{'{{n}}'}</span> el campo del que sale el dato al enviar.
+                Esto NO cambia el contenido aprobado por Meta — es solo para sustituir los valores.
+              </p>
+              <p className="rounded-lg bg-gray-50 border border-gray-200 p-2 text-sm text-gray-700 whitespace-pre-wrap">{mappingTarget.bodyText}</p>
+              <div className="space-y-2">
+                {Array.from({ length: mappingVarCount }).map((_, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <span className="w-10 shrink-0 font-mono text-xs font-semibold text-indigo-600">{`{{${i + 1}}}`}</span>
+                    <select value={mappingDraft[i] ?? ''}
+                      onChange={e => setMappingDraft(d => { const n = [...d]; n[i] = e.target.value; return n })}
+                      className="flex-1 rounded-lg border border-gray-300 px-2 py-1.5 text-sm">
+                      <option value="">— campo —</option>
+                      {(availableFields ?? []).map(fld => <option key={fld} value={fld}>{fld}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
+              <button type="button" onClick={() => setMappingTarget(null)} disabled={mappingMut.isPending}
+                className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancelar</button>
+              <button type="button" onClick={saveMapping} disabled={mappingMut.isPending}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#1a3a6b] px-4 py-2 text-sm font-semibold text-white hover:bg-[#234a85] disabled:opacity-50">
+                <Save size={15} /> Guardar mapeo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Modal: pedir el Excel de la campaña cuando falta estructura ── */}
       {showExcelModal && (
@@ -593,6 +667,16 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
                       className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50">
                       <RefreshCw size={16} className={syncMut.isPending ? 'animate-spin' : ''} />
                     </button>
+                    {countVars(t.bodyText) > 0 && (
+                      <button type="button" title="Configurar mapeo de variables {{n}}→campo"
+                        onClick={() => openMapping(t)}
+                        className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium ${
+                          (t.bodyMapping?.filter(Boolean).length ?? 0) < countVars(t.bodyText)
+                            ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                            : 'text-gray-600 hover:bg-gray-100'}`}>
+                        <Variable size={14} /> Mapeo
+                      </button>
+                    )}
                     <button type="button" title={t.isEnabled ? 'Desactivar' : 'Activar'}
                       onClick={() => toggleMut.mutate({ id: t.id, enable: !t.isEnabled })}
                       className="rounded-lg px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100">

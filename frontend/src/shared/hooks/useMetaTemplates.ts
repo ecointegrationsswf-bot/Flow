@@ -63,6 +63,18 @@ export function useUpdateMetaTemplate(lineId: string) {
   })
 }
 
+// Actualiza solo el mapeo {{n}}→campo (metadata local; permitido incluso en aprobadas).
+export function useUpdateMetaTemplateMapping(lineId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, bodyMapping, purpose }: { id: string; bodyMapping: string[]; purpose?: string }) => {
+      const { data } = await api.put<MetaMessageTemplate>(`/meta-templates/${id}/mapping`, { bodyMapping, purpose })
+      return data
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: key(lineId) }),
+  })
+}
+
 export function useToggleMetaTemplate(lineId: string) {
   const qc = useQueryClient()
   return useMutation({
