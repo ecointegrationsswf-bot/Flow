@@ -652,7 +652,7 @@ export function CampaignTemplateFormPage() {
   ]
 
   return (
-    <div className="mx-auto max-w-3xl">
+    <div className={`mx-auto ${activeTab === 'metaTemplates' ? 'max-w-5xl' : 'max-w-3xl'}`}>
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-gray-900">{isEdit ? 'Editar Maestro' : 'Nuevo Maestro de Campaña'}</h1>
         <button onClick={() => navigate('/campaign-templates')} className="flex items-center gap-1.5 text-sm text-gray-600 hover:text-gray-900">

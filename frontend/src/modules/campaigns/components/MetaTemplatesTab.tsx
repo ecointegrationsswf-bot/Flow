@@ -150,6 +150,8 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
 
   const headerVars = useMemo(() => Math.min(countVars(form.headerText), 1), [form.headerText])
   const bodyVars = useMemo(() => countVars(form.bodyText), [form.bodyText])
+  // Meta no admite formato (* _ ~ `) en el encabezado — detectamos para avisar.
+  const headerHasFmt = /[*_~`]/.test(form.headerText)
 
   function resetForm() { setForm(EMPTY_FORM); setShowForm(false) }
 
@@ -659,6 +661,14 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
             <span className="mt-1 block text-[11px] text-gray-400">
               Texto plano: Meta no permite negritas ni formato (<span className="font-mono">* _ ~ `</span>) en el encabezado. El formato sí se permite en el cuerpo.
             </span>
+            {headerHasFmt && (
+              <span className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-amber-600">
+                ⚠ Tiene formato que Meta no acepta en el encabezado (se quitará al enviar).
+                <button type="button"
+                  onClick={() => setForm(f => ({ ...f, headerText: f.headerText.replace(/[*_~`]/g, '') }))}
+                  className="font-medium text-[#1a3a6b] underline hover:text-[#234a85]">Quitar formato</button>
+              </span>
+            )}
           </label>
           {headerVars === 1 && (
             <label className="block pl-3">
@@ -779,14 +789,14 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
                         {/* Estado */}
                         <td className="px-3 py-2 align-top">
                           <div className="flex flex-wrap items-center gap-1.5">
-                            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${sm.cls}`}>
+                            <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full border px-2 py-0.5 text-[11px] font-medium ${sm.cls}`}>
                               <sm.Icon size={12} /> {sm.label}
                             </span>
-                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${t.isEnabled ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+                            <span className={`inline-flex items-center whitespace-nowrap rounded-full px-2 py-0.5 text-[11px] font-medium ${t.isEnabled ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
                               {t.isEnabled ? 'Activa' : 'Inactiva'}
                             </span>
                             {mappingIncomplete && (
-                              <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[11px] font-medium" title="Faltan variables por mapear">
+                              <span className="inline-flex items-center whitespace-nowrap rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[11px] font-medium" title="Faltan variables por mapear">
                                 Mapeo {mappedCount}/{varCount}
                               </span>
                             )}
@@ -794,7 +804,7 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
                         </td>
                         {/* Acciones */}
                         <td className="px-3 py-2 align-top">
-                          <div className="flex items-center justify-end gap-1">
+                          <div className="flex flex-nowrap items-center justify-end gap-1 whitespace-nowrap">
                             <button type="button" title="Ver plantilla" onClick={() => setViewTemplate(t)}
                               className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-[#1a3a6b]">
                               <Eye size={16} />
