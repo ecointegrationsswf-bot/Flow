@@ -158,3 +158,68 @@ export function useSendTestMessage() {
     },
   })
 }
+
+// ── Diagnóstico Meta (SOLO LECTURA — no modifica nada en Meta) ──
+
+export interface MetaLineHealthResult {
+  status: string        // authenticated | blocked | token_invalid | unconfigured | unknown
+  canSend: boolean
+  detail?: string | null
+  phoneNumberId: string
+}
+
+// Salud de la línea Meta (health_status del Graph API). On-demand vía botón.
+export function useMetaLineHealth(lineId: string) {
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.get<MetaLineHealthResult>(`/whatsapp-lines/${lineId}/meta/health`)
+      return data
+    },
+  })
+}
+
+export interface MetaLineWebhookResult {
+  defaultCallbackUrl: string
+  verifyToken?: string | null
+  wabaId?: string | null
+  ok: boolean
+  status: string        // ok | token_invalid | no_permission | unconfigured | unknown
+  isSubscribed: boolean
+  overrideCallbackUri?: string | null
+  overridePointsToUs?: boolean | null
+  appName?: string | null
+  detail?: string | null
+}
+
+// Estado de suscripción del webhook de la WABA (GET subscribed_apps). On-demand.
+export function useMetaLineWebhook(lineId: string) {
+  return useMutation({
+    mutationFn: async () => {
+      const { data } = await api.get<MetaLineWebhookResult>(`/whatsapp-lines/${lineId}/meta/webhook`)
+      return data
+    },
+  })
+}
+
+export interface SetMetaWebhookResult {
+  applied: boolean
+  status: string        // ok | token_invalid | no_permission | verify_failed | unconfigured | unknown
+  detail?: string | null
+  appliedCallbackUrl: string
+  isSubscribed: boolean
+  overrideCallbackUri?: string | null
+  overridePointsToUs?: boolean | null
+  appName?: string | null
+}
+
+// Configura/actualiza el webhook de la WABA DESDE TalkIA (POST subscribed_apps).
+// ⚠ Acción sensible: modifica config en Meta. El llamador debe confirmar antes.
+export function useSetMetaLineWebhook(lineId: string) {
+  return useMutation({
+    mutationFn: async (callbackUrl?: string) => {
+      const { data } = await api.post<SetMetaWebhookResult>(
+        `/whatsapp-lines/${lineId}/meta/webhook`, { callbackUrl })
+      return data
+    },
+  })
+}

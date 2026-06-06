@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Check, Loader2, Eye, X, AlertTriangle, Users, Search } from 'lucide-react'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { useCampaignTemplates } from '@/shared/hooks/useCampaignTemplates'
+import { useAgents } from '@/shared/hooks/useAgents'
+import { alertDialog } from '@/shared/components/dialog'
 import {
   usePreviewFixedFormat,
   useUploadFixedFormat,
@@ -11,6 +13,9 @@ import {
 } from '@/shared/hooks/useCampaigns'
 import { FileDropZone } from './FileDropZone'
 import { useTenantTime } from '@/shared/hooks/useTenantTime'
+
+// Etiqueta legible para cada canal.
+const channelLabel = (c: string) => (c === 'Sms' ? 'SMS' : c)
 
 const STEPS = [
   { number: 1, label: 'Configuración' },
@@ -213,7 +218,10 @@ export function CampaignUploadPage() {
   const [selectedJson, setSelectedJson] = useState<FixedContactPreview | null>(null)
   const [showContactsDetail, setShowContactsDetail] = useState(false)
 
+  const [selectedChannel, setSelectedChannel] = useState('')
+
   const { data: templates } = useCampaignTemplates()
+  const { data: agents } = useAgents()
   const previewMutation = usePreviewFixedFormat()
   const createMutation = useUploadFixedFormat()
 
@@ -222,6 +230,18 @@ export function CampaignUploadPage() {
   // campañas — las existentes que ya lo usan siguen corriendo con su config.
   const activeTemplates = templates?.filter((t) => t.isActive && t.agentIsActive !== false) ?? []
   const selectedTemplate = activeTemplates.find((t) => t.id === selectedTemplateId)
+
+  // Canales habilitados del agente del maestro. Si tiene >1, hay que elegir cuál
+  // usar (si no, el backend rechaza el alta). Si tiene 1, se usa ese sin preguntar.
+  const agentChannels: string[] =
+    (agents?.find((a) => a.id === selectedTemplate?.agentDefinitionId)?.enabledChannels as string[] | undefined) ?? []
+  const needsChannelChoice = agentChannels.length > 1
+  // Canal efectivo: 1 canal → ese; varios → el elegido si es válido, si no WhatsApp/primero.
+  const effectiveChannel = agentChannels.length === 1
+    ? agentChannels[0]
+    : agentChannels.includes(selectedChannel)
+      ? selectedChannel
+      : agentChannels.includes('WhatsApp') ? 'WhatsApp' : (agentChannels[0] ?? '')
 
   const handleStep1Submit = () => {
     if (!file || !selectedTemplateId || !selectedTemplate) {
@@ -242,17 +262,44 @@ export function CampaignUploadPage() {
     })
   }
 
-  const handleCreate = () => {
-    if (!file || !selectedTemplate) return
+  const handleCreate = async () => {
+    // Validaciones explícitas: nunca un return mudo — siempre feedback al usuario.
+    if (!selectedTemplate) {
+      await alertDialog({ kind: 'warning', title: 'Falta el maestro', description: 'Seleccioná un maestro de campaña activo antes de crear la campaña.' })
+      return
+    }
+    if (!file) {
+      await alertDialog({ kind: 'warning', title: 'Falta el archivo', description: 'Subí el archivo de contactos.' })
+      return
+    }
+    if (needsChannelChoice && !effectiveChannel) {
+      await alertDialog({
+        kind: 'warning',
+        title: 'Elegí un canal',
+        description: `El agente "${selectedTemplate.agentName}" tiene varios canales habilitados (${agentChannels.map(channelLabel).join(', ')}). Seleccioná con cuál enviar esta campaña.`,
+      })
+      return
+    }
+
     const formData = new FormData()
     formData.append('file', file)
     formData.append('Name', selectedTemplate.name)
     formData.append('AgentId', selectedTemplate.agentDefinitionId)
     formData.append('CampaignTemplateId', selectedTemplate.id)
+    if (effectiveChannel) formData.append('Channel', effectiveChannel)
     if (startDate) formData.append('ScheduledAt', new Date(startDate).toISOString())
 
     createMutation.mutate(formData, {
       onSuccess: () => navigate('/campaigns'),
+      onError: (err) => {
+        // El interceptor global ya muestra modal en 400/409/422/500. Fallback por si
+        // no la marcó, para no dejar el botón "sin hacer nada".
+        if (!(err as { handledByGlobalDialog?: boolean })?.handledByGlobalDialog) {
+          const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
+            ?? 'No se pudo crear la campaña.'
+          void alertDialog({ kind: 'error', title: 'No se pudo crear la campaña', description: msg })
+        }
+      },
     })
   }
 
@@ -320,9 +367,22 @@ export function CampaignUploadPage() {
                 {selectedTemplate && (
                   <div className="rounded-md bg-blue-50 p-3 text-xs text-blue-700 space-y-1">
                     <p>Agente: <strong>{selectedTemplate.agentName}</strong></p>
+                    {agentChannels.length > 0 && <p>Canales del agente: {agentChannels.map(channelLabel).join(', ')}</p>}
                     <p>Seguimientos: {selectedTemplate.followUpHours.length > 0 ? selectedTemplate.followUpHours.map((h) => `${h}h`).join(', ') : 'Ninguno'}</p>
                     <p>Cierre automático: {selectedTemplate.autoCloseHours}h</p>
                     {selectedTemplate.sendEmail && <p>Email: {selectedTemplate.emailAddress}</p>}
+                  </div>
+                )}
+
+                {selectedTemplate && needsChannelChoice && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700">Canal *</label>
+                    <select value={effectiveChannel} onChange={(e) => setSelectedChannel(e.target.value)} className={inputClass}>
+                      {agentChannels.map((c) => <option key={c} value={c}>{channelLabel(c)}</option>)}
+                    </select>
+                    <p className="mt-1 text-xs text-gray-500">
+                      Este agente tiene varios canales habilitados. Elegí con cuál enviar esta campaña.
+                    </p>
                   </div>
                 )}
 
@@ -383,6 +443,12 @@ export function CampaignUploadPage() {
                   <dt className="text-gray-500">Agente</dt>
                   <dd className="font-medium text-gray-900">{selectedTemplate.agentName}</dd>
                 </div>
+                {effectiveChannel && (
+                  <div className="flex justify-between">
+                    <dt className="text-gray-500">Canal</dt>
+                    <dd className="font-medium text-gray-900">{channelLabel(effectiveChannel)}</dd>
+                  </div>
+                )}
                 <div className="flex justify-between">
                   <dt className="text-gray-500">Contactos unicos</dt>
                   <dd className="font-medium text-gray-900">{preview.contacts.length}</dd>

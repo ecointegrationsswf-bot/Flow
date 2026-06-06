@@ -661,6 +661,30 @@ public class WebhookController(
     };
 
     /// <summary>
+    /// Rango de avance de un estado de entrega Meta para evitar degradar el
+    /// estado cuando los webhooks llegan desordenados (sent→delivered→read son
+    /// eventos separados). Mayor = más avanzado. 'failed' no está en la escala
+    /// de progreso (se aplica aparte). null/desconocido = 0.
+    /// </summary>
+    private static int MetaStatusRank(string? status) => (status?.ToLowerInvariant()) switch
+    {
+        "sent"      => 1,
+        "delivered" => 2,
+        "read"      => 3,
+        _           => 0,
+    };
+
+    /// <summary>Mapea el estado Meta al entero LastAck (paridad con UltraMsg).</summary>
+    private static int MetaStatusToAck(string? status) => (status?.ToLowerInvariant()) switch
+    {
+        "read"      => 3,
+        "delivered" => 2,
+        "sent"      => 1,
+        "failed"    => -1,
+        _           => 0,
+    };
+
+    /// <summary>
     /// Resuelve el TenantId a partir del instanceId de UltraMsg. Reusa la
     /// misma tabla WhatsAppLines que el flujo de mensajes entrantes, con la
     /// misma normalización (acepta "133282", "instance133282", etc.).
@@ -940,9 +964,83 @@ public class WebhookController(
                     if (value.TryGetProperty("statuses", out var sts) && sts.ValueKind == JsonValueKind.Array)
                     {
                         statusCount += sts.GetArrayLength();
+                        var lineTenantId = line.TenantId;
                         foreach (var st in sts.EnumerateArray())
                         {
-                            var stStatus = st.TryGetProperty("status", out var ss) ? ss.GetString() : null;
+                            var stStatus = (st.TryGetProperty("status", out var ss) ? ss.GetString() : null)?.ToLowerInvariant();
+                            if (string.IsNullOrWhiteSpace(stStatus)) continue;
+
+                            var wamid = st.TryGetProperty("id", out var widp) ? widp.GetString() : null;
+
+                            // timestamp de Meta = epoch en segundos (a veces string, a veces número).
+                            // Fallback a "ahora" si no viene o no parsea.
+                            var tsUtc = DateTime.UtcNow;
+                            if (st.TryGetProperty("timestamp", out var tsp))
+                            {
+                                var tsRaw = tsp.ValueKind == JsonValueKind.Number ? tsp.GetInt64().ToString()
+                                          : tsp.GetString();
+                                if (long.TryParse(tsRaw, out var unix))
+                                    tsUtc = DateTimeOffset.FromUnixTimeSeconds(unix).UtcDateTime;
+                            }
+
+                            // ── Reflejar entrega/lectura en el Monitor (sent/delivered/read/failed) ──
+                            // Mismo espíritu que HandleMessageAckAsync (UltraMsg): la BD refleja
+                            // la verdad reportada por WhatsApp, no solo el HTTP 200 del envío.
+                            if (!string.IsNullOrWhiteSpace(wamid)
+                                && stStatus is "sent" or "delivered" or "read" or "failed")
+                            {
+                                var msg = await db.Messages
+                                    .Include(m => m.Conversation)
+                                    .Where(m => m.ExternalMessageId == wamid
+                                             && m.Conversation.TenantId == lineTenantId)
+                                    .FirstOrDefaultAsync(ct);
+                                if (msg != null)
+                                {
+                                    // Guarda de orden: Meta envía sent→delivered→read como eventos
+                                    // separados que pueden llegar DESORDENADOS. No degradar el
+                                    // estado (un 'delivered' tardío no debe pisar un 'read').
+                                    var isFailure = stStatus == "failed";
+                                    if (isFailure || MetaStatusRank(stStatus) >= MetaStatusRank(msg.DeliveryStatus))
+                                    {
+                                        msg.DeliveryStatus    = stStatus;
+                                        msg.LastAck           = MetaStatusToAck(stStatus);
+                                        msg.DeliveryUpdatedAt = DateTime.UtcNow;
+                                        if (stStatus is "delivered" or "read" && msg.DeliveredAt is null) msg.DeliveredAt = tsUtc;
+                                        if (stStatus == "read" && msg.ReadAt is null) msg.ReadAt = tsUtc;
+                                        msg.Status = stStatus switch
+                                        {
+                                            "read"      => AgentFlow.Domain.Entities.MessageStatus.Read,
+                                            "delivered" => AgentFlow.Domain.Entities.MessageStatus.Delivered,
+                                            "sent"      => AgentFlow.Domain.Entities.MessageStatus.Sent,
+                                            "failed"    => AgentFlow.Domain.Entities.MessageStatus.Failed,
+                                            _           => msg.Status,
+                                        };
+                                    }
+                                }
+
+                                // CampaignContact (envíos masivos) — scoped al tenant vía Campaign.
+                                var cc = await db.CampaignContacts
+                                    .Where(c => c.ExternalMessageId == wamid
+                                             && db.Campaigns.Any(camp => camp.Id == c.CampaignId && camp.TenantId == lineTenantId))
+                                    .FirstOrDefaultAsync(ct);
+                                if (cc != null)
+                                {
+                                    var isFailure = stStatus == "failed";
+                                    if (isFailure || MetaStatusRank(stStatus) >= MetaStatusRank(cc.DeliveryStatus))
+                                    {
+                                        cc.DeliveryStatus = stStatus;
+                                        if (stStatus is "delivered" or "read" && cc.DeliveredAt is null) cc.DeliveredAt = tsUtc;
+                                        if (stStatus == "read" && cc.ReadAt is null) cc.ReadAt = tsUtc;
+                                        if (isFailure)
+                                        {
+                                            cc.DispatchStatus  = AgentFlow.Domain.Enums.DispatchStatus.Error;
+                                            cc.DispatchError ??= "Meta status=failed";
+                                        }
+                                    }
+                                }
+                            }
+
+                            // ── failed → lista negra (solo códigos de número inválido) ──
                             if (!string.Equals(stStatus, "failed", StringComparison.OrdinalIgnoreCase)) continue;
 
                             var recipient = st.TryGetProperty("recipient_id", out var rid) ? rid.GetString() : null;

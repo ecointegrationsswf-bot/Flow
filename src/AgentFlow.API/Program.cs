@@ -331,6 +331,11 @@ builder.Services.AddHttpClient<
     AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaTemplateService,
     AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaCloudApiTemplateService>();
 
+// ── Meta Cloud API (lectura de suscripción de webhook — solo diagnóstico GET) ──
+builder.Services.AddHttpClient<
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaCloudApiWebhookService,
+    AgentFlow.Infrastructure.Channels.MetaCloudApi.MetaCloudApiWebhookService>();
+
 // Renderer de plantillas Meta (sustitución {{n}}) — compartido dispatcher + follow-ups.
 builder.Services.AddSingleton<
     AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaTemplateRenderer,
@@ -1119,6 +1124,13 @@ try
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'LaunchedByUserPhone')
             BEGIN ALTER TABLE Campaigns ADD LaunchedByUserPhone nvarchar(20) NULL; END");
+        // Motivo + fecha de la última pausa (auto o manual) — para informar al usuario.
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'PauseReason')
+            BEGIN ALTER TABLE Campaigns ADD PauseReason nvarchar(1000) NULL; END");
+        db.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Campaigns') AND name = 'PausedAt')
+            BEGIN ALTER TABLE Campaigns ADD PausedAt datetime2 NULL; END");
         db.Database.ExecuteSqlRaw(@"
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('AppUsers') AND name = 'NotifyPhone')
             BEGIN ALTER TABLE AppUsers ADD NotifyPhone nvarchar(20) NULL; END");

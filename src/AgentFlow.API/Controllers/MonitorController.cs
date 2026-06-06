@@ -51,9 +51,16 @@ public class MonitorController(IMediator mediator, ITenantContext tenantCtx, Age
         {
             var u = users.FirstOrDefault(x => x.Id == k || x.Email == k || x.FullName == k)
                  ?? sas.FirstOrDefault(x => x.Id == k || x.Email == k || x.FullName == k);
+            // Clave canónica = id del usuario (si se resolvió). Colapsa duplicados
+            // cuando una campaña vieja guardó el nombre/email y una nueva el id:
+            // ambas resuelven al mismo usuario, así el selector muestra UNA opción.
+            // El filtro del Monitor matchea cualquiera de los identificadores.
+            var canonicalKey = u?.Id ?? k;
             var label = u?.FullName ?? u?.Email ?? k;
-            return new { key = k, label };
+            return new { key = canonicalKey, label };
         })
+        .GroupBy(x => x.key)
+        .Select(g => new { key = g.Key, label = g.First().label })
         .OrderBy(x => x.label)
         .ToList();
 

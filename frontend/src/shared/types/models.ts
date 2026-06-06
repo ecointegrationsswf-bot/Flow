@@ -68,6 +68,10 @@ export interface Campaign {
    *  batches. El dispatcher la salta hasta esta fecha (UTC). El frontend lo
    *  usa para mostrar "Próximo batch en X min" en la fila de la campaña. */
   nextBatchAfterUtc?: string | null
+  /** Motivo legible de la última pausa (auto o manual). Null si no está pausada
+   *  o si se reanudó. El frontend muestra un ícono "ver motivo" cuando está presente. */
+  pauseReason?: string | null
+  pausedAt?: string | null
 }
 
 /** Estado real de entrega de un mensaje saliente, reportado por UltraMsg

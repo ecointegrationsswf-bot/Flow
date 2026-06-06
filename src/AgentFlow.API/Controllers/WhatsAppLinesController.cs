@@ -1,10 +1,12 @@
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
 using AgentFlow.Domain.Interfaces;
+using AgentFlow.Infrastructure.Channels.MetaCloudApi;
 using AgentFlow.Infrastructure.Channels.UltraMsg;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 
 namespace AgentFlow.API.Controllers;
 
@@ -305,6 +307,139 @@ public class WhatsAppLinesController(
         });
     }
 
+    // ── Per-line Meta Cloud API: diagnóstico (SOLO LECTURA) ──────
+    // Estos endpoints NO modifican nada en Meta ni en la BD: leen salud de la
+    // línea y estado de suscripción del webhook para la ficha de diagnóstico.
+
+    /// <summary>
+    /// Salud de una línea Meta (health_status del Graph API). Equivalente al
+    /// /status de UltraMsg, pero para el proveedor oficial. Solo lectura.
+    /// </summary>
+    [HttpGet("{id:guid}/meta/health")]
+    public async Task<IActionResult> GetMetaHealth(
+        Guid id,
+        [FromServices] IMetaCloudApiHealthService metaHealth,
+        CancellationToken ct)
+    {
+        var line = await GetLine(id, ct);
+        if (line is null) return NotFound(new { error = "Linea no encontrada." });
+        if (line.Provider != ProviderType.MetaCloudApi)
+            return BadRequest(new { error = "Esta línea no es Meta Cloud API." });
+
+        var h = await metaHealth.GetHealthAsync(line.InstanceId, line.MetaAccessToken ?? "", null, ct);
+        return Ok(new
+        {
+            status = h.Status,
+            canSend = h.CanSend,
+            detail = h.Detail,
+            phoneNumberId = line.InstanceId,
+        });
+    }
+
+    /// <summary>
+    /// Diagnóstico del webhook de una línea Meta: devuelve la URL/verify token por
+    /// defecto del sistema (la MISMA para todas las líneas — el webhook de Meta es
+    /// único por App; adentro resolvemos por phone_number_id) y consulta (solo GET)
+    /// si la WABA está suscrita y si tiene un override propio. NO modifica nada.
+    /// </summary>
+    [HttpGet("{id:guid}/meta/webhook")]
+    public async Task<IActionResult> GetMetaWebhook(
+        Guid id,
+        [FromServices] IMetaCloudApiWebhookService metaWebhook,
+        [FromServices] IConfiguration cfg,
+        CancellationToken ct)
+    {
+        var line = await GetLine(id, ct);
+        if (line is null) return NotFound(new { error = "Linea no encontrada." });
+        if (line.Provider != ProviderType.MetaCloudApi)
+            return BadRequest(new { error = "Esta línea no es Meta Cloud API." });
+
+        var configured = cfg["Meta:CallbackUrl"];
+        var defaultCallbackUrl = !string.IsNullOrWhiteSpace(configured)
+            ? configured
+            : $"{Request.Scheme}://{Request.Host}/api/webhooks/meta";
+        var verifyToken = cfg["Meta:VerifyToken"];
+
+        var sub = await metaWebhook.GetSubscriptionAsync(line.MetaWabaId ?? "", line.MetaAccessToken ?? "", null, ct);
+
+        // ¿El override (si existe) apunta a nuestra URL?
+        bool? overridePointsToUs = sub.OverrideCallbackUri is null
+            ? null
+            : string.Equals(sub.OverrideCallbackUri.TrimEnd('/'), defaultCallbackUrl.TrimEnd('/'),
+                            StringComparison.OrdinalIgnoreCase);
+
+        return Ok(new
+        {
+            defaultCallbackUrl,
+            verifyToken,
+            wabaId = line.MetaWabaId,
+            ok = sub.Ok,
+            status = sub.Status,
+            isSubscribed = sub.IsSubscribed,
+            overrideCallbackUri = sub.OverrideCallbackUri,
+            overridePointsToUs,
+            appName = sub.AppName,
+            detail = sub.Detail,
+        });
+    }
+
+    /// <summary>
+    /// Configura/actualiza el webhook de la WABA de esta línea Meta DESDE TalkIA:
+    /// suscribe la App a la WABA y fija un override de callback hacia nuestra URL.
+    /// Acción sensible (modifica config en Meta) — el frontend pide confirmación.
+    /// Requiere un token con whatsapp_business_management de admin (si no → 403).
+    /// La URL debe ser pública HTTPS (Meta valida el challenge) — no funciona con
+    /// localhost. Tras configurar, relee el estado para devolverlo actualizado.
+    /// </summary>
+    [HttpPost("{id:guid}/meta/webhook")]
+    public async Task<IActionResult> SetMetaWebhook(
+        Guid id,
+        [FromBody] SetMetaWebhookRequest req,
+        [FromServices] IMetaCloudApiWebhookService metaWebhook,
+        [FromServices] IConfiguration cfg,
+        CancellationToken ct)
+    {
+        var line = await GetLine(id, ct);
+        if (line is null) return NotFound(new { error = "Linea no encontrada." });
+        if (line.Provider != ProviderType.MetaCloudApi)
+            return BadRequest(new { error = "Esta línea no es Meta Cloud API." });
+        if (string.IsNullOrWhiteSpace(line.MetaWabaId) || string.IsNullOrWhiteSpace(line.MetaAccessToken))
+            return BadRequest(new { error = "La línea Meta no tiene WABA ID o Access Token configurados." });
+
+        var configured = cfg["Meta:CallbackUrl"];
+        var defaultCallbackUrl = !string.IsNullOrWhiteSpace(configured)
+            ? configured
+            : $"{Request.Scheme}://{Request.Host}/api/webhooks/meta";
+        var callbackUrl = string.IsNullOrWhiteSpace(req?.CallbackUrl) ? defaultCallbackUrl : req!.CallbackUrl!.Trim();
+        var verifyToken = cfg["Meta:VerifyToken"];
+
+        if (string.IsNullOrWhiteSpace(verifyToken))
+            return BadRequest(new { error = "Falta Meta:VerifyToken en la configuración del servidor." });
+        if (!callbackUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            return BadRequest(new { error = "La URL de callback debe ser HTTPS (Meta lo exige)." });
+
+        var result = await metaWebhook.SetSubscriptionAsync(line.MetaWabaId, line.MetaAccessToken, callbackUrl, verifyToken, null, ct);
+
+        // Relectura para devolver el estado actualizado (best-effort).
+        var sub = await metaWebhook.GetSubscriptionAsync(line.MetaWabaId, line.MetaAccessToken, null, ct);
+        bool? overridePointsToUs = sub.OverrideCallbackUri is null
+            ? null
+            : string.Equals(sub.OverrideCallbackUri.TrimEnd('/'), callbackUrl.TrimEnd('/'), StringComparison.OrdinalIgnoreCase);
+
+        return Ok(new
+        {
+            applied = result.Ok,
+            status = result.Status,
+            detail = result.Detail,
+            appliedCallbackUrl = callbackUrl,
+            // Estado releído
+            isSubscribed = sub.IsSubscribed,
+            overrideCallbackUri = sub.OverrideCallbackUri,
+            overridePointsToUs,
+            appName = sub.AppName,
+        });
+    }
+
     private async Task<WhatsAppLine?> GetLine(Guid id, CancellationToken ct)
     {
         return await db.WhatsAppLines
@@ -313,3 +448,7 @@ public class WhatsAppLinesController(
 }
 
 public record TestMessageRequest(string To, string Message);
+
+// Cuerpo opcional para configurar el webhook desde TalkIA. Si CallbackUrl viene
+// vacío, el endpoint usa la URL por defecto del sistema (Meta:CallbackUrl).
+public record SetMetaWebhookRequest(string? CallbackUrl = null);

@@ -250,6 +250,8 @@ public partial class CampaignDispatcherService(
                         campaignId, reason);
                     campaign.IsActive = false;
                     campaign.Status = CampaignStatus.Paused;
+                    campaign.PauseReason = $"La línea de WhatsApp no está disponible para enviar: {reason}. Revisá la conexión de la línea y reanudá la campaña.";
+                    campaign.PausedAt = DateTime.UtcNow;
                     await db.SaveChangesAsync(ct);
 
                     // Notificar al admin del tenant (best-effort).
@@ -770,6 +772,8 @@ public partial class CampaignDispatcherService(
                                 campaignId, sent, midReason);
                             campaign.IsActive = false;
                             campaign.Status = CampaignStatus.Paused;
+                            campaign.PauseReason = $"La línea de WhatsApp se cayó durante el envío (después de {sent} mensajes): {midReason}. Revisá la conexión y reanudá.";
+                            campaign.PausedAt = DateTime.UtcNow;
                             await db.SaveChangesAsync(ct);
                             try { await NotifyLineDownAsync(tenant, campaign, midReason!, ct); }
                             catch (Exception ex) { logger.LogWarning(ex, "[LineHealth] Notificación mid-batch falló."); }
@@ -944,6 +948,8 @@ public partial class CampaignDispatcherService(
                 {
                     campaign.IsActive = false;
                     campaign.Status   = CampaignStatus.Paused;
+                    campaign.PauseReason = $"Alta tasa de fallos en el último lote: {failed} de {processedThisBatch} mensajes fallaron ({failureRate:F0}%, umbral {threshold:F0}%). Posible cuenta WhatsApp restringida o lista con números inválidos. Revisá y reanudá.";
+                    campaign.PausedAt = DateTime.UtcNow;
                     logger.LogWarning(
                         "Campaña {CampaignId}: AUTO-PAUSADA. Batch terminó con " +
                         "{Failed}/{Total} fallidos ({Rate:F1}% >= {Threshold:F1}% umbral). " +

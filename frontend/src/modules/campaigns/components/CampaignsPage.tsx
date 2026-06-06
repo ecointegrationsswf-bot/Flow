@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useLayoutEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
-import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban, MoreVertical, BarChart3, Lock } from 'lucide-react'
+import { Megaphone, Plus, Loader2, Search, X, Rocket, Eye, Pause, Play, Ban, MoreVertical, BarChart3, Lock, Info } from 'lucide-react'
 import { CampaignDeliveryStatsModal } from './CampaignDeliveryStatsModal'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/Badge'
@@ -62,6 +62,8 @@ export function CampaignsPage() {
   const [launchingId, setLaunchingId] = useState<string | null>(null)
   const [togglingId, setTogglingId] = useState<string | null>(null)
   const [cancellingId, setCancellingId] = useState<string | null>(null)
+  // Modal con el motivo de la última pausa (auto o manual) de una campaña.
+  const [pauseInfo, setPauseInfo] = useState<{ name: string; reason: string; pausedAt?: string | null } | null>(null)
   // Id de la campaña cuyo menú "..." está abierto. null = todos cerrados.
   const [openMenuId, setOpenMenuId] = useState<string | null>(null)
   // Campaña abierta en el modal de estadísticas de delivery.
@@ -403,6 +405,17 @@ export function CampaignsPage() {
                             {status === 'Closed' && <Lock className="h-2.5 w-2.5" />}
                             {stCfg.label}
                           </span>
+                          {/* Motivo de pausa: ícono "ver por qué se pausó" — para que el
+                              usuario no quede desinformado cuando se auto-pausa. */}
+                          {c.pauseReason && (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setPauseInfo({ name: c.name, reason: c.pauseReason!, pausedAt: c.pausedAt }) }}
+                              title="Ver por qué se pausó"
+                              className="ml-1 inline-flex items-center rounded-full p-0.5 text-orange-500 hover:bg-orange-50 hover:text-orange-700"
+                            >
+                              <Info className="h-3.5 w-3.5" />
+                            </button>
+                          )}
                           {/* Badge cool-down: si Running + tiene NextBatchAfterUtc futuro,
                               mostrar cuánto falta para el próximo batch. Phase 3. */}
                           {isRunning && c.nextBatchAfterUtc && (() => {
@@ -553,6 +566,40 @@ export function CampaignsPage() {
           campaignName={statsCampaign.name}
           onClose={() => setStatsCampaign(null)}
         />
+      )}
+
+      {/* Modal: motivo de la pausa (auto o manual) — informa al usuario. */}
+      {pauseInfo && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => setPauseInfo(null)}>
+          <div className="w-full max-w-md rounded-xl bg-white shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between border-b border-gray-100 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-orange-100 text-orange-600">
+                  <Pause className="h-4 w-4" />
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">Campaña pausada</p>
+                  <p className="text-xs text-gray-500">{pauseInfo.name}</p>
+                </div>
+              </div>
+              <button onClick={() => setPauseInfo(null)} className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="px-5 py-4 space-y-2">
+              <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400">Motivo</p>
+              <p className="text-sm text-gray-700">{pauseInfo.reason}</p>
+              {pauseInfo.pausedAt && (
+                <p className="pt-1 text-xs text-gray-400">Pausada: {tt.dateTime(pauseInfo.pausedAt)}</p>
+              )}
+            </div>
+            <div className="flex justify-end border-t border-gray-100 px-5 py-3">
+              <button onClick={() => setPauseInfo(null)} className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

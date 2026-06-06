@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState, type ChangeEvent, type DragEvent } from 'react'
 import {
   Plus, RefreshCw, Pencil, Trash2, X, CheckCircle2, Clock, XCircle, FileText, Send, Save, HelpCircle, Sparkles,
-  UploadCloud, FileSpreadsheet, Loader2, Variable,
+  UploadCloud, FileSpreadsheet, Loader2, Variable, Eye, Power,
 } from 'lucide-react'
 import {
   useMetaTemplates, useCreateMetaTemplate, useUpdateMetaTemplate,
@@ -96,6 +96,9 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [showCatHelp, setShowCatHelp] = useState(false)
   const isEditing = !!form.id
+
+  // Plantilla a previsualizar en la modal "ojo" (ver contenido completo).
+  const [viewTemplate, setViewTemplate] = useState<MetaMessageTemplate | null>(null)
 
   // Editor de mapeo {{n}}→campo (funciona incluso en plantillas aprobadas).
   // Flujo: (1) subir el Excel de la campaña → (2) mapear con sus columnas reales.
@@ -328,8 +331,8 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
       {mappingTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
           onClick={() => !mappingMut.isPending && setMappingTarget(null)}>
-          <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={ev => ev.stopPropagation()}>
-            <div className="bg-gradient-to-br from-[#1a3a6b] via-[#1e457e] to-[#2d5a9e] px-6 py-5 text-white">
+          <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={ev => ev.stopPropagation()}>
+            <div className="shrink-0 bg-gradient-to-br from-[#1a3a6b] via-[#1e457e] to-[#2d5a9e] px-6 py-4 text-white">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-white/20"><Variable size={22} /></div>
                 <div>
@@ -343,7 +346,7 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
 
             {mappingFields === null ? (
               /* ── Paso 1: subir el Excel de la campaña ── */
-              <div className="px-6 py-5 space-y-3">
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 space-y-3">
                 <p className="text-sm text-gray-600">
                   Subí el <b>Excel (o CSV)</b> que vas a usar en la campaña. Leeremos sus
                   <b> columnas reales</b> para mapear cada variable de la plantilla.
@@ -371,14 +374,14 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
               </div>
             ) : (
               /* ── Paso 2: mapear cada {{n}} a las columnas reales del archivo ── */
-              <div className="px-6 py-5 space-y-3">
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 space-y-3">
                 <div className="flex items-center justify-between">
                   <p className="text-xs text-gray-500">
                     Asigná cada <span className="font-mono">{'{{n}}'}</span> a una <b>columna del archivo</b>.
                   </p>
                   <button type="button" onClick={() => setMappingFields(null)} className="text-[11px] font-medium text-[#1a3a6b] hover:underline">Cambiar archivo</button>
                 </div>
-                <p className="rounded-lg bg-gray-50 border border-gray-200 p-2 text-sm text-gray-700 whitespace-pre-wrap">{mappingTarget.bodyText}</p>
+                <p className="max-h-24 overflow-y-auto rounded-lg bg-gray-50 border border-gray-200 p-2 text-sm text-gray-700 whitespace-pre-wrap">{mappingTarget.bodyText}</p>
                 <div className="space-y-2">
                   {Array.from({ length: mappingVarCount }).map((_, i) => (
                     <div key={i} className="flex items-center gap-2">
@@ -395,7 +398,7 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
               </div>
             )}
 
-            <div className="flex justify-end gap-2 border-t border-gray-100 px-6 py-4">
+            <div className="flex shrink-0 justify-end gap-2 border-t border-gray-100 px-6 py-4">
               <button type="button" onClick={() => setMappingTarget(null)} disabled={mappingMut.isPending}
                 className="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Cancelar</button>
               <button type="button" onClick={saveMapping} disabled={mappingMut.isPending || mappingFields === null}
@@ -406,6 +409,55 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
           </div>
         </div>
       )}
+
+      {/* ── Modal: ver plantilla completa (ícono ojo del grid) ── */}
+      {viewTemplate && (() => {
+        const sm = STATUS_META[viewTemplate.metaStatus] ?? STATUS_META.DRAFT
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
+            onClick={() => setViewTemplate(null)}>
+            <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl" onClick={ev => ev.stopPropagation()}>
+              <div className="shrink-0 bg-gradient-to-br from-[#1a3a6b] via-[#1e457e] to-[#2d5a9e] px-6 py-4 text-white">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="font-mono text-base font-bold leading-tight break-all">{viewTemplate.name}</h3>
+                    <p className="text-xs text-white/85">
+                      {viewTemplate.language} · {viewTemplate.category} · {viewTemplate.purpose === 'FollowUp' ? 'Seguimiento' : 'Lanzamiento'}
+                    </p>
+                  </div>
+                  <button type="button" onClick={() => setViewTemplate(null)} className="rounded-lg p-1 text-white/80 hover:bg-white/20 hover:text-white"><X size={18} /></button>
+                </div>
+              </div>
+              <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 space-y-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${sm.cls}`}><sm.Icon size={12} /> {sm.label}</span>
+                  <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${viewTemplate.isEnabled ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>{viewTemplate.isEnabled ? 'Activa' : 'Inactiva'}</span>
+                </div>
+                {/* Vista tipo burbuja de WhatsApp */}
+                <div className="rounded-xl border border-[#cdebbf] bg-[#e7ffdb] p-3 space-y-2">
+                  {viewTemplate.headerText && <p className="text-sm font-semibold text-gray-800 whitespace-pre-wrap">{viewTemplate.headerText}</p>}
+                  <p className="text-sm text-gray-800 whitespace-pre-wrap">{viewTemplate.bodyText}</p>
+                  {viewTemplate.footerText && <p className="text-xs text-gray-500 whitespace-pre-wrap">{viewTemplate.footerText}</p>}
+                </div>
+                {viewTemplate.metaStatus === 'REJECTED' && viewTemplate.metaRejectedReason && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 p-2 text-xs text-red-700">
+                    <span className="font-semibold">Motivo del rechazo:</span> {viewTemplate.metaRejectedReason}
+                  </div>
+                )}
+              </div>
+              <div className="flex shrink-0 justify-end gap-2 border-t border-gray-100 px-6 py-3">
+                {countVars(viewTemplate.bodyText) > 0 && (
+                  <button type="button" onClick={() => { const t = viewTemplate; setViewTemplate(null); openMapping(t) }}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50">
+                    <Variable size={15} /> Mapeo
+                  </button>
+                )}
+                <button type="button" onClick={() => setViewTemplate(null)} className="rounded-lg bg-[#1a3a6b] px-4 py-1.5 text-sm font-semibold text-white hover:bg-[#234a85]">Cerrar</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── Modal: pedir el Excel de la campaña cuando falta estructura ── */}
       {showExcelModal && (
@@ -496,14 +548,6 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={onGenerate}
-            disabled={!campaignTemplateId || generateMut.isPending}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-purple-300 bg-purple-50 px-3 py-2 text-sm font-medium text-purple-700 hover:bg-purple-100 disabled:opacity-50"
-            title={campaignTemplateId
-              ? 'Genera borradores leyendo el prompt del maestro (una plantilla por burbuja ~)'
-              : 'Guardá el maestro primero para poder generar desde su prompt'}>
-            <Sparkles size={16} className={generateMut.isPending ? 'animate-pulse' : ''} /> Generar desde el prompt
-          </button>
           <button type="button" onClick={onSyncAll} disabled={syncAllMut.isPending}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             title="Importar/actualizar las plantillas que ya existen en Meta">
@@ -668,90 +712,118 @@ export function MetaTemplatesTab({ lineId, campaignTemplateId, baseName }: {
           “Sincronizar con Meta” para importar las que ya existen en tu cuenta de Meta.
         </div>
       ) : (
-        <div className="space-y-2">
+        <div className="overflow-x-auto rounded-xl border border-gray-200">
           {(() => {
             // Tamaño de cada grupo de burbujas (para mostrar "N de M").
             const groupSizes = new Map<string, number>()
             for (const t of templates)
               if (t.bubbleGroupId) groupSizes.set(t.bubbleGroupId, (groupSizes.get(t.bubbleGroupId) ?? 0) + 1)
-            return templates.map(t => {
-            const sm = STATUS_META[t.metaStatus] ?? STATUS_META.DRAFT
-            const groupSize = t.bubbleGroupId ? groupSizes.get(t.bubbleGroupId) ?? 1 : 1
             return (
-              <div key={t.id} className="rounded-xl border border-gray-200 bg-white p-4">
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-mono text-sm font-semibold text-gray-900">{t.name}</span>
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${t.purpose === 'FollowUp' ? 'bg-teal-100 text-teal-700' : 'bg-violet-100 text-violet-700'}`}>
-                        {t.purpose === 'FollowUp' ? 'Seguimiento' : 'Lanzamiento'}
-                      </span>
-                      {groupSize > 1 && (
-                        <span className="inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5 text-xs font-medium"
-                          title="Estas plantillas se envían en secuencia en la campaña (replican las burbujas del prompt)">
-                          Burbuja {t.sequenceOrder} de {groupSize}
-                        </span>
-                      )}
-                      <span className="text-xs text-gray-400">{t.language} · {t.category}</span>
-                      <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium ${sm.cls}`}>
-                        <sm.Icon size={12} /> {sm.label}
-                      </span>
-                      <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${t.isEnabled ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
-                        {t.isEnabled ? 'Activa' : 'Inactiva'}
-                      </span>
-                    </div>
-                    {t.headerText && <p className="mt-2 text-xs font-medium text-gray-500">{t.headerText}</p>}
-                    <p className="mt-1 text-sm text-gray-700 whitespace-pre-wrap">{t.bodyText}</p>
-                    {t.footerText && <p className="mt-1 text-xs text-gray-400">{t.footerText}</p>}
-                    {t.metaStatus === 'REJECTED' && t.metaRejectedReason && (
-                      <p className="mt-2 text-xs text-red-600">Motivo del rechazo: {t.metaRejectedReason}</p>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {/* Botón claro de envío — solo para borradores/rechazadas (lo que falta aprobar). */}
-                    {(t.metaStatus === 'DRAFT' || t.metaStatus === 'REJECTED') && (
-                      <button type="button" onClick={() => onSubmit(t)}
-                        disabled={submitMut.isPending}
-                        className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-                        title="Enviar esta plantilla a Meta para su aprobación">
-                        <Send size={14} /> Enviar a Meta
-                      </button>
-                    )}
-                    <button type="button" title="Sincronizar estado con Meta" onClick={() => onSync(t)}
-                      disabled={syncMut.isPending}
-                      className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50">
-                      <RefreshCw size={16} className={syncMut.isPending ? 'animate-spin' : ''} />
-                    </button>
-                    {countVars(t.bodyText) > 0 && (
-                      <button type="button" title="Configurar mapeo de variables {{n}}→campo"
-                        onClick={() => openMapping(t)}
-                        className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium ${
-                          (t.bodyMapping?.filter(Boolean).length ?? 0) < countVars(t.bodyText)
-                            ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                            : 'text-gray-600 hover:bg-gray-100'}`}>
-                        <Variable size={14} /> Mapeo
-                      </button>
-                    )}
-                    <button type="button" title={t.isEnabled ? 'Desactivar' : 'Activar'}
-                      onClick={() => toggleMut.mutate({ id: t.id, enable: !t.isEnabled })}
-                      className="rounded-lg px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100">
-                      {t.isEnabled ? 'Desactivar' : 'Activar'}
-                    </button>
-                    {(t.metaStatus === 'DRAFT' || t.metaStatus === 'REJECTED') && (
-                      <button type="button" title="Editar" onClick={() => startEdit(t)}
-                        className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
-                        <Pencil size={16} />
-                      </button>
-                    )}
-                    <button type="button" title="Eliminar" onClick={() => onDelete(t)}
-                      className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600">
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                </div>
-              </div>
+              <table className="min-w-full divide-y divide-gray-100 text-sm">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Plantilla</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Tipo de uso</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Idioma · Categoría</th>
+                    <th className="px-3 py-2 text-left text-xs font-medium text-gray-500">Estado</th>
+                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-500">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 bg-white">
+                  {templates.map(t => {
+                    const sm = STATUS_META[t.metaStatus] ?? STATUS_META.DRAFT
+                    const groupSize = t.bubbleGroupId ? groupSizes.get(t.bubbleGroupId) ?? 1 : 1
+                    const varCount = countVars(t.bodyText)
+                    const mappedCount = t.bodyMapping?.filter(Boolean).length ?? 0
+                    const mappingIncomplete = varCount > 0 && mappedCount < varCount
+                    const isDraftOrRejected = t.metaStatus === 'DRAFT' || t.metaStatus === 'REJECTED'
+                    return (
+                      <tr key={t.id} className="hover:bg-gray-50/60">
+                        {/* Plantilla + badge de secuencia */}
+                        <td className="px-3 py-2 align-top">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-mono text-sm font-semibold text-gray-900">{t.name}</span>
+                            {groupSize > 1 && (
+                              <span className="inline-flex items-center rounded-full bg-indigo-100 text-indigo-700 px-2 py-0.5 text-[11px] font-medium"
+                                title="Se envían en secuencia en la campaña (replican las burbujas del prompt)">
+                                Burbuja {t.sequenceOrder} de {groupSize}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        {/* Tipo de uso (Lanzamiento / Seguimiento) */}
+                        <td className="px-3 py-2 align-top">
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${t.purpose === 'FollowUp' ? 'bg-teal-100 text-teal-700' : 'bg-violet-100 text-violet-700'}`}>
+                            {t.purpose === 'FollowUp' ? 'Seguimiento' : 'Lanzamiento'}
+                          </span>
+                        </td>
+                        {/* Idioma · Categoría */}
+                        <td className="px-3 py-2 align-top whitespace-nowrap text-xs text-gray-500">
+                          {t.language} · {t.category}
+                        </td>
+                        {/* Estado */}
+                        <td className="px-3 py-2 align-top">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${sm.cls}`}>
+                              <sm.Icon size={12} /> {sm.label}
+                            </span>
+                            <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${t.isEnabled ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-500'}`}>
+                              {t.isEnabled ? 'Activa' : 'Inactiva'}
+                            </span>
+                            {mappingIncomplete && (
+                              <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-700 px-2 py-0.5 text-[11px] font-medium" title="Faltan variables por mapear">
+                                Mapeo {mappedCount}/{varCount}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        {/* Acciones */}
+                        <td className="px-3 py-2 align-top">
+                          <div className="flex items-center justify-end gap-1">
+                            <button type="button" title="Ver plantilla" onClick={() => setViewTemplate(t)}
+                              className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-[#1a3a6b]">
+                              <Eye size={16} />
+                            </button>
+                            {isDraftOrRejected && (
+                              <button type="button" onClick={() => onSubmit(t)} disabled={submitMut.isPending}
+                                className="inline-flex items-center gap-1.5 rounded-lg bg-green-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-green-700 disabled:opacity-50"
+                                title="Enviar a Meta para aprobación">
+                                <Send size={14} /> Enviar
+                              </button>
+                            )}
+                            {varCount > 0 && (
+                              <button type="button" title="Mapeo de variables {{n}}→campo" onClick={() => openMapping(t)}
+                                className={`inline-flex items-center gap-1 rounded-lg px-2 py-1.5 text-xs font-medium ${mappingIncomplete ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'text-gray-600 hover:bg-gray-100'}`}>
+                                <Variable size={14} /> Mapeo
+                              </button>
+                            )}
+                            <button type="button" title="Sincronizar estado con Meta" onClick={() => onSync(t)} disabled={syncMut.isPending}
+                              className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50">
+                              <RefreshCw size={16} className={syncMut.isPending ? 'animate-spin' : ''} />
+                            </button>
+                            <button type="button" title={t.isEnabled ? 'Desactivar' : 'Activar'}
+                              onClick={() => toggleMut.mutate({ id: t.id, enable: !t.isEnabled })}
+                              className={`rounded-lg p-2 hover:bg-gray-100 ${t.isEnabled ? 'text-gray-400 hover:text-gray-700' : 'text-blue-500 hover:text-blue-700'}`}>
+                              <Power size={16} />
+                            </button>
+                            {isDraftOrRejected && (
+                              <button type="button" title="Editar" onClick={() => startEdit(t)}
+                                className="rounded-lg p-2 text-gray-400 hover:bg-gray-100 hover:text-gray-700">
+                                <Pencil size={16} />
+                              </button>
+                            )}
+                            <button type="button" title="Eliminar" onClick={() => onDelete(t)}
+                              className="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-600">
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
             )
-          })
           })()}
         </div>
       ))}

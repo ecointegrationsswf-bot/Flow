@@ -49,12 +49,23 @@ public class CampaignsController(
     AgentFlow.Infrastructure.Channels.MetaCloudApi.IMetaCloudApiHealthService metaHealth) : ControllerBase
 {
     // Devuelve el nombre completo del usuario autenticado (claim full_name),
-    // con fallback a email y luego a "system".
+    // con fallback a email y luego a "system". Se usa para campos de AUDITORÍA
+    // legibles (ej: CreatedByUserId mostrado en listados).
     private string CurrentUser =>
         User.FindFirst("full_name")?.Value
         ?? User.FindFirst(JwtRegisteredClaimNames.Email)?.Value
         ?? User.Identity?.Name
         ?? "system";
+
+    // ID ESTABLE del usuario autenticado (claim sub / NameIdentifier = AppUser.Id).
+    // Es lo que se guarda en Campaign.LaunchedByUserId, para que el filtro
+    // "Mis conversaciones" del Monitor case por id y no por nombre (que puede
+    // repetirse o cambiar). Fallback a CurrentUser solo si el token no trae el
+    // claim de id (no debería pasar con los JWT actuales).
+    private string CurrentUserId =>
+        User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value
+        ?? User.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value
+        ?? CurrentUser;
 
     /// <summary>
     /// Lista todas las campañas del tenant autenticado.
@@ -82,6 +93,8 @@ public class CampaignsController(
             c.LaunchedAt,
             c.CreatedByUserId,
             c.LaunchedByUserId,
+            c.PauseReason,
+            c.PausedAt,
             // Progreso en porcentaje
             Progress = c.TotalContacts > 0
                 ? Math.Round((double)c.ProcessedContacts / c.TotalContacts * 100, 1)
@@ -144,7 +157,7 @@ public class CampaignsController(
         var result = await mediator.Send(new LaunchCampaignV2Command(
             CampaignId: id,
             TenantId: tenantCtx.TenantId,
-            LaunchedByUserId: CurrentUser,
+            LaunchedByUserId: CurrentUserId,
             LaunchedByUserPhone: phone,
             WarmupDay: body?.WarmupDay ?? 0
         ), ct);
@@ -171,7 +184,7 @@ public class CampaignsController(
         var result = await mediator.Send(new LaunchCampaignV2Command(
             CampaignId: id,
             TenantId: tenantCtx.TenantId,
-            LaunchedByUserId: CurrentUser,
+            LaunchedByUserId: CurrentUserId,
             LaunchedByUserPhone: phone,
             WarmupDay: warmupDay
         ), ct);
@@ -305,6 +318,8 @@ public class CampaignsController(
         if (campaign is null) return NotFound(new { error = "Campaña no encontrada." });
 
         campaign.IsActive = false;
+        campaign.PauseReason = $"Pausada manualmente por {CurrentUser}.";
+        campaign.PausedAt = DateTime.UtcNow;
         await campaignRepo.UpdateAsync(campaign, ct);
 
         return Ok(new { message = "Campaña pausada. Los envíos pendientes se detienen." });
@@ -328,6 +343,8 @@ public class CampaignsController(
         // Volver a Running (NO solo IsActive): el CampaignWorker filtra por Status==Running.
         campaign.IsActive = true;
         campaign.Status = CampaignStatus.Running;
+        campaign.PauseReason = null;   // limpiar motivo: ya no está pausada
+        campaign.PausedAt = null;
         await campaignRepo.UpdateAsync(campaign, ct);
 
         return Ok(new { message = "Campaña reactivada. El Worker la recogerá en el próximo tick." });
@@ -982,7 +999,7 @@ public class CampaignsController(
         var result = await mediator.Send(new LaunchCampaignV2Command(
             CampaignId: id,
             TenantId: tenantCtx.TenantId,
-            LaunchedByUserId: CurrentUser,
+            LaunchedByUserId: CurrentUserId,
             LaunchedByUserPhone: launcherPhone,
             WarmupDay: 0
         ), ct);

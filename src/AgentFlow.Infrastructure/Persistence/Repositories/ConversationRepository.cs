@@ -65,9 +65,44 @@ public class ConversationRepository(AgentFlowDbContext db) : IConversationReposi
             }
             else
             {
+                // El userKey que llega del Monitor puede ser el id (GUID), el email
+                // o el fullName del usuario. Y lo que se guardó en
+                // Campaign.LaunchedByUserId también varía: id en campañas NUEVAS
+                // (a partir del fix de jun-2026) y fullName/email en campañas
+                // VIEJAS. Para que "Mis conversaciones" muestre TODAS sus campañas
+                // sin importar el formato, resolvemos al usuario y matcheamos contra
+                // todos sus identificadores conocidos.
+                var keys = new List<string> { userKey };
+
+                var appUser = await db.AppUsers
+                    .Where(u => u.Id.ToString() == userKey || u.Email == userKey || u.FullName == userKey)
+                    .Select(u => new { u.Id, u.Email, u.FullName })
+                    .FirstOrDefaultAsync(ct);
+                if (appUser != null)
+                {
+                    keys.Add(appUser.Id.ToString());
+                    if (!string.IsNullOrWhiteSpace(appUser.Email)) keys.Add(appUser.Email);
+                    if (!string.IsNullOrWhiteSpace(appUser.FullName)) keys.Add(appUser.FullName);
+                }
+                else
+                {
+                    var sa = await db.SuperAdmins
+                        .Where(s => s.Id.ToString() == userKey || s.Email == userKey || s.FullName == userKey)
+                        .Select(s => new { s.Id, s.Email, s.FullName })
+                        .FirstOrDefaultAsync(ct);
+                    if (sa != null)
+                    {
+                        keys.Add(sa.Id.ToString());
+                        if (!string.IsNullOrWhiteSpace(sa.Email)) keys.Add(sa.Email);
+                        if (!string.IsNullOrWhiteSpace(sa.FullName)) keys.Add(sa.FullName);
+                    }
+                }
+
+                var keyList = keys.Distinct().ToList();
                 q = q.Where(c => c.CampaignId != null
                               && db.Campaigns.Any(camp => camp.Id == c.CampaignId
-                                                       && camp.LaunchedByUserId == userKey));
+                                                       && camp.LaunchedByUserId != null
+                                                       && keyList.Contains(camp.LaunchedByUserId)));
             }
         }
 

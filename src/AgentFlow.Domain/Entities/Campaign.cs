@@ -44,6 +44,17 @@ public class Campaign
     public string? LaunchedByUserId { get; set; }
 
     /// <summary>
+    /// Motivo legible de la última pausa (automática o manual). Se muestra al
+    /// usuario en la lista de campañas (ícono "ver motivo") para que no quede
+    /// desinformado cuando una campaña se auto-pausa. Null si nunca se pausó o
+    /// si se reanudó (se limpia al reanudar).
+    /// </summary>
+    public string? PauseReason { get; set; }
+
+    /// <summary>Cuándo se registró la última pausa (UTC). Null si no aplica.</summary>
+    public DateTime? PausedAt { get; set; }
+
+    /// <summary>
     /// Teléfono WhatsApp del ejecutivo que lanzó la campaña (copiado desde AppUser.NotifyPhone
     /// al momento del lanzamiento). Se usa para el TRANSFER_CHAT — notificar al ejecutivo
     /// cuando un cliente solicita atención humana.

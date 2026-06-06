@@ -1,17 +1,19 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
 import {
   Plus, Trash2, Pencil, RefreshCw, LogOut, QrCode, Phone, X, Loader2, Send,
+  ChevronDown, ChevronUp, Activity, Webhook, Copy, CheckCircle2, AlertTriangle, Settings2,
 } from 'lucide-react'
 import { LoadingSpinner } from '@/shared/components/LoadingSpinner'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
-import { toast } from '@/shared/components/dialog'
+import { toast, confirmDialog } from '@/shared/components/dialog'
 import {
   useWhatsAppLines, useCreateWhatsAppLine, useUpdateWhatsAppLine, useDeleteWhatsAppLine,
   useLineStatus, useLineQr, useRestartLine, useLogoutLine, useSendTestMessage,
+  useMetaLineHealth, useMetaLineWebhook, useSetMetaLineWebhook,
 } from '@/shared/hooks/useWhatsAppLines'
 import type { WhatsAppLine } from '@/shared/types'
 
@@ -97,9 +99,11 @@ function LineCard({
 
   const [showRestart, setShowRestart] = useState(false)
   const [showLogout, setShowLogout] = useState(false)
+  const [showMetaPanel, setShowMetaPanel] = useState(false)
 
   return (
-    <div className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3 shadow-sm">
+    <div className="rounded-lg border border-gray-200 bg-white shadow-sm">
+    <div className="flex items-center justify-between px-4 py-3">
       <div className="flex items-center gap-3 min-w-0">
         {/* Semaforo */}
         <span
@@ -160,6 +164,17 @@ function LineCard({
             Probar
           </button>
         )}
+        {isMeta && (
+          <button
+            onClick={() => setShowMetaPanel(v => !v)}
+            className={`flex items-center gap-1 rounded-lg px-2.5 py-1.5 text-xs font-medium transition-colors ${showMetaPanel ? 'bg-[#1a3a6b] text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+            title="Configuración / diagnóstico de la API de Meta (solo lectura)"
+          >
+            <Settings2 className="h-3.5 w-3.5" />
+            Config API
+            {showMetaPanel ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
+        )}
         {isConnected && (
           <>
             <button
@@ -215,6 +230,233 @@ function LineCard({
           variant="danger"
         />
       </div>
+    </div>
+
+    {/* Panel de diagnóstico Meta (solo lectura) — se cuelga debajo de la fila */}
+    {isMeta && showMetaPanel && <MetaLineDiagnostics line={line} />}
+    </div>
+  )
+}
+
+// ── Panel de diagnóstico de una línea Meta (SOLO LECTURA) ──────────
+// Muestra la ficha de configuración API (sin secretos en claro) y permite
+// verificar bajo demanda la salud de la línea y el estado del webhook.
+// NO modifica nada en Meta ni en la BD: todo es GET.
+function MetaLineDiagnostics({ line }: { line: WhatsAppLine }) {
+  const health = useMetaLineHealth(line.id)
+  const webhook = useMetaLineWebhook(line.id)
+  const setWebhook = useSetMetaLineWebhook(line.id)
+  const h = health.data
+  const w = webhook.data
+
+  const [urlInput, setUrlInput] = useState('')
+
+  // Al abrir el panel cargamos el estado del webhook (da la URL por defecto + estado actual).
+  useEffect(() => { webhook.mutate() }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  // Prefijar el input con la URL por defecto del sistema cuando llega.
+  useEffect(() => {
+    if (w?.defaultCallbackUrl && !urlInput) setUrlInput(w.defaultCallbackUrl)
+  }, [w?.defaultCallbackUrl]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Acción de ESCRITURA: configura el webhook en Meta (con confirmación previa).
+  const onConfigure = async () => {
+    const url = urlInput.trim()
+    if (!url) return
+    const ok = await confirmDialog({
+      title: 'Configurar webhook en Meta',
+      description: `Se suscribirá esta WABA y se apuntará su webhook a: ${url}. Esto modifica la configuración en Meta para este corredor. ¿Continuar?`,
+      variant: 'danger',
+      confirmLabel: 'Configurar',
+    })
+    if (!ok) return
+    try {
+      const res = await setWebhook.mutateAsync(url)
+      if (res.applied) {
+        toast.success('Webhook configurado en Meta')
+        webhook.mutate() // relectura para refrescar el estado mostrado
+      } else {
+        toast.error('No se pudo configurar (ver detalle abajo)')
+      }
+    } catch {
+      toast.error('Error al configurar el webhook')
+    }
+  }
+
+  const copy = (text?: string | null, label = 'Valor') => {
+    if (!text) return
+    navigator.clipboard?.writeText(text).then(
+      () => toast.success(`${label} copiado`),
+      () => toast.error('No se pudo copiar'),
+    )
+  }
+
+  const healthBadge = () => {
+    if (!h) return null
+    const ok = h.status === 'authenticated'
+    const cls = ok ? 'bg-green-50 text-green-700 border-green-200'
+      : h.status === 'token_invalid' ? 'bg-red-50 text-red-700 border-red-200'
+      : 'bg-amber-50 text-amber-700 border-amber-200'
+    const label = ok ? 'Operativa' : h.status === 'token_invalid' ? 'Token inválido'
+      : h.status === 'blocked' ? 'Bloqueada' : h.status === 'unconfigured' ? 'Sin configurar' : 'No determinada'
+    return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-medium ${cls}`}>
+      {ok ? <CheckCircle2 className="h-3 w-3" /> : <AlertTriangle className="h-3 w-3" />}{label}
+    </span>
+  }
+
+  return (
+    <div className="border-t border-gray-100 bg-gray-50/60 px-4 py-4 space-y-4">
+      {/* Ficha de configuración (lectura) */}
+      <div>
+        <p className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-gray-400">Configuración API (Meta Cloud)</p>
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-1.5 sm:grid-cols-2">
+          <FieldRow label="Phone Number ID" value={line.instanceId} onCopy={() => copy(line.instanceId, 'Phone ID')} mono />
+          <FieldRow label="WABA ID" value={line.metaWabaId} onCopy={() => copy(line.metaWabaId, 'WABA ID')} mono />
+          <FieldRow label="Business ID" value={line.metaBusinessId} mono />
+          <FieldRow label="Access Token" value={line.metaAccessTokenLast4 ? `•••• ${line.metaAccessTokenLast4}` : 'No configurado'} ok={!!line.metaAccessTokenLast4} />
+          <FieldRow label="App Secret" value={line.metaAppSecretLast4 ? `•••• ${line.metaAppSecretLast4}` : 'No configurado'} ok={!!line.metaAppSecretLast4} />
+        </dl>
+      </div>
+
+      {/* Acciones de verificación */}
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          onClick={() => health.mutate()}
+          disabled={health.isPending}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {health.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
+          Verificar línea
+        </button>
+        {healthBadge()}
+        <button
+          onClick={() => webhook.mutate()}
+          disabled={webhook.isPending}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {webhook.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Webhook className="h-3.5 w-3.5" />}
+          Verificar webhook
+        </button>
+      </div>
+
+      {h?.detail && (
+        <p className="text-[11px] text-gray-500">{h.detail}</p>
+      )}
+
+      {/* Resultado del webhook */}
+      {w && (
+        <div className="rounded-lg border border-gray-200 bg-white p-3 space-y-2 text-xs">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-gray-700">URL de webhook (por defecto del sistema)</span>
+            <button onClick={() => copy(w.defaultCallbackUrl, 'URL')} className="text-gray-400 hover:text-[#1a3a6b]" title="Copiar URL">
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <p className="break-all font-mono text-[11px] text-gray-600">{w.defaultCallbackUrl}</p>
+          <div className="flex items-center justify-between gap-2 pt-1">
+            <span className="font-semibold text-gray-700">Verify Token</span>
+            <button onClick={() => copy(w.verifyToken, 'Verify token')} className="text-gray-400 hover:text-[#1a3a6b]" title="Copiar verify token">
+              <Copy className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <p className="break-all font-mono text-[11px] text-gray-600">{w.verifyToken || '—'}</p>
+          <p className="text-[11px] text-gray-400 pt-1">
+            El webhook de Meta es único por App (la misma URL para todas las líneas); adentro resolvemos cada línea por su Phone Number ID.
+          </p>
+
+          <div className="border-t border-gray-100 pt-2 space-y-1">
+            {!w.ok ? (
+              <p className="inline-flex items-center gap-1 text-amber-700">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                {w.status === 'no_permission'
+                  ? 'No se pudo leer la suscripción: el token no tiene permiso de gestión (whatsapp_business_management).'
+                  : w.status === 'token_invalid' ? 'Token inválido o vencido.'
+                  : (w.detail ?? 'No se pudo consultar el estado en Meta.')}
+              </p>
+            ) : w.isSubscribed ? (
+              <>
+                <p className="inline-flex items-center gap-1 text-green-700">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  WABA suscrita{w.appName ? ` a la App "${w.appName}"` : ''}.
+                </p>
+                {w.overrideCallbackUri ? (
+                  <p className={w.overridePointsToUs ? 'text-green-700' : 'text-amber-700'}>
+                    {w.overridePointsToUs
+                      ? '✓ Tiene un override que apunta a esta URL.'
+                      : `⚠ Tiene un override que apunta a otra URL: ${w.overrideCallbackUri}`}
+                  </p>
+                ) : (
+                  <p className="text-gray-500">Sin override propio — usa el webhook a nivel de App (lo normal).</p>
+                )}
+              </>
+            ) : (
+              <p className="inline-flex items-center gap-1 text-amber-700">
+                <AlertTriangle className="h-3.5 w-3.5" />
+                La WABA no está suscrita a ninguna App. Configurá el webhook en el panel de Meta.
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Configurar webhook DESDE TalkIA (escritura — Parte 2) ── */}
+      <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 space-y-2 text-xs">
+        <div className="flex items-center gap-1.5 font-semibold text-gray-700">
+          <Webhook className="h-3.5 w-3.5" /> Configurar webhook desde TalkIA
+        </div>
+        <p className="text-[11px] text-gray-500">
+          Suscribe esta WABA y la apunta a la URL indicada, sin entrar al panel de Meta.
+          Requiere un token con permiso de gestión (whatsapp_business_management) y una URL
+          pública <b>HTTPS</b> que responda la verificación.
+        </p>
+        <label className="block text-[11px] font-medium text-gray-600">URL de callback (HTTPS)</label>
+        <input
+          value={urlInput}
+          onChange={e => setUrlInput(e.target.value)}
+          placeholder="https://.../api/webhooks/meta"
+          className="w-full rounded-lg border border-gray-300 px-2 py-1.5 font-mono text-[11px] focus:outline-none focus:ring-2 focus:ring-[#1a3a6b]/40"
+        />
+        <button
+          onClick={onConfigure}
+          disabled={setWebhook.isPending || !urlInput.trim()}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-[#1a3a6b] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#234a85] disabled:opacity-50"
+        >
+          {setWebhook.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Webhook className="h-3.5 w-3.5" />}
+          Configurar / actualizar webhook
+        </button>
+        {setWebhook.data && (
+          <p className={`text-[11px] ${setWebhook.data.applied ? 'text-green-700' : 'text-amber-700'}`}>
+            {setWebhook.data.applied
+              ? `✓ ${setWebhook.data.detail ?? 'Webhook configurado.'}`
+              : `⚠ ${setWebhook.data.status === 'no_permission'
+                  ? 'El token no tiene permiso de gestión (whatsapp_business_management).'
+                  : setWebhook.data.status === 'verify_failed'
+                  ? 'Meta no pudo verificar la URL (¿es pública HTTPS y responde el challenge con el verify token?).'
+                  : setWebhook.data.status === 'token_invalid'
+                  ? 'Token inválido o vencido.'
+                  : (setWebhook.data.detail ?? 'No se pudo configurar.')}`}
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Fila de ficha: etiqueta + valor (con copiar opcional). ok controla el color del valor.
+function FieldRow({ label, value, onCopy, mono, ok }: {
+  label: string; value?: string | null; onCopy?: () => void; mono?: boolean; ok?: boolean
+}) {
+  const hasValue = !!value && value !== 'No configurado'
+  return (
+    <div className="flex items-center justify-between gap-2 border-b border-gray-100 py-0.5">
+      <dt className="text-[11px] text-gray-500">{label}</dt>
+      <dd className={`flex items-center gap-1.5 text-xs ${ok === false ? 'text-gray-400' : ok ? 'text-green-700' : 'text-gray-800'} ${mono ? 'font-mono' : ''}`}>
+        <span className="truncate max-w-[180px]" title={value ?? ''}>{value || '—'}</span>
+        {onCopy && hasValue && (
+          <button onClick={onCopy} className="text-gray-300 hover:text-[#1a3a6b]" title="Copiar">
+            <Copy className="h-3 w-3" />
+          </button>
+        )}
+      </dd>
     </div>
   )
 }
