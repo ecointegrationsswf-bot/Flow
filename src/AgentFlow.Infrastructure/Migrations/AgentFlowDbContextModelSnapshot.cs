@@ -280,7 +280,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("Name")
                         .IsUnique();
 
-                    b.ToTable("AgentCategories");
+                    b.ToTable("AgentCategories", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentDefinition", b =>
@@ -371,7 +371,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("WhatsAppLineId");
 
-                    b.ToTable("AgentDefinitions");
+                    b.ToTable("AgentDefinitions", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AgentRegistryEntry", b =>
@@ -499,7 +499,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("Category");
 
-                    b.ToTable("AgentTemplates");
+                    b.ToTable("AgentTemplates", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.AppUser", b =>
@@ -583,7 +583,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("TenantId", "Email")
                         .IsUnique();
 
-                    b.ToTable("AppUsers");
+                    b.ToTable("AppUsers", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Campaign", b =>
@@ -684,7 +684,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("TenantId", "IsActive");
 
-                    b.ToTable("Campaigns");
+                    b.ToTable("Campaigns", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignContact", b =>
@@ -786,7 +786,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("CampaignId", "DispatchStatus", "ClaimedAt");
 
-                    b.ToTable("CampaignContacts");
+                    b.ToTable("CampaignContacts", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignDispatchLog", b =>
@@ -849,7 +849,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("CampaignId", "OccurredAt");
 
-                    b.ToTable("CampaignDispatchLogs");
+                    b.ToTable("CampaignDispatchLogs", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignTemplate", b =>
@@ -985,7 +985,7 @@ namespace AgentFlow.Infrastructure.Migrations
                         .HasDatabaseName("UX_CampaignTemplate_PrimaryPerAgent")
                         .HasFilter("[IsPrimaryForAgent] = 1 AND [IsActive] = 1");
 
-                    b.ToTable("CampaignTemplates");
+                    b.ToTable("CampaignTemplates", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.CampaignTemplateDocument", b =>
@@ -1031,7 +1031,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("TenantId");
 
-                    b.ToTable("CampaignTemplateDocuments");
+                    b.ToTable("CampaignTemplateDocuments", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.ContactGroup", b =>
@@ -1169,7 +1169,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("TenantId", "Status", "LabelId");
 
-                    b.ToTable("Conversations");
+                    b.ToTable("Conversations", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.ConversationLabel", b =>
@@ -1206,7 +1206,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("TenantId", "Name")
                         .IsUnique();
 
-                    b.ToTable("ConversationLabels");
+                    b.ToTable("ConversationLabels", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.DelinquencyExecution", b =>
@@ -1359,7 +1359,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("ConversationId");
 
-                    b.ToTable("GestionEvents");
+                    b.ToTable("GestionEvents", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.LogicalFieldCatalog", b =>
@@ -1541,7 +1541,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasIndex("ConversationId");
 
-                    b.ToTable("Messages");
+                    b.ToTable("Messages", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.PromptTemplate", b =>
@@ -1801,7 +1801,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("Email")
                         .IsUnique();
 
-                    b.ToTable("SuperAdmins");
+                    b.ToTable("SuperAdmins", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.Tenant", b =>
@@ -1947,7 +1947,7 @@ namespace AgentFlow.Infrastructure.Migrations
                     b.HasIndex("Slug")
                         .IsUnique();
 
-                    b.ToTable("Tenants");
+                    b.ToTable("Tenants", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.WebhookDispatchLog", b =>
@@ -2078,7 +2078,7 @@ namespace AgentFlow.Infrastructure.Migrations
 
                     b.HasKey("Id");
 
-                    b.ToTable("WebhookLogs");
+                    b.ToTable("WebhookLogs", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.WhatsAppLine", b =>
@@ -2132,7 +2132,7 @@ namespace AgentFlow.Infrastructure.Migrations
                         .IsUnique()
                         .HasFilter("[TenantId] IS NOT NULL");
 
-                    b.ToTable("WhatsAppLines");
+                    b.ToTable("WhatsAppLines", (string)null);
                 });
 
             modelBuilder.Entity("AgentFlow.Domain.Entities.ActionDefinition", b =>

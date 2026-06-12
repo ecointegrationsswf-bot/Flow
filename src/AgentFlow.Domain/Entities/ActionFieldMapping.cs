@@ -19,6 +19,15 @@ public class ActionFieldMapping
     public ActionDefinition? ActionDefinition { get; set; }
 
     /// <summary>
+    /// Override por tenant. NULL = mapeo GLOBAL de la acción (comportamiento histórico,
+    /// compartido por los tenants que no tengan los suyos). != NULL = set de mapeos propio
+    /// de ese tenant para esta acción, que prevalece sobre el global. Permite que dos
+    /// corredores reusen la misma acción de descarga genérica con estructuras de respuesta
+    /// distintas (ej: AFTA en MAYÚSCULAS vs el formato canónico).
+    /// </summary>
+    public Guid? TenantId { get; set; }
+
+    /// <summary>
     /// Identificador interno de la columna dentro de la acción (slug — ej: "celular", "saldo", "agente").
     /// Único por ActionDefinitionId. Reemplaza al antiguo LogicalFieldKey acoplado al catálogo global.
     /// </summary>

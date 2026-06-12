@@ -1,4 +1,6 @@
+using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Webhooks;
 using AgentFlow.Infrastructure.Persistence;
@@ -31,48 +33,27 @@ public class ActionChainResolver(
         string executedSlug,
         Guid tenantId,
         string? rawResponseJson,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? extraContextJson = null)
     {
         if (string.IsNullOrWhiteSpace(executedSlug) || string.IsNullOrWhiteSpace(rawResponseJson))
             return null;
 
-        // 1. Resolver el contrato: per-tenant (Acción→Tenant→Contrato) → DefaultWebhookContract global.
-        var contractJson = await TenantActionContractLookup.ResolveContractJsonAsync(db, tenantId, executedSlug, ct);
-        if (string.IsNullOrWhiteSpace(contractJson))
-        {
-            var candidates = await db.Set<ActionDefinition>()
-                .Where(a => a.IsActive && a.Name == executedSlug && (a.TenantId == tenantId || a.TenantId == null))
-                .ToListAsync(ct);
-            var actionDef = candidates.FirstOrDefault(a => a.TenantId == tenantId)
-                            ?? candidates.FirstOrDefault(a => a.TenantId == null);
-            contractJson = actionDef?.DefaultWebhookContract;
-        }
-
-        if (string.IsNullOrWhiteSpace(contractJson))
-            return null;
-
-        // 2. Deserializar contract → leer ChainRules.
-        List<ChainRule>? rules;
-        try
-        {
-            var bundle = JsonSerializer.Deserialize<ActionConfigBundleJson>(contractJson, JsonOpts);
-            rules = bundle?.ChainRules;
-        }
-        catch (Exception ex)
-        {
-            logger.LogWarning("[ChainResolver] No pude deserializar contract de {Slug}: {Msg}",
-                executedSlug, ex.Message);
-            return null;
-        }
-
+        // 1-2. Cargar el bundle del contrato (per-tenant → global) y leer ChainRules.
+        var bundle = await LoadBundleAsync(executedSlug, tenantId, ct);
+        var rules = bundle?.ChainRules;
         if (rules is null || rules.Count == 0)
             return null;
 
-        // 3. Parsear el response JSON.
+        // 3. Construir el CONTEXTO de evaluación: el response del webhook es el RAÍZ
+        //    (compat: `status`, `data.code`) y se MERGEAN los namespaces extra como
+        //    propiedades top-level (ej: `llm`). Así una regla puede condicionar por la
+        //    respuesta del webhook O por el resultado del LLM (`llm.intent`).
+        var contextJson = MergeEvalContext(rawResponseJson, extraContextJson, executedSlug);
         JsonDocument? doc;
         try
         {
-            doc = JsonDocument.Parse(rawResponseJson);
+            doc = JsonDocument.Parse(contextJson);
         }
         catch (Exception ex)
         {
@@ -86,12 +67,14 @@ public class ActionChainResolver(
             // 4. Evaluar en orden. Primer match gana (semántica switch/case).
             foreach (var rule in rules)
             {
-                if (string.IsNullOrWhiteSpace(rule.When.Path))
+                var cond = rule.When;
+                bool hasCondition = !string.IsNullOrWhiteSpace(cond.Path)
+                                    || (cond.AllOf is { Count: > 0 })
+                                    || (cond.AnyOf is { Count: > 0 });
+                if (!hasCondition)
                     continue;
 
-                var observed = ResolvePath(doc.RootElement, rule.When.Path);
-
-                if (Matches(observed, rule.When.Operator, rule.When.Value))
+                if (EvaluateCondition(doc.RootElement, cond))
                 {
                     var nextSlug = rule.Then?.ActionSlug;
                     // Si NO hay next slug Y NO se pide regenerar reply, la regla es puramente
@@ -103,8 +86,8 @@ public class ActionChainResolver(
                             executedSlug, rule.When.Path);
                         return null;
                     }
-                    logger.LogInformation("[ChainResolver] {Slug} → Next={Next} Regenerate={Regen} via {Path}={Value}",
-                        executedSlug, nextSlug ?? "(none)", rule.RegenerateReply, rule.When.Path, observed ?? "(null)");
+                    logger.LogInformation("[ChainResolver] {Slug} → Next={Next} Regenerate={Regen} (condición matcheó)",
+                        executedSlug, nextSlug ?? "(none)", rule.RegenerateReply);
                     return new ChainDecision(
                         NextSlug: string.IsNullOrWhiteSpace(nextSlug) ? null : nextSlug,
                         SuccessMessageTemplate: rule.Then?.SuccessMessage,
@@ -159,16 +142,133 @@ public class ActionChainResolver(
     }
 
     /// <summary>
-    /// Evalúa la condición. MVP: solo `equals` (case-insensitive).
-    /// Si el operator no se reconoce o falta, devuelve false (fail-safe: no encadena).
+    /// Motor de flujos Fase 2: config de auth de una acción, leída del contrato
+    /// (per-tenant → global). Si no hay contrato, "no requiere auth".
+    /// </summary>
+    public async Task<ActionAuthConfig> GetAuthConfigAsync(Guid tenantId, string slug, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(slug))
+            return new ActionAuthConfig(false, null, null);
+        var bundle = await LoadBundleAsync(slug, tenantId, ct);
+        if (bundle is null)
+            return new ActionAuthConfig(false, null, null);
+        return new ActionAuthConfig(bundle.RequiresAuth, bundle.AuthPolicy, bundle.AuthRequiredMessage);
+    }
+
+    /// <summary>
+    /// Carga y deserializa el bundle del contrato de una acción: per-tenant
+    /// (TenantActionContract) → fallback global (ActionDefinition.DefaultWebhookContract).
+    /// Devuelve null si no hay contrato o no deserializa.
+    /// </summary>
+    private async Task<ActionConfigBundleJson?> LoadBundleAsync(string slug, Guid tenantId, CancellationToken ct)
+    {
+        var contractJson = await TenantActionContractLookup.ResolveContractJsonAsync(db, tenantId, slug, ct);
+        if (string.IsNullOrWhiteSpace(contractJson))
+        {
+            var candidates = await db.Set<ActionDefinition>()
+                .Where(a => a.IsActive && a.Name == slug && (a.TenantId == tenantId || a.TenantId == null))
+                .ToListAsync(ct);
+            var actionDef = candidates.FirstOrDefault(a => a.TenantId == tenantId)
+                            ?? candidates.FirstOrDefault(a => a.TenantId == null);
+            contractJson = actionDef?.DefaultWebhookContract;
+        }
+        if (string.IsNullOrWhiteSpace(contractJson))
+            return null;
+        try
+        {
+            return JsonSerializer.Deserialize<ActionConfigBundleJson>(contractJson, JsonOpts);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("[ChainResolver] No pude deserializar contract de {Slug}: {Msg}", slug, ex.Message);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Mergea el response del webhook (raíz) con los namespaces extra (ej: `llm`)
+    /// en un solo objeto JSON para la evaluación. Si el response no es un objeto,
+    /// o el merge falla, devuelve el response crudo (compat: sin namespaces).
+    /// </summary>
+    private string MergeEvalContext(string responseJson, string? extraContextJson, string executedSlug)
+    {
+        if (string.IsNullOrWhiteSpace(extraContextJson))
+            return responseJson;
+        try
+        {
+            if (JsonNode.Parse(responseJson) is not JsonObject root)
+                return responseJson; // response no-objeto → no se puede mergear namespaces
+            if (JsonNode.Parse(extraContextJson) is JsonObject extra)
+            {
+                foreach (var kv in extra)
+                {
+                    // Reparentar con un clon (parse del ToJsonString) para no romper el árbol origen.
+                    root[kv.Key] = kv.Value is null ? null : JsonNode.Parse(kv.Value.ToJsonString());
+                }
+            }
+            return root.ToJsonString();
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("[ChainResolver] No pude mergear contexto extra tras {Slug}: {Msg}",
+                executedSlug, ex.Message);
+            return responseJson;
+        }
+    }
+
+    /// <summary>
+    /// Evalúa una condición (hoja o compuesta) contra el contexto.
+    ///  - AllOf (AND): todas deben matchear.  - AnyOf (OR): al menos una.
+    ///  - Hoja: resuelve Path y aplica el operador.
+    /// AllOf/AnyOf tienen prioridad sobre Path. Sin nada que evaluar → false.
+    /// </summary>
+    private static bool EvaluateCondition(JsonElement root, ChainCondition cond)
+    {
+        if (cond.AllOf is { Count: > 0 } allOf)
+            return allOf.All(sub => EvaluateCondition(root, sub));
+        if (cond.AnyOf is { Count: > 0 } anyOf)
+            return anyOf.Any(sub => EvaluateCondition(root, sub));
+        if (string.IsNullOrWhiteSpace(cond.Path))
+            return false;
+        var observed = ResolvePath(root, cond.Path);
+        return Matches(observed, cond.Operator, cond.Value);
+    }
+
+    /// <summary>
+    /// Evalúa el operador. Strings case-insensitive; numéricos vía decimal (invariante).
+    /// Operador desconocido / no parseable → false (fail-safe: no encadena).
+    /// Soporta: equals, notEquals, contains, startsWith, isNotNull, isNull, gt, gte, lt, lte.
     /// </summary>
     private static bool Matches(string? observed, string? op, string? expected)
     {
-        op = (op ?? string.Empty).Trim().ToLowerInvariant();
-        return op switch
+        op = (op ?? "equals").Trim().ToLowerInvariant();
+        bool CiEq(string? a, string? b) => string.Equals(a ?? string.Empty, b ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        switch (op)
         {
-            "equals" => string.Equals(observed ?? string.Empty, expected ?? string.Empty, StringComparison.OrdinalIgnoreCase),
-            _ => false
-        };
+            case "equals": return CiEq(observed, expected);
+            case "notequals": return !CiEq(observed, expected);
+            case "contains":
+                return (observed ?? string.Empty).Contains(expected ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            case "startswith":
+                return (observed ?? string.Empty).StartsWith(expected ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+            case "isnotnull": return !string.IsNullOrEmpty(observed);
+            case "isnull": return string.IsNullOrEmpty(observed);
+            case "gt": case "gte": case "lt": case "lte":
+                if (decimal.TryParse(observed, NumberStyles.Any, CultureInfo.InvariantCulture, out var o)
+                    && decimal.TryParse(expected, NumberStyles.Any, CultureInfo.InvariantCulture, out var e))
+                {
+                    return op switch
+                    {
+                        "gt" => o > e,
+                        "gte" => o >= e,
+                        "lt" => o < e,
+                        "lte" => o <= e,
+                        _ => false
+                    };
+                }
+                return false;
+            default: return false;
+        }
     }
 }

@@ -219,4 +219,15 @@ public class ActionConfigBundleJson
     public TriggerConfig? TriggerConfig { get; init; }
     /// <summary>Reglas de auto-encadenamiento (Paso 5 del Webhook Builder).</summary>
     public List<ChainRule>? ChainRules { get; init; }
+
+    /// <summary>Motor de flujos Fase 2: si true, el orquestador BLOQUEA esta acción si el
+    /// cliente no está autenticado (gate determinístico, no depende del prompt).</summary>
+    public bool RequiresAuth { get; init; }
+
+    /// <summary>Motor de flujos Fase 2: qué resultado de esta acción autentica al cliente
+    /// (y por cuánto). Null = esta acción no autentica.</summary>
+    public AuthPolicy? AuthPolicy { get; init; }
+
+    /// <summary>Motor de flujos Fase 2: mensaje a responder cuando se bloquea por falta de auth.</summary>
+    public string? AuthRequiredMessage { get; init; }
 }

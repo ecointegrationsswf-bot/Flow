@@ -2,12 +2,13 @@ import { useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { X, Loader2, KeyRound, UserPlus, Eye, EyeOff, ShieldOff, ShieldCheck, UserX, UserCheck } from 'lucide-react'
+import { X, Loader2, KeyRound, UserPlus, Eye, EyeOff, ShieldOff, ShieldCheck, UserX, UserCheck, Pencil } from 'lucide-react'
 import {
   useAdminTenantUsers,
   useCreateTenantUser,
   useChangeTenantUserPassword,
   useSetTenantUserActive,
+  useUpdateTenantUser,
   type AdminTenant,
   type AdminTenantUser,
 } from '@/modules/admin/hooks/useAdminTenants'
@@ -61,7 +62,15 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
   const createUser = useCreateTenantUser()
   const changePassword = useChangeTenantUserPassword()
   const setActive = useSetTenantUserActive()
+  const updateUser = useUpdateTenantUser()
   const tt = useTenantTime()
+
+  // Edición de usuario (nombre, rol, bypass 2FA — no email ni contraseña).
+  const [editUser, setEditUser] = useState<AdminTenantUser | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editRole, setEditRole] = useState('Cobros')
+  const [editBypass, setEditBypass] = useState(false)
+  const [editError, setEditError] = useState<string | null>(null)
 
   const [showNewUser, setShowNewUser] = useState(false)
   const [createPwValue, setCreatePwValue] = useState('')
@@ -137,6 +146,37 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
       setToggleError(axiosErr.response?.data?.error ?? `Error al ${action} usuario.`)
     } finally {
       setTogglingId(null)
+    }
+  }
+
+  const openEdit = (user: AdminTenantUser) => {
+    setEditUser(user)
+    setEditName(user.fullName)
+    setEditRole(user.role)
+    setEditBypass(user.bypassTwoFactor)
+    setEditError(null)
+    setPasswordUserId(null)
+  }
+
+  const onSaveEdit = async () => {
+    if (!editUser) return
+    setEditError(null)
+    if (!editName.trim()) {
+      setEditError('El nombre es requerido.')
+      return
+    }
+    try {
+      await updateUser.mutateAsync({
+        tenantId: tenant.id,
+        userId: editUser.id,
+        fullName: editName.trim(),
+        role: editRole,
+        bypassTwoFactor: editBypass,
+      })
+      setEditUser(null)
+    } catch (err: unknown) {
+      const axiosErr = err as { response?: { data?: { error?: string } } }
+      setEditError(axiosErr.response?.data?.error ?? 'Error al actualizar usuario.')
     }
   }
 
@@ -281,6 +321,13 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
                       ) : (
                         <div className="flex items-center justify-end gap-1">
                           <button
+                            onClick={() => openEdit(user)}
+                            className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-indigo-600 transition-colors"
+                            title="Editar usuario (nombre, rol, 2FA)"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
                             onClick={() => onToggleActive(user)}
                             disabled={togglingId === user.id}
                             className={`rounded-lg p-1.5 transition-colors disabled:opacity-50 ${
@@ -334,6 +381,79 @@ export function TenantUsersModal({ tenant, onClose }: TenantUsersModalProps) {
           {toggleError && (
             <div className="mt-2 rounded-md bg-red-50 p-2 text-sm text-red-600">
               {toggleError}
+            </div>
+          )}
+
+          {/* Edit user form (nombre, rol, 2FA — no email ni contraseña) */}
+          {editUser && (
+            <div className="mt-4 rounded-lg border border-indigo-200 bg-indigo-50/50 p-4">
+              <h3 className="mb-3 text-sm font-semibold text-gray-700">
+                Editar: {editUser.fullName}
+                <span className="ml-2 text-xs font-normal text-gray-500">{editUser.email}</span>
+              </h3>
+              {editError && (
+                <div className="mb-3 rounded-md bg-red-50 p-2 text-sm text-red-600">{editError}</div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-700">Nombre completo</label>
+                  <input
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-700">Rol</label>
+                  <select
+                    value={editRole}
+                    onChange={(e) => setEditRole(e.target.value)}
+                    className="mt-1 block w-full rounded-md border border-gray-300 px-3 py-1.5 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="Admin">Admin</option>
+                    <option value="Supervisor">Supervisor</option>
+                    <option value="Cobros">Cobros</option>
+                    <option value="ReadOnly">Solo lectura</option>
+                  </select>
+                </div>
+              </div>
+              <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2">
+                <label className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editBypass}
+                    onChange={(e) => setEditBypass(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center gap-1.5 text-xs font-semibold text-amber-900">
+                      <ShieldOff className="h-3.5 w-3.5" /> Cuenta operativa sin 2FA
+                    </div>
+                    <p className="mt-0.5 text-[11px] text-amber-700 leading-relaxed">
+                      Saltar verificación de código por email al iniciar sesión. Pensado para cuentas
+                      internas. <strong>NO activar</strong> para usuarios del cliente final.
+                    </p>
+                  </div>
+                </label>
+              </div>
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => { setEditUser(null); setEditError(null) }}
+                  className="rounded-md border border-gray-300 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={onSaveEdit}
+                  disabled={updateUser.isPending}
+                  className="flex items-center gap-1 rounded-md bg-indigo-600 px-3 py-1.5 text-sm text-white hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {updateUser.isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                  Guardar cambios
+                </button>
+              </div>
             </div>
           )}
 

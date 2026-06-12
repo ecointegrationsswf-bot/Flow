@@ -30,8 +30,11 @@ import { OutboundMessagesPage } from '@/modules/admin/components/OutboundMessage
 import { AgentTemplateFormPage } from '@/modules/admin/components/AgentTemplateFormPage'
 import { CategoriesPage } from '@/modules/admin/components/CategoriesPage'
 import { AdminWhatsAppPage } from '@/modules/admin/components/AdminWhatsAppPage'
+import { AdminWhatsAppConfigPage } from '@/modules/admin/components/AdminWhatsAppConfigPage'
 import { AdminUsersPage } from '@/modules/admin/components/AdminUsersPage'
 import { ActionsPage } from '@/modules/admin/components/ActionsPage'
+import { AdminWorkflowsPage } from '@/modules/admin/components/workflows/AdminWorkflowsPage'
+import { CopilotPage } from '@/modules/admin/components/CopilotPage'
 import { ScheduledJobsPage } from '@/modules/admin/components/ScheduledJobsPage'
 import { InvalidNumbersPage } from '@/modules/admin/components/InvalidNumbersPage'
 import { ReportsPage } from '@/modules/reports/components/ReportsPage'
@@ -88,7 +91,10 @@ export default function App() {
           <Route path="agent-templates/:id/edit" element={<AgentTemplateFormPage />} />
           <Route path="categories" element={<CategoriesPage />} />
           <Route path="whatsapp" element={<AdminWhatsAppPage />} />
+          <Route path="whatsapp-config" element={<AdminWhatsAppConfigPage />} />
           <Route path="actions" element={<ActionsPage />} />
+          <Route path="workflows" element={<AdminWorkflowsPage />} />
+          <Route path="copilot" element={<CopilotPage />} />
           <Route path="morosidad" element={<AdminMorosidadPage />} />
           <Route path="scheduled-jobs" element={<ScheduledJobsPage />} />
           <Route path="invalid-numbers" element={<InvalidNumbersPage />} />

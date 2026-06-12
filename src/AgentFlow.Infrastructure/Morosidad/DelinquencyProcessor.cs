@@ -42,10 +42,19 @@ public class DelinquencyProcessor(
             throw new InvalidOperationException($"No hay configuración de descarga activa para la acción {actionDefinitionId}.");
         }
 
-        var mappings = await db.ActionFieldMappings
-            .Where(m => m.ActionDefinitionId == actionDefinitionId && m.IsEnabled)
+        // Mapeos: globales (TenantId NULL) + los propios del tenant. Si el tenant tiene
+        // su propio set para esta acción, prevalece (usamos SOLO los suyos); si no, los
+        // globales. Así un corredor con estructura de respuesta distinta (ej: AFTA en
+        // MAYÚSCULAS) define los suyos sin afectar a los demás.
+        var allMappings = await db.ActionFieldMappings
+            .Where(m => m.ActionDefinitionId == actionDefinitionId && m.IsEnabled
+                        && (m.TenantId == null || m.TenantId == tenantId))
             .OrderBy(m => m.SortOrder)
             .ToListAsync(ct);
+
+        var mappings = allMappings.Any(m => m.TenantId == tenantId)
+            ? allMappings.Where(m => m.TenantId == tenantId).ToList()
+            : allMappings.Where(m => m.TenantId == null).ToList();
 
         // Resolución por rol — los 3 obligatorios deben existir
         var phoneMapping     = mappings.FirstOrDefault(m => m.Role == FieldRole.Phone);

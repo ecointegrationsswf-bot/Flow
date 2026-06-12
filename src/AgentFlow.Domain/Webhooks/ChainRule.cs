@@ -48,20 +48,39 @@ public class ChainRule
 }
 
 /// <summary>
-/// Condición sobre el JSON response. MVP solo soporta operator=equals.
-/// Path es JsonPath simple: "status", "data.codigo", "user.email", etc.
-/// Path se resuelve con JsonElement.TryGetProperty recursivo.
+/// Condición sobre el contexto de evaluación del chain. Puede ser:
+///  - HOJA: define <see cref="Path"/> + <see cref="Operator"/> (+ <see cref="Value"/>).
+///  - COMPUESTA: define <see cref="AllOf"/> (AND) o <see cref="AnyOf"/> (OR) — listas
+///    anidables de sub-condiciones. La negación se logra con operadores `notEquals`/`isNull`.
+///
+/// <para><b>Contexto de evaluación (Fase 1 del motor de flujos):</b></para>
+/// El path se resuelve sobre un objeto JSON unificado cuyo RAÍZ es el response del
+/// webhook (compat: `status`, `data.code`) más namespaces inyectados:
+///  - `llm.intent`, `llm.confidence` — resultado del LLM del turno (clasificación/confianza).
+///  - (futuro) `auth.isAuthenticated`, `session.*`, `datos_consultados.*`.
+/// Así el encadenamiento puede depender de la RESPUESTA del webhook **o** del RESULTADO del LLM.
+///
+/// <para><b>Operadores soportados:</b></para>
+/// `equals`, `notEquals`, `contains`, `startsWith`, `isNotNull`, `isNull`,
+/// `gt`, `gte`, `lt`, `lte` (numéricos). Operador desconocido → no matchea (fail-safe).
+/// Comparaciones de string case-insensitive; numéricas vía decimal.
 /// </summary>
 public class ChainCondition
 {
-    /// <summary>Path al campo en el JSON response (ej: "status", "data.code").</summary>
+    /// <summary>Path al campo (ej: "status", "data.code", "llm.intent"). Vacío si es condición compuesta.</summary>
     public string Path { get; init; } = string.Empty;
 
-    /// <summary>MVP: solo "equals". Futuro: "notEquals", "contains", "isNotNull".</summary>
+    /// <summary>Operador. Ver lista en el doc de la clase. Default "equals".</summary>
     public string Operator { get; init; } = "equals";
 
-    /// <summary>Valor a comparar contra el contenido del path. Comparación case-insensitive a string.</summary>
+    /// <summary>Valor a comparar contra el contenido del path. String (CI) o numérico según el operador.</summary>
     public string? Value { get; init; }
+
+    /// <summary>AND: matchea solo si TODAS las sub-condiciones matchean. Anidable. Tiene prioridad sobre Path.</summary>
+    public List<ChainCondition>? AllOf { get; init; }
+
+    /// <summary>OR: matchea si AL MENOS UNA sub-condición matchea. Anidable. Tiene prioridad sobre Path.</summary>
+    public List<ChainCondition>? AnyOf { get; init; }
 }
 
 /// <summary>Acción a disparar cuando la condición matchea.</summary>

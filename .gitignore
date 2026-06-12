@@ -34,3 +34,6 @@ publish/frontend/
 .claude/tmp/
 .claude/app_offline.htm
 .claude/scheduled_tasks.lock
+
+# Scripts de diagnostico/operacion descartables (contienen credenciales de BD) - NO commitear
+/*.py

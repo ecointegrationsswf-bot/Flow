@@ -1,5 +1,30 @@
 # AgentFlow — Contexto completo del proyecto para Claude Code
 
+## 📒 Regla OBLIGATORIA — Base de conocimiento en Obsidian (PRIORIDAD MÁXIMA)
+
+**Todo lo que se acuerde en CUALQUIER sesión de trabajo (decisiones, resúmenes,
+cambios aplicados, acuerdos, hallazgos, pendientes) DEBE escribirse en Obsidian**, en:
+
+```
+C:\BaseConocimientoObsidean\BaseConocimientoProyectos\01-Proyectos\TalkIA
+```
+
+Reglas concretas:
+
+1. **Escribir directo vía filesystem** (Write/Edit) en esa ruta. Cada resumen y acuerdo
+   se crea/actualiza ahí — no solo en la memoria interna del agente.
+2. **Documento vivo de estado:** mantener `TalkIA - Estado del Proyecto.md` actualizado
+   con el estado actual del proyecto. Además, por sesión relevante crear/actualizar un
+   archivo `YYYY-MM-DD - <tema>.md` con el detalle de lo acordado y aplicado.
+3. **Actualización SIEMPRE:** al cerrar cualquier acuerdo o cambio, actualizar Obsidian.
+   **Si el usuario no lo ha hecho o no lo pidió explícitamente, SUGERIRLO con carácter
+   OBLIGATORIO** (recordarle que falta registrar en Obsidian antes de dar por cerrado).
+4. Es **aditivo**: nunca borrar el conocimiento previo; agregar/actualizar secciones.
+
+**Norma corta:** *si se acordó algo y no quedó en Obsidian, el trabajo no está cerrado.*
+
+---
+
 ## ⚠️ Regla de trabajo (PRIORIDAD MÁXIMA — leer antes de cualquier desarrollo)
 
 **Antes de escribir una sola línea de código o tocar la base de datos, revalidar

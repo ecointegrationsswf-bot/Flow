@@ -53,9 +53,30 @@ public class OutputInterpreter(
 
             foreach (var field in schema.Fields)
             {
-                var raw = ResolveDotPath(root, field.FieldPath);
+                // Wildcard `[*]` (jun 2026): un fieldPath como "polizas[*].documentos[*].base64"
+                // resuelve TODAS las coincidencias y la outputAction se ejecuta para cada una
+                // (ej: enviar N PDFs por WhatsApp, uno por póliza). Sin wildcard, la lista tiene
+                // 0 o 1 elemento y el comportamiento es idéntico al histórico. Tope de seguridad
+                // para no inundar al cliente.
+                const int MaxWildcardMatches = 10;
+                List<JsonElement> matches;
+                if (field.FieldPath?.Contains("[*]") == true)
+                {
+                    matches = ResolveWildcardPaths(root, field.FieldPath);
+                    if (matches.Count > MaxWildcardMatches)
+                    {
+                        logger.LogWarning("[OutputInterpreter] Wildcard '{Field}' devolvió {N} coincidencias — se procesan {Max}.",
+                            field.FieldPath, matches.Count, MaxWildcardMatches);
+                        matches = matches.Take(MaxWildcardMatches).ToList();
+                    }
+                }
+                else
+                {
+                    var single = ResolveDotPath(root, field.FieldPath ?? "");
+                    matches = single is { } s ? [s] : [];
+                }
 
-                if (raw is null)
+                if (matches.Count == 0)
                 {
                     if (field.Required)
                         logger.LogWarning("[OutputInterpreter] Campo requerido '{Field}' ausente en respuesta de {Action}",
@@ -63,46 +84,50 @@ public class OutputInterpreter(
                     continue;
                 }
 
-                try
+                foreach (var rawMatch in matches)
                 {
-                    switch (field.OutputAction?.ToLower())
+                    JsonElement? raw = rawMatch;
+                    try
                     {
-                        case "send_to_agent":
-                            var value = FormatForAgent(raw, field.DataType);
-                            if (!string.IsNullOrEmpty(value))
-                                agentParts.Add($"{field.Label}: {value}");
-                            break;
+                        switch (field.OutputAction?.ToLower())
+                        {
+                            case "send_to_agent":
+                                var value = FormatForAgent(raw, field.DataType);
+                                if (!string.IsNullOrEmpty(value))
+                                    agentParts.Add($"{field.Label}: {value}");
+                                break;
 
-                        case "send_whatsapp_media":
-                            await HandleWhatsAppMediaAsync(raw, field, context, agentParts, ct);
-                            break;
+                            case "send_whatsapp_media":
+                                await HandleWhatsAppMediaAsync(raw, field, context, agentParts, ct);
+                                break;
 
-                        case "inject_context":
-                            await InjectContextAsync(raw, field, context, ct);
-                            break;
+                            case "inject_context":
+                                await InjectContextAsync(raw, field, context, ct);
+                                break;
 
-                        case "log_only":
-                            logger.LogInformation("[ActionLog] {Action}/{Label}: {Value}",
-                                context.ActionName, field.Label, FormatForAgent(raw, field.DataType));
-                            break;
+                            case "log_only":
+                                logger.LogInformation("[ActionLog] {Action}/{Label}: {Value}",
+                                    context.ActionName, field.Label, FormatForAgent(raw, field.DataType));
+                                break;
 
-                        case "trigger_escalation":
-                            if (IsFalsy(raw))
-                            {
-                                logger.LogInformation("[OutputInterpreter] Trigger escalation: {Label}", field.Label);
-                                shouldEscalate = true;
-                            }
-                            break;
+                            case "trigger_escalation":
+                                if (IsFalsy(raw))
+                                {
+                                    logger.LogInformation("[OutputInterpreter] Trigger escalation: {Label}", field.Label);
+                                    shouldEscalate = true;
+                                }
+                                break;
 
-                        default:
-                            logger.LogWarning("[OutputInterpreter] outputAction desconocido: {Action}", field.OutputAction);
-                            break;
+                            default:
+                                logger.LogWarning("[OutputInterpreter] outputAction desconocido: {Action}", field.OutputAction);
+                                break;
+                        }
                     }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "[OutputInterpreter] Error procesando campo '{Field}' de {Action}",
-                        field.FieldPath, context.ActionName);
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "[OutputInterpreter] Error procesando campo '{Field}' de {Action}",
+                            field.FieldPath, context.ActionName);
+                    }
                 }
             }
 
@@ -115,24 +140,105 @@ public class OutputInterpreter(
     // ── Helpers ──
 
     /// <summary>
-    /// Resuelve un path dot-notation en el JSON. Ej: "documento.archivo" → json.documento.archivo.
-    /// Devuelve null si el path no existe.
+    /// Resuelve un path dot-notation en el JSON. Soporta índices de array con sufijo `[n]`:
+    /// "documento.archivo" → json.documento.archivo; "documentos[0].base64" → primer elemento
+    /// del array `documentos`, campo `base64`. Devuelve null si el path no existe o el índice
+    /// está fuera de rango. Retrocompatible: paths sin `[n]` se comportan igual que antes.
     /// </summary>
     private static JsonElement? ResolveDotPath(JsonElement root, string path)
     {
         if (string.IsNullOrEmpty(path)) return null;
 
-        var parts = path.Split('.');
         var current = root;
 
-        foreach (var part in parts)
+        foreach (var rawPart in path.Split('.'))
         {
-            if (current.ValueKind != JsonValueKind.Object) return null;
-            if (!current.TryGetProperty(part, out var next)) return null;
-            current = next;
+            var part = rawPart;
+            int? index = null;
+
+            // Soporte de índice de array: "documentos[0]" → part="documentos", index=0.
+            var br = part.IndexOf('[');
+            if (br >= 0 && part.EndsWith("]"))
+            {
+                var idxStr = part.Substring(br + 1, part.Length - br - 2);
+                if (int.TryParse(idxStr, out var i)) index = i;
+                part = part.Substring(0, br);
+            }
+
+            // Paso 1: navegar por la propiedad (si el segmento tiene nombre).
+            if (!string.IsNullOrEmpty(part))
+            {
+                if (current.ValueKind != JsonValueKind.Object) return null;
+                if (!current.TryGetProperty(part, out var next)) return null;
+                current = next;
+            }
+
+            // Paso 2: indexar el array (si el segmento traía `[n]`).
+            if (index is { } idx)
+            {
+                if (current.ValueKind != JsonValueKind.Array) return null;
+                if (idx < 0 || idx >= current.GetArrayLength()) return null;
+                current = current[idx];
+            }
         }
 
         return current;
+    }
+
+    /// <summary>
+    /// Resuelve un path con wildcards `[*]` devolviendo TODAS las coincidencias.
+    /// Ej: "polizas[*].documentos[*].base64" → cada base64 de cada documento de cada póliza.
+    /// Soporta mezclar índices fijos y wildcards ("polizas[*].documentos[0].base64").
+    /// </summary>
+    private static List<JsonElement> ResolveWildcardPaths(JsonElement root, string path)
+    {
+        var results = new List<JsonElement>();
+        Walk(root, path.Split('.'), 0, results);
+        return results;
+
+        static void Walk(JsonElement current, string[] parts, int partIdx, List<JsonElement> results)
+        {
+            if (partIdx >= parts.Length)
+            {
+                results.Add(current);
+                return;
+            }
+
+            var part = parts[partIdx];
+            string? indexSpec = null;
+
+            var br = part.IndexOf('[');
+            if (br >= 0 && part.EndsWith("]"))
+            {
+                indexSpec = part.Substring(br + 1, part.Length - br - 2); // "*" o "n"
+                part = part.Substring(0, br);
+            }
+
+            if (!string.IsNullOrEmpty(part))
+            {
+                if (current.ValueKind != JsonValueKind.Object) return;
+                if (!current.TryGetProperty(part, out var next)) return;
+                current = next;
+            }
+
+            if (indexSpec is null)
+            {
+                Walk(current, parts, partIdx + 1, results);
+                return;
+            }
+
+            if (current.ValueKind != JsonValueKind.Array) return;
+
+            if (indexSpec == "*")
+            {
+                foreach (var item in current.EnumerateArray())
+                    Walk(item, parts, partIdx + 1, results);
+            }
+            else if (int.TryParse(indexSpec, out var idx) && idx >= 0 && idx < current.GetArrayLength())
+            {
+                Walk(current[idx], parts, partIdx + 1, results);
+            }
+        }
     }
 
     /// <summary>

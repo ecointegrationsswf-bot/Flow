@@ -73,14 +73,28 @@ export function useVersionCheck() {
     }
 
     const interval = window.setInterval(check, POLL_INTERVAL_MS)
+    // Check INMEDIATO al montar: cubre "entro al portal" con una pestaña restaurada por el
+    // navegador (session restore) — antes el primer check era recién al tick de los 30s y
+    // el usuario veía la versión vieja, creyendo que necesitaba hard refresh.
+    void check()
     // Primer check al volver al tab (ej: usuario tenía la pestaña en background mientras deployamos).
     const onVisibility = () => { if (document.visibilityState === 'visible') void check() }
     document.addEventListener('visibilitychange', onVisibility)
+    // bfcache (botón atrás / reabrir pestaña cerrada): el navegador restaura la página desde
+    // memoria SIN tocar la red ni disparar visibilitychange — pageshow con persisted=true es
+    // el único evento que lo detecta. Sin esto, la app vieja revive silenciosamente.
+    const onPageShow = (e: PageTransitionEvent) => { if (e.persisted) void check() }
+    window.addEventListener('pageshow', onPageShow)
+    // Alt-tab de vuelta a la ventana (la pestaña nunca dejó de estar "visible").
+    const onFocus = () => { void check() }
+    window.addEventListener('focus', onFocus)
 
     return () => {
       cancelled = true
       window.clearInterval(interval)
       document.removeEventListener('visibilitychange', onVisibility)
+      window.removeEventListener('pageshow', onPageShow)
+      window.removeEventListener('focus', onFocus)
     }
   }, [])
 

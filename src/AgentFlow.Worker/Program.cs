@@ -130,6 +130,9 @@ builder.Services.AddScoped<IActionChainResolver,
     AgentFlow.Infrastructure.Webhooks.ActionChainResolver>();
 builder.Services.AddScoped<IActionPromptBuilder,
     AgentFlow.Infrastructure.Webhooks.ActionPromptBuilder>();
+// Motor de flujos — Fase 3. Interpreta el TenantFlow activo del maestro y compila el WorkflowBlock.
+builder.Services.AddScoped<AgentFlow.Domain.Flows.IWorkflowEngine,
+    AgentFlow.Infrastructure.Flows.WorkflowEngine>();
 
 // ── Repos transversales necesarios por handlers MediatR de Application ──
 // Aunque el Worker NO sirve HTTP, AddMediatR registra todos los handlers del
@@ -284,9 +287,16 @@ builder.Services.AddHttpClient<
     AgentFlow.Domain.Interfaces.ITeamsNotifier,
     AgentFlow.Infrastructure.Notifications.PowerAutomateTeamsNotifier>();
 
+// Flag SOLO para pruebas locales: con WORKER_INBOUND_ONLY=true se arranca únicamente el
+// InboundMessageDispatcher (no scheduler, no campañas, no watchdog) → permite validar el
+// inbound localmente sin disparar jobs/envíos reales. Por defecto (sin la env var) el Worker
+// arranca TODOS los servicios igual que siempre (comportamiento de producción idéntico).
+var inboundOnly = Environment.GetEnvironmentVariable("WORKER_INBOUND_ONLY") == "true";
+
 // BackgroundService: tick cada 60s.
-builder.Services.AddHostedService<
-    AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
+if (!inboundOnly)
+    builder.Services.AddHostedService<
+        AgentFlow.Infrastructure.ScheduledJobs.ScheduledWebhookWorker>();
 
 // ── Campaign Dispatcher v2 (orquestación de campañas en proceso, sin n8n) ─
 // El CampaignDispatcherService se reusa con cambios v2 (Queued + claim atómico).
@@ -295,8 +305,9 @@ builder.Services.AddScoped<AgentFlow.Infrastructure.Campaigns.CampaignDispatcher
 // Generador de mensaje con Claude (paridad con n8n) — usado por el dispatcher v2.
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IInitialMessageGenerator,
     AgentFlow.Infrastructure.AI.InitialMessageGenerator>();
-builder.Services.AddHostedService<
-    AgentFlow.Worker.Campaigns.Orchestration.CampaignWorker>();
+if (!inboundOnly)
+    builder.Services.AddHostedService<
+        AgentFlow.Worker.Campaigns.Orchestration.CampaignWorker>();
 
 // ── Inbox Dispatcher (Día 3 — procesamiento autoritativo) ───────────────
 // Reclama items Pending vencidos y los procesa vía ProcessIncomingMessageCommand.
@@ -307,7 +318,8 @@ builder.Services.AddHostedService<AgentFlow.Worker.Inbox.InboundMessageDispatche
 // ── Inbox Watchdog (Día 2 — "ningún cliente sin respuesta") ──────────────
 // Detecta mensajes entrantes que llevan más de 2 min sin respuesta y envía
 // un canned + escala la conversación a humano. Es la garantía dura del SLA.
-builder.Services.AddHostedService<AgentFlow.Worker.Inbox.InboundMessageWatchdog>();
+if (!inboundOnly)
+    builder.Services.AddHostedService<AgentFlow.Worker.Inbox.InboundMessageWatchdog>();
 
 // ── Run ──────────────────────────────────────────────────
 var host = builder.Build();

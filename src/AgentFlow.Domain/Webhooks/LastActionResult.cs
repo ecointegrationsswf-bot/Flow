@@ -34,8 +34,14 @@ public record LastActionResult(
     /// </summary>
     string? RawResponseJson = null)
 {
-    /// <summary>Ventana de tiempo durante la cual el resultado se considera relevante.</summary>
-    public static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(10);
+    /// <summary>
+    /// Ventana de tiempo durante la cual el resultado se considera relevante.
+    /// 30 min: cubre flujos 2FA donde el cliente sale a revisar su correo antes de
+    /// escribir el código (jun 2026: con 10 min se perdía el `idCodigo` del INITIATE
+    /// y el INSURED_VALIDATE viajaba con idCodigo=null → 400 del broker). El código
+    /// del broker vive horas, así que 30 min no introduce riesgo de reusar uno expirado.
+    /// </summary>
+    public static readonly TimeSpan FreshnessWindow = TimeSpan.FromMinutes(30);
 
     /// <summary>¿El resultado aún es fresco? Evaluado contra UTC ahora.</summary>
     public bool IsFresh() => DateTime.UtcNow - ExecutedAt < FreshnessWindow;

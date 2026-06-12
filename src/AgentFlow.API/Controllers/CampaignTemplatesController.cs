@@ -41,8 +41,12 @@ public record CampaignTemplateRequest(
     // Archivo modelo parseado — primera fila con TODOS los campos del JSON
     // que vendrá en runtime. Lo usa el frontend para poblar dropdowns y el
     // backend para renderizar previews con datos reales.
-    string? SampleDataJson = null
+    string? SampleDataJson = null,
     // Fase 3 — el etiquetado IA ya NO se configura aquí. Vive en /admin/scheduled-jobs.
+    // Motor de flujos: flujo (TenantFlow) que enmarca las conversaciones de este maestro.
+    // null = sin flujo (comportamiento clásico). El binding también es editable desde
+    // /admin/workflows (super admin) — ambos escriben el mismo campo.
+    Guid? ActiveFlowId = null
 );
 
 public record EmailPreviewRequest(string? Subject, string? HtmlBody, string? TextBody, string? ItemsConfig = null, int UmbralCorporativo = 10, string? SampleDataJson = null);
@@ -275,12 +279,41 @@ public class CampaignTemplatesController(
                 OutOfContextPolicy = x.OutOfContextPolicy.ToString(),
                 x.EmailSubject, x.EmailBodyHtml, x.EmailBodyText, x.EmailTemplateUpdatedAt,
                 x.UmbralCorporativo, x.ItemsConfig, x.SampleDataJson,
+                x.ActiveFlowId,
                 x.IsActive, x.CreatedAt, x.UpdatedAt
             })
             .FirstOrDefaultAsync(ct);
 
         if (t is null) return NotFound();
         return Ok(t);
+    }
+
+    /// <summary>
+    /// Flujos (workflows del lienzo) del tenant actual — para el selector "Flujo de
+    /// conversación" del formulario del maestro. Solo activos, livianos (sin grafo).
+    /// </summary>
+    [HttpGet("flows")]
+    public async Task<IActionResult> GetTenantFlows(CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var flows = await db.TenantFlows.AsNoTracking()
+            .Where(f => f.TenantId == tenantId && f.IsActive)
+            .OrderBy(f => f.Name)
+            .Select(f => new { f.Id, f.Name, f.Description })
+            .ToListAsync(ct);
+        return Ok(flows);
+    }
+
+    /// <summary>
+    /// Valida que el flujo (si se mandó) exista y pertenezca al tenant. Un id ajeno o
+    /// inexistente se descarta a null (no rompe el guardado del maestro por esto).
+    /// </summary>
+    private async Task<Guid?> ValidateFlowAsync(Guid? flowId, Guid tenantId, CancellationToken ct)
+    {
+        if (flowId is not { } fid || fid == Guid.Empty) return null;
+        var ok = await db.TenantFlows.AsNoTracking()
+            .AnyAsync(f => f.Id == fid && f.TenantId == tenantId, ct);
+        return ok ? fid : null;
     }
 
     [HttpPost]
@@ -349,6 +382,7 @@ public class CampaignTemplatesController(
             UmbralCorporativo = req.UmbralCorporativo > 0 ? req.UmbralCorporativo : 10,
             ItemsConfig = string.IsNullOrWhiteSpace(req.ItemsConfig) ? null : req.ItemsConfig,
             SampleDataJson = string.IsNullOrWhiteSpace(req.SampleDataJson) ? null : req.SampleDataJson,
+            ActiveFlowId = await ValidateFlowAsync(req.ActiveFlowId, tenantId, ct),
         };
 
         db.CampaignTemplates.Add(template);
@@ -428,6 +462,11 @@ public class CampaignTemplatesController(
         template.UmbralCorporativo = req.UmbralCorporativo > 0 ? req.UmbralCorporativo : 10;
         template.ItemsConfig = string.IsNullOrWhiteSpace(req.ItemsConfig) ? null : req.ItemsConfig;
         template.SampleDataJson = string.IsNullOrWhiteSpace(req.SampleDataJson) ? null : req.SampleDataJson;
+        // Motor de flujos: vínculo maestro→flujo. IMPORTANTE: el form del maestro NO envía este
+        // campo — si viene null se PRESERVA el vínculo existente (sin esto, cada "Actualizar" del
+        // maestro desvinculaba el flujo silenciosamente). Desvincular se hace desde /admin/workflows.
+        if (req.ActiveFlowId is not null)
+            template.ActiveFlowId = await ValidateFlowAsync(req.ActiveFlowId, tenantId, ct);
 
         template.UpdatedAt = DateTime.UtcNow;
 
@@ -481,6 +520,14 @@ public class CampaignTemplatesController(
             .Where(a => a.TenantId == tenantId && a.IsActive && assignedNames.Contains(a.Name))
             .ToDictionaryAsync(a => a.Name, ct);
 
+        // Contratos POR TENANT (arquitectura mayo-2026, TenantActionContract): es lo que el
+        // runtime resuelve PRIMERO. Sin esto, una acción cuyo contrato vive solo per-tenant
+        // aparecía sin contrato en el editor del maestro y la validación del form bloqueaba
+        // el guardado exigiendo config legacy (incidente PASESA 2026-06-12).
+        var tenantContracts = await db.TenantActionContracts.AsNoTracking()
+            .Where(c => c.TenantId == tenantId && c.IsActive && assignedIds.Contains(c.ActionDefinitionId))
+            .ToDictionaryAsync(c => c.ActionDefinitionId, c => c.ContractJson, ct);
+
         var result = assignedActions.Select(a =>
         {
             // Si la asignada es global y hay clon tenant-specific con mismo Name,
@@ -488,6 +535,10 @@ public class CampaignTemplatesController(
             var effective = (a.TenantId is null && clonesByName.TryGetValue(a.Name, out var clone))
                 ? clone
                 : a;
+            // Orden de resolución igual al runtime: TenantActionContract → clon/global.
+            var contract = tenantContracts.TryGetValue(a.Id, out var tc) && !string.IsNullOrWhiteSpace(tc)
+                ? tc
+                : effective.DefaultWebhookContract;
             return new
             {
                 a.Id,
@@ -497,7 +548,7 @@ public class CampaignTemplatesController(
                 a.SendsEmail,
                 a.SendsSms,
                 DefaultTriggerConfig   = effective.DefaultTriggerConfig,
-                DefaultWebhookContract = effective.DefaultWebhookContract,
+                DefaultWebhookContract = contract,
             };
         });
 

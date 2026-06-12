@@ -61,6 +61,46 @@ public class Conversation
     /// </summary>
     public DateTime? LastTransferChatSentAt { get; set; }
 
+    /// <summary>
+    /// Memoria DURABLE de la conversación: bolsa JSON con los resultados de las
+    /// acciones ejecutadas, acumulados por slug — forma { "SLUG_ACCION": {responseJson} }.
+    /// Se inyecta al agente en CADA turno como "datos_consultados" (mismo canal que
+    /// CampaignContact.ContactDataJson), para que pueda responder seguimientos sobre
+    /// datos ya consultados (pólizas, saldos, etc.) sin atarse a una ventana de tiempo
+    /// ni al flujo que los originó. Genérica por diseño: no es 2FA-específica.
+    /// NULL = ninguna acción con response útil se ha ejecutado en esta conversación.
+    /// </summary>
+    public string? ConversationDataJson { get; set; }
+
+    /// <summary>
+    /// Motor de flujos — Fase 2. Estado de autenticación PROPIO (no del broker). UTC hasta
+    /// cuándo el cliente está autenticado en esta conversación. Se setea cuando una acción
+    /// con `AuthPolicy` devuelve un resultado que autentica (ej: status ∈ {VALIDO, AUTO_VALIDADO}).
+    /// El gate determinístico (`requiresAuth`) bloquea acciones confidenciales si esto es
+    /// null o ya venció. NULL = nunca autenticado / vencido.
+    /// </summary>
+    public DateTime? AuthenticatedUntil { get; set; }
+
+    /// <summary>Identidad del asegurado autenticado (ej: idEntidad del broker). Para auditoría/contexto.</summary>
+    public string? AuthenticatedIdentityId { get; set; }
+
+    /// <summary>
+    /// Motor de flujos — Fase 3 (ejecución). Flujo (TenantFlow) que enmarca esta conversación.
+    /// Se resuelve por turno desde el maestro primario (CampaignTemplate.ActiveFlowId). Se cachea
+    /// aquí para trazabilidad. NULL = la conversación NO tiene flujo activo → el motor no hace nada
+    /// y el comportamiento es idéntico al histórico (campañas / inbound libre).
+    /// </summary>
+    public Guid? ActiveFlowId { get; set; }
+
+    /// <summary>
+    /// Motor de flujos — Fase 3. Estado DURABLE de avance del flujo en esta conversación.
+    /// JSON con la forma { currentNodeId, slots:{...}, pendingRequest:{actionSlug,params,returnNodeId}, visited:[] }.
+    /// `slots` son datos de CONTROL del flujo (cédula, idCodigo) — los datos de NEGOCIO viven en
+    /// ConversationDataJson. `pendingRequest` es la solicitud confidencial interceptada por el gate,
+    /// a reanudar tras autenticar. NULL = el flujo aún no arrancó / no hay flujo activo.
+    /// </summary>
+    public string? FlowStateJson { get; set; }
+
     public ICollection<Message> Messages { get; set; } = [];
     public ICollection<GestionEvent> GestionEvents { get; set; } = [];
 }

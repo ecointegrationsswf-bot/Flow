@@ -33,6 +33,14 @@ export function NewVersionBanner() {
       return
     }
 
+    // Si la página tiene menos de 15s de vida, el usuario RECIÉN entra (pestaña
+    // restaurada / bfcache): no hay trabajo en curso que proteger — recargar ya,
+    // sin countdown, para que vea la versión nueva de inmediato.
+    if (performance.now() < 15_000) {
+      window.location.reload()
+      return
+    }
+
     setSecondsLeft(COUNTDOWN_SECONDS)
     const interval = window.setInterval(() => {
       setSecondsLeft(prev => {

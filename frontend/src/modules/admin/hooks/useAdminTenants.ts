@@ -141,6 +141,20 @@ export function useChangeTenantUserPassword() {
   })
 }
 
+/** Edita nombre, rol y bypass 2FA de un usuario de tenant (no toca email ni contraseña). */
+export function useUpdateTenantUser() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ tenantId, userId, ...payload }: { tenantId: string; userId: string; fullName?: string; role?: string; bypassTwoFactor?: boolean }) => {
+      const { data } = await adminClient.put(`/admin/tenants/${tenantId}/users/${userId}`, payload)
+      return data
+    },
+    onSuccess: (_data, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['admin', 'tenants', vars.tenantId, 'users'] })
+    },
+  })
+}
+
 /** Activa / inactiva un usuario de un tenant (portal SuperAdmin). */
 export function useSetTenantUserActive() {
   const queryClient = useQueryClient()

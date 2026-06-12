@@ -2,18 +2,21 @@ import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import {
   Building2, Bot, Tag, Phone, Users, LogOut, Zap, FileText,
-  Calendar, TrendingDown, PanelLeftClose, PanelLeft, Inbox, Send, ShieldAlert,
+  Calendar, TrendingDown, PanelLeftClose, PanelLeft, Inbox, Send, ShieldAlert, MessageSquare, Workflow, Sparkles,
 } from 'lucide-react'
 import { useSuperAdminStore } from '@/shared/stores/superAdminStore'
 
 const adminNav = [
+  { to: '/admin/copilot',         icon: Sparkles,    label: 'Copiloto IT'     },
   { to: '/admin/tenants',         icon: Building2,   label: 'Tenants'         },
   { to: '/admin/inbox',           icon: Inbox,       label: 'Inbox monitor'   },
   { to: '/admin/outbox',          icon: Send,        label: 'Mensajes enviados' },
   { to: '/admin/agent-templates', icon: Bot,         label: 'Agentes'         },
   { to: '/admin/categories',      icon: Tag,         label: 'Categorías'      },
   { to: '/admin/whatsapp',        icon: Phone,       label: 'WhatsApp'        },
+  { to: '/admin/whatsapp-config', icon: MessageSquare, label: 'WhatsApp Tenants' },
   { to: '/admin/actions',         icon: Zap,         label: 'Acciones'        },
+  { to: '/admin/workflows',       icon: Workflow,    label: 'Workflows'       },
   { to: '/admin/morosidad',       icon: TrendingDown,label: 'Descargas'       },
   { to: '/admin/scheduled-jobs',  icon: Calendar,    label: 'Scheduled Jobs'  },
   { to: '/admin/invalid-numbers', icon: ShieldAlert, label: 'Lista negra WA'  },

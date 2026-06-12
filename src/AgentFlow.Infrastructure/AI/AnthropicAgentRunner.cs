@@ -176,6 +176,23 @@ public class AnthropicAgentRunner(
                 sb.AppendLine($"- {k}: {v}");
         }
 
+        // ── Motor de flujos Fase 3 — bloque "## FLUJO ACTIVO" ──────────────
+        // Precompilado por IWorkflowPromptBuilder (capa de aplicación): paso actual +
+        // datos recolectados + transiciones válidas + reglas duras. Se inserta DESPUÉS
+        // del contexto estático del cliente y ANTES del resultado dinámico de la acción
+        // (orden lógico: quién es el cliente → en qué paso del flujo va → qué devolvió su
+        // último paso). Si no hay flujo activo viene vacío y el prompt queda idéntico.
+        //
+        // BLINDAJE POST_CHAIN: en el regenerate NO se inyecta el guion. El guion mira hacia
+        // ADELANTE ("cliente no validado → validá") y en la 2da invocación hace que el LLM
+        // re-planifique e ignore que la acción YA corrió (síntoma: "voy a verificar…" tras un
+        // NO_ENCONTRADO). En el regenerate el LLM solo debe REDACTAR el RESULTADO DE ACCIÓN.
+        if (!string.IsNullOrEmpty(req.WorkflowBlock) && !req.PostChainRegeneration)
+        {
+            sb.AppendLine();
+            sb.AppendLine(req.WorkflowBlock);
+        }
+
         // ── Action Trigger Protocol Fase 4 — resultado de acción previa ────
         // Si en el turno anterior (o en este, vía chain) se ejecutó una acción y
         // devolvió datos, el handler los pasa aquí para que el agente los incluya
@@ -218,7 +235,13 @@ public class AnthropicAgentRunner(
         // Lo preconstruye IActionPromptBuilder en la capa de aplicación y
         // lo pasa vía AgentRunRequest.ActionsBlock. En Fase 0 siempre viene
         // vacío (NoOp), por lo que el prompt queda idéntico al histórico.
-        if (!string.IsNullOrEmpty(req.ActionsBlock))
+        //
+        // BLINDAJE POST_CHAIN: en el regenerate (2da invocación tras un chain) NO se
+        // inyecta el catálogo. Sin catálogo el LLM no tiene cómo re-disparar una acción
+        // → se ve obligado a redactar la respuesta final con el RESULTADO DE ACCIÓN. Esto
+        // elimina por código el bug donde el LLM re-emitía [ACTION:...] en el regenerate,
+        // el handler lo borraba y quedaba vacío → se conservaba el preliminar ("verificando…").
+        if (!string.IsNullOrEmpty(req.ActionsBlock) && !req.PostChainRegeneration)
         {
             sb.AppendLine();
             sb.AppendLine(req.ActionsBlock);
@@ -272,9 +295,9 @@ public class AnthropicAgentRunner(
         {
             sb.AppendLine();
             sb.AppendLine("### MODO POST-ACCIÓN — REDACTA LA RESPUESTA FINAL");
-            sb.AppendLine("Una acción acaba de ejecutarse exitosamente y su resultado está arriba en");
+            sb.AppendLine("Una acción ACABA DE EJECUTARSE y su resultado está arriba en");
             sb.AppendLine("\"RESULTADO DE ACCIÓN EJECUTADA\". Tu tarea AHORA es redactar la respuesta");
-            sb.AppendLine("FINAL al cliente usando esos datos. Reglas estrictas para este turno:");
+            sb.AppendLine("FINAL al cliente usando ese resultado. Reglas estrictas para este turno:");
             sb.AppendLine();
             sb.AppendLine("1. NO emitas ningún tag [ACTION:...] ni [PARAM:...]. La acción ya corrió.");
             sb.AppendLine("2. Responde directamente a la PREGUNTA ORIGINAL del cliente (mirá su mensaje");
@@ -287,6 +310,13 @@ public class AnthropicAgentRunner(
             sb.AppendLine("5. Si el resultado contiene una lista (pólizas, productos, etc.), enumeralos");
             sb.AppendLine("   con bullets o numeración clara.");
             sb.AppendLine("6. Mantené el tono y estilo del agente — corto, cálido, sin Markdown pesado.");
+            sb.AppendLine("7. Si el resultado indica que NO se encontró el dato (ej: status NO_ENCONTRADO,");
+            sb.AppendLine("   sin resultados, lista vacía) o hubo un error, DECÍSELO al cliente con claridad");
+            sb.AppendLine("   y qué puede hacer (ej: revisar el número e intentar de nuevo, o que lo");
+            sb.AppendLine("   contacte un asesor). NO inventes datos que no están en el resultado.");
+            sb.AppendLine("8. PROHIBIDO responder en futuro (\"voy a verificar\", \"estoy verificando\",");
+            sb.AppendLine("   \"ya consulto\", \"permitime revisar\"). La acción YA corrió: redactá su");
+            sb.AppendLine("   RESULTADO, no la intención.");
         }
 
         return sb.ToString();

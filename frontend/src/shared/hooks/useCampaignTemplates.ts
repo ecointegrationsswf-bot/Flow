@@ -64,9 +64,18 @@ export interface CampaignTemplate {
   itemsConfig: string | null
   /** Datos de muestra (archivo modelo parseado) — array JSON. */
   sampleDataJson: string | null
+  /** Motor de flujos: TenantFlow que enmarca las conversaciones de este maestro. null = sin flujo. */
+  activeFlowId: string | null
   isActive: boolean
   createdAt: string
   updatedAt: string
+}
+
+/** Flujo del lienzo (workflow) disponible para vincular al maestro. */
+export interface TenantFlowOption {
+  id: string
+  name: string
+  description: string | null
 }
 
 export interface CampaignTemplatePayload {
@@ -101,6 +110,7 @@ export interface CampaignTemplatePayload {
   umbralCorporativo?: number
   itemsConfig?: string | null
   sampleDataJson?: string | null
+  activeFlowId?: string | null
 }
 
 export interface ActionConfig {
@@ -138,6 +148,17 @@ export function useCampaignTemplates() {
     queryKey: ['campaign-templates'],
     queryFn: async () => {
       const { data } = await api.get<CampaignTemplate[]>('/campaign-templates')
+      return data
+    },
+  })
+}
+
+/** Flujos del lienzo del tenant actual — para el selector "Flujo de conversación" del maestro. */
+export function useTenantFlows() {
+  return useQuery({
+    queryKey: ['tenant-flows'],
+    queryFn: async () => {
+      const { data } = await api.get<TenantFlowOption[]>('/campaign-templates/flows')
       return data
     },
   })

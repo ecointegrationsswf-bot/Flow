@@ -58,6 +58,7 @@ public class SystemContextBuilder(AgentFlowDbContext db, ILogger<SystemContextBu
                     c.Status, c.ClosedAt, c.IsHumanHandled,
                     c.LabelId, c.LabeledAt,
                     c.LabelingResultJson,
+                    c.ConversationDataJson,
                     LabelName = c.Label != null ? c.Label.Name : null,
                     LabelKeywords = c.Label != null ? c.Label.Keywords : null,
                     MessageCount = c.Messages.Count,
@@ -132,6 +133,43 @@ public class SystemContextBuilder(AgentFlowDbContext db, ILogger<SystemContextBu
                         }
                     }
                     catch { /* JSON corrupto — ignorar */ }
+                }
+
+                // ── Memoria DURABLE de la conversación → data.<SLUG>.<campo> ──
+                // La bolsa ConversationDataJson acumula el response de cada acción por slug
+                // (forma { "SLUG": {responseJson} }). Aplanamos los campos escalares del PRIMER
+                // nivel de cada slug como `data.<SLUG>.<campo>` para que un contrato pueda leerlos
+                // de forma CONFIABLE (sourceType=system), en vez de depender del LastActionResult
+                // efímero de Redis (consume-on-read / freshness) que es la fuente frágil del 2FA.
+                // Ej: data.INSURED_INITIATE.idCodigo — el idCodigo persiste aunque el turno tarde.
+                if (!string.IsNullOrEmpty(conv.ConversationDataJson))
+                {
+                    try
+                    {
+                        using var bag = System.Text.Json.JsonDocument.Parse(conv.ConversationDataJson);
+                        if (bag.RootElement.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            foreach (var slug in bag.RootElement.EnumerateObject())
+                            {
+                                if (slug.Value.ValueKind != System.Text.Json.JsonValueKind.Object) continue;
+                                foreach (var field in slug.Value.EnumerateObject())
+                                {
+                                    // Solo escalares (no arrays/objetos anidados como `polizas`).
+                                    var v = field.Value.ValueKind switch
+                                    {
+                                        System.Text.Json.JsonValueKind.String => field.Value.GetString() ?? "",
+                                        System.Text.Json.JsonValueKind.Number => field.Value.GetRawText(),
+                                        System.Text.Json.JsonValueKind.True => "true",
+                                        System.Text.Json.JsonValueKind.False => "false",
+                                        _ => (string?)null
+                                    };
+                                    if (v is not null)
+                                        ctx.Set($"data.{slug.Name}.{field.Name}", v);
+                                }
+                            }
+                        }
+                    }
+                    catch { /* bolsa corrupta — ignorar */ }
                 }
             }
         }

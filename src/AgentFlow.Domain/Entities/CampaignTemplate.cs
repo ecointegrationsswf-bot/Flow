@@ -170,6 +170,13 @@ public class CampaignTemplate
     /// </summary>
     public bool IsPrimaryForAgent { get; set; } = true;
 
+    /// <summary>
+    /// Motor de flujos — Fase 3. Flujo visual (TenantFlow) que enmarca las conversaciones de este
+    /// maestro. Es el BINDING elegido: si está seteado, el motor inyecta el WorkflowBlock al LLM y
+    /// avanza el puntero por conversación. NULL = sin flujo → comportamiento idéntico al histórico.
+    /// </summary>
+    public Guid? ActiveFlowId { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

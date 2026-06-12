@@ -28,6 +28,7 @@ import {
   useUpdateCampaignTemplate,
   useAvailableActions,
   useAvailablePrompts,
+  useTenantFlows,
   fetchAvailablePromptDetail,
   type ActionConfig,
   type PrimaryTemplateSwapConflict,
@@ -128,6 +129,9 @@ export function CampaignTemplateFormPage() {
   const [attentionStart, setAttentionStart] = useState(existing?.attentionStartTime ?? '08:00')
   const [attentionEnd, setAttentionEnd] = useState(existing?.attentionEndTime ?? '17:00')
   const [outOfContextPolicy, setOutOfContextPolicy] = useState(existing?.outOfContextPolicy ?? 'Contain')
+  // Motor de flujos — flujo del lienzo que enmarca las conversaciones de este maestro ('' = ninguno).
+  const [activeFlowId, setActiveFlowId] = useState<string>(existing?.activeFlowId ?? '')
+  const { data: tenantFlows } = useTenantFlows()
   // Webhook Contract Builder — modal state (Fase 5)
   const [webhookBuilderActionId, setWebhookBuilderActionId] = useState<string | null>(null)
   // Tab activa — General / Etiquetas / Acciones / Prompt / Documentos / Correo
@@ -187,6 +191,7 @@ export function CampaignTemplateFormPage() {
     setAttentionStart(existing.attentionStartTime ?? '08:00')
     setAttentionEnd(existing.attentionEndTime ?? '17:00')
     if (existing.outOfContextPolicy) setOutOfContextPolicy(existing.outOfContextPolicy)
+    setActiveFlowId(existing.activeFlowId ?? '')
     if (existing.systemPrompt) setLocalSystemPrompt(existing.systemPrompt)
     setLocalEmailSubject(existing.emailSubject ?? '')
     setLocalEmailBodyHtml(existing.emailBodyHtml ?? '')
@@ -426,8 +431,14 @@ export function CampaignTemplateFormPage() {
       const actionErrors: Record<string, string> = {}
 
       if (action.requiresWebhook) {
-        if (!config.webhookUrl?.trim()) { actionErrors.webhookUrl = 'La URL del webhook es obligatoria'; valid = false }
-        if (!config.webhookMethod?.trim()) { actionErrors.webhookMethod = 'El metodo es obligatorio'; valid = false }
+        // La acción puede HEREDAR su contrato (TenantActionContract / DefaultWebhookContract
+        // global — arquitectura mayo-2026). Solo exigimos config legacy en el maestro cuando
+        // NO hay contrato heredado NI URL local. Antes esto exigía siempre la config legacy
+        // y bloqueaba el guardado en silencio (incidente PASESA 2026-06-12).
+        const heredaContrato = !!action.defaultWebhookContract
+        const tieneUrlLocal = !!config.webhookUrl?.trim()
+        if (!heredaContrato && !tieneUrlLocal) { actionErrors.webhookUrl = 'La URL del webhook es obligatoria (la acción no tiene contrato heredado)'; valid = false }
+        if (tieneUrlLocal && !config.webhookMethod?.trim()) { actionErrors.webhookMethod = 'El metodo es obligatorio'; valid = false }
       }
       if (action.sendsEmail) {
         if (!config.emailAddress?.trim()) { actionErrors.emailAddress = 'El correo es obligatorio'; valid = false }
@@ -533,13 +544,29 @@ export function CampaignTemplateFormPage() {
   }
 
   const onSubmit = (data: FormData) => {
-    if (!validateActionConfigs()) return
+    if (!validateActionConfigs()) {
+      // NUNCA fallar en silencio: si el usuario está en otro tab (ej: Prompt), el error de
+      // acciones era invisible y el guardado parecía "bloqueado" sin explicación.
+      setActiveTab('actions')
+      setMessageDialog({
+        kind: 'error',
+        title: 'No se pudo guardar: configuración de acciones incompleta',
+        description: 'Una o más acciones vinculadas tienen campos obligatorios sin completar. Te llevé al tab Acciones — los campos con error están marcados en rojo.',
+      })
+      return
+    }
 
     // El SystemPrompt es OBLIGATORIO — el CampaignTemplate es la única fuente
     // del prompt del agente. Sin esto, las campañas que usen este maestro
     // responden con canned + escalación humana, no con el agente IA.
     if (!localSystemPrompt.trim()) {
-      toast.error('El SystemPrompt es obligatorio. Sin él, el agente no podrá responder a los clientes de esta campaña.')
+      // Modal (no toast efímero) para que el bloqueo de validación sea siempre
+      // visible — mismo patrón que el error de guardado del servidor.
+      setMessageDialog({
+        kind: 'error',
+        title: 'No se pudo guardar el maestro',
+        description: 'El SystemPrompt es obligatorio. Sin él, el agente no podrá responder a los clientes de esta campaña. Escribilo antes de guardar.',
+      })
       return
     }
 
@@ -577,6 +604,7 @@ export function CampaignTemplateFormPage() {
       inactivityCloseHours: 72,
       maxTokens: 1024,
       outOfContextPolicy,
+      activeFlowId: activeFlowId || null,
       // Plantilla de correo (Fase 6). Si el agente no tiene canal Email habilitado
       // mandamos null para limpiar configuración previa que ya no aplica.
       emailSubject: hasEmailChannel && localEmailSubject.trim() ? localEmailSubject : null,
@@ -895,6 +923,41 @@ export function CampaignTemplateFormPage() {
               <p className="mt-1 text-xs text-gray-500">Vacio = cierra sin enviar mensaje al cliente.</p>
             </div>
           </div>
+        </section>
+
+        {/* Seccion: Motor de flujos — flujo del lienzo que enmarca la conversacion */}
+        <section className="rounded-lg bg-white p-5 shadow-sm">
+          <h2 className="mb-1 text-sm font-semibold text-gray-900">Flujo de conversación (workflow)</h2>
+          <p className="mb-3 text-xs text-gray-500">
+            Si vinculás un flujo del lienzo, el bot lo usa como guion en cada mensaje de las
+            conversaciones de este maestro. Sin flujo, el bot se comporta de forma clásica
+            (solo prompt + acciones). El cambio aplica desde el próximo mensaje.
+          </p>
+          {(tenantFlows ?? []).length === 0 ? (
+            <p className="rounded-md bg-gray-50 p-3 text-xs text-gray-500">
+              Este tenant no tiene flujos creados. Los flujos se diseñan en el panel de
+              administración (Workflows).
+            </p>
+          ) : (
+            <div className="max-w-md">
+              <select
+                value={activeFlowId}
+                onChange={(e) => setActiveFlowId(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              >
+                <option value="">— Sin flujo (comportamiento clásico) —</option>
+                {(tenantFlows ?? []).map((f) => (
+                  <option key={f.id} value={f.id}>{f.name}</option>
+                ))}
+              </select>
+              {activeFlowId && (
+                <p className="mt-1 text-xs text-amber-600">
+                  ⚠️ Verificá que este maestro tenga vinculadas (tab Acciones) todas las
+                  acciones que el flujo usa — si falta alguna, el bot no podrá dispararla.
+                </p>
+              )}
+            </div>
+          )}
         </section>
 
         {/* Seccion: Politica del Cerebro — solo visible si BrainEnabled */}

@@ -12,8 +12,10 @@ public class ActionFieldMappingConfiguration : IEntityTypeConfiguration<ActionFi
         b.ToTable("ActionFieldMappings");
         b.HasKey(x => x.Id);
 
-        // Un mapping único por (ActionDefinitionId, ColumnKey)
-        b.HasIndex(x => new { x.ActionDefinitionId, x.ColumnKey }).IsUnique();
+        // Un mapping único por (ActionDefinitionId, TenantId, ColumnKey).
+        // Incluye TenantId para que un mismo ColumnKey pueda existir a nivel global
+        // (TenantId NULL) y por-tenant sin colisionar.
+        b.HasIndex(x => new { x.ActionDefinitionId, x.TenantId, x.ColumnKey }).IsUnique();
 
         b.Property(x => x.ColumnKey).HasMaxLength(100).IsRequired();
         b.Property(x => x.DisplayName).HasMaxLength(200).IsRequired();

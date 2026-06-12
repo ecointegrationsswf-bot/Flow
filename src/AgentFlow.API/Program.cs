@@ -392,6 +392,9 @@ builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionChainResolver,
 // Action Trigger Protocol — Fase 0 (NoOp). En Fase 2 se reemplaza la implementación.
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionPromptBuilder,
     AgentFlow.Infrastructure.Webhooks.ActionPromptBuilder>();
+// Motor de flujos — Fase 3. Interpreta el TenantFlow activo del maestro y compila el WorkflowBlock.
+builder.Services.AddScoped<AgentFlow.Domain.Flows.IWorkflowEngine,
+    AgentFlow.Infrastructure.Flows.WorkflowEngine>();
 
 // Documentos de referencia por campaña — Fase 1 (builder + fetch).
 // La inyección en el runtime del agente se hace en Fase 2.
@@ -515,6 +518,72 @@ var app = builder.Build();
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionDelinquencyConfigs') AND name = 'AutoLaunchCampaigns')
             BEGIN
                 ALTER TABLE ActionDelinquencyConfigs ADD AutoLaunchCampaigns bit NOT NULL DEFAULT 1;
+            END");
+        // Field mappings POR-TENANT: TenantId nullable (NULL = mapeo global histórico;
+        // != NULL = override del tenant que prevalece). Aditivo, idempotente (no migración
+        // EF por el drift de schema en prod). Permite que un corredor reuse la acción de
+        // descarga genérica con una estructura de respuesta distinta (ej: AFTA en MAYÚSCULAS).
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('ActionFieldMappings') AND name = 'TenantId')
+            BEGIN
+                ALTER TABLE ActionFieldMappings ADD TenantId uniqueidentifier NULL;
+            END");
+        // El índice único debe incluir TenantId para que un mismo ColumnKey conviva a nivel
+        // global y por-tenant. Reemplaza el índice viejo (ActionDefinitionId, ColumnKey).
+        db2.Database.ExecuteSqlRaw(@"
+            IF EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ActionFieldMappings_ActionDefinitionId_ColumnKey' AND object_id = OBJECT_ID('ActionFieldMappings'))
+                DROP INDEX IX_ActionFieldMappings_ActionDefinitionId_ColumnKey ON ActionFieldMappings;
+            IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ActionFieldMappings_ActionDefinitionId_TenantId_ColumnKey' AND object_id = OBJECT_ID('ActionFieldMappings'))
+                CREATE UNIQUE INDEX IX_ActionFieldMappings_ActionDefinitionId_TenantId_ColumnKey ON ActionFieldMappings (ActionDefinitionId, TenantId, ColumnKey);");
+        // Memoria DURABLE de la conversación: bolsa JSON con los resultados de las acciones
+        // ejecutadas (acumulados por slug), inyectada al agente cada turno como datos_consultados.
+        // Aditivo y nullable — las conversaciones existentes quedan en NULL sin romper nada.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'ConversationDataJson')
+            BEGIN
+                ALTER TABLE Conversations ADD ConversationDataJson nvarchar(max) NULL;
+            END");
+        // Motor de flujos Fase 2: estado de auth propio por conversación (gate determinístico).
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'AuthenticatedUntil')
+            BEGIN
+                ALTER TABLE Conversations ADD AuthenticatedUntil datetime2 NULL;
+            END
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'AuthenticatedIdentityId')
+            BEGIN
+                ALTER TABLE Conversations ADD AuthenticatedIdentityId nvarchar(100) NULL;
+            END");
+        // Motor de flujos Fase 3: estado de avance del flujo por conversación + binding por maestro.
+        // Aditivo y nullable — sin flujo activo el motor no hace nada (comportamiento idéntico).
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'ActiveFlowId')
+            BEGIN
+                ALTER TABLE Conversations ADD ActiveFlowId uniqueidentifier NULL;
+            END
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'FlowStateJson')
+            BEGIN
+                ALTER TABLE Conversations ADD FlowStateJson nvarchar(max) NULL;
+            END
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActiveFlowId')
+            BEGIN
+                ALTER TABLE CampaignTemplates ADD ActiveFlowId uniqueidentifier NULL;
+            END");
+        // Motor de flujos Fase 4: tabla de flujos visuales por tenant (autoría del lienzo).
+        // Strings como nvarchar(max) para calzar con la convención de EF (sin config explícita).
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'TenantFlows')
+            BEGIN
+                CREATE TABLE TenantFlows (
+                    Id uniqueidentifier NOT NULL CONSTRAINT PK_TenantFlows PRIMARY KEY,
+                    TenantId uniqueidentifier NOT NULL,
+                    Name nvarchar(max) NOT NULL,
+                    Description nvarchar(max) NULL,
+                    FlowJson nvarchar(max) NOT NULL,
+                    IsActive bit NOT NULL CONSTRAINT DF_TenantFlows_IsActive DEFAULT 1,
+                    CreatedAt datetime2 NOT NULL,
+                    UpdatedAt datetime2 NULL
+                );
+                CREATE INDEX IX_TenantFlows_TenantId ON TenantFlows (TenantId);
             END");
         // Credenciales Meta WhatsApp Cloud API por línea (aditivo, nullable). Las
         // líneas UltraMsg las dejan en NULL. phone_number_id se reutiliza en InstanceId.

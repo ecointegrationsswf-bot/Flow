@@ -20,13 +20,36 @@ public interface IActionChainResolver
     /// Dado el slug de la acción recién ejecutada, el tenant y el JSON crudo
     /// de su respuesta, devuelve la decisión de encadenamiento (o null si no
     /// hay regla aplicable / el JSON no matchea).
+    ///
+    /// <paramref name="extraContextJson"/> (opcional, Fase 1 del motor de flujos):
+    /// objeto JSON con namespaces extra que se MERGEAN al raíz del contexto de
+    /// evaluación junto al response del webhook — ej: `{"llm":{"intent":"reclamos","confidence":0.92}}`.
+    /// Permite que las ChainRules condicionen por el RESULTADO del LLM, no solo por
+    /// el JSON del webhook. Si es null, el comportamiento es idéntico al anterior.
     /// </summary>
     Task<ChainDecision?> GetNextActionAsync(
         string executedSlug,
         Guid tenantId,
         string? rawResponseJson,
-        CancellationToken ct);
+        CancellationToken ct,
+        string? extraContextJson = null);
+
+    /// <summary>
+    /// Motor de flujos — Fase 2. Devuelve la configuración de autenticación de una acción
+    /// (¿requiere auth?, política de qué resultado autentica, mensaje si se bloquea), leída
+    /// del contrato per-tenant → global. Si no hay contrato, devuelve "no requiere auth".
+    /// La usa el orquestador para el GATE determinístico (bloquear acciones confidenciales
+    /// sin auth) y para SETEAR el estado de auth tras una validación exitosa.
+    /// </summary>
+    Task<ActionAuthConfig> GetAuthConfigAsync(Guid tenantId, string slug, CancellationToken ct);
 }
+
+/// <summary>
+/// Config de auth de una acción (Fase 2). `RequiresAuth`=true exige auth previa para
+/// ejecutar. `AuthPolicy` (si no es null) declara qué resultado de ESTA acción autentica.
+/// `AuthRequiredMessage` es el texto a responder cuando se bloquea por falta de auth.
+/// </summary>
+public record ActionAuthConfig(bool RequiresAuth, AuthPolicy? AuthPolicy, string? AuthRequiredMessage);
 
 /// <summary>
 /// Resultado de la evaluación de ChainRules. Contiene el slug de la siguiente

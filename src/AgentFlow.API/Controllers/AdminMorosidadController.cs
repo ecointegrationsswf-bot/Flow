@@ -201,11 +201,13 @@ public class AdminMorosidadController(
 
     // ── Mapeo de campos (sin tenant, solo por ActionDefinitionId) ────────────
 
+    // tenantId opcional: null = mapeos GLOBALES de la acción (comportamiento histórico).
+    // Con tenantId = devuelve los mapeos propios de ese tenant (vacío si aún no definió).
     [HttpGet("mappings/{actionId:guid}")]
-    public async Task<IActionResult> GetMappings(Guid actionId, CancellationToken ct)
+    public async Task<IActionResult> GetMappings(Guid actionId, [FromQuery] Guid? tenantId, CancellationToken ct)
     {
         var mappings = await db.ActionFieldMappings
-            .Where(m => m.ActionDefinitionId == actionId)
+            .Where(m => m.ActionDefinitionId == actionId && m.TenantId == tenantId)
             .OrderBy(m => m.SortOrder)
             .Select(m => new
             {
@@ -225,14 +227,19 @@ public class AdminMorosidadController(
         return Ok(mappings);
     }
 
+    // tenantId opcional: null = reemplaza los mapeos GLOBALES (histórico). Con tenantId =
+    // reemplaza SOLO los de ese tenant (no toca los globales ni los de otros tenants).
     [HttpPut("mappings/{actionId:guid}")]
     public async Task<IActionResult> SetMappings(
         Guid actionId,
         [FromBody] AdminSetMappingsRequest req,
+        [FromQuery] Guid? tenantId,
         CancellationToken ct)
     {
         var actionExists = await db.ActionDefinitions.AnyAsync(a => a.Id == actionId, ct);
         if (!actionExists) return NotFound("Acción no encontrada.");
+        if (tenantId is not null && !await db.Tenants.AnyAsync(t => t.Id == tenantId, ct))
+            return NotFound("Tenant no encontrado.");
 
         // Reusar el mismo normalizador + validador del controller tenant.
         var asPortable = (req.Mappings ?? [])
@@ -246,7 +253,7 @@ public class AdminMorosidadController(
         if (validation != null) return BadRequest(new { error = validation });
 
         var existing = await db.ActionFieldMappings
-            .Where(m => m.ActionDefinitionId == actionId)
+            .Where(m => m.ActionDefinitionId == actionId && m.TenantId == tenantId)
             .ToListAsync(ct);
 
         db.ActionFieldMappings.RemoveRange(existing);
@@ -255,6 +262,7 @@ public class AdminMorosidadController(
         {
             Id                 = Guid.NewGuid(),
             ActionDefinitionId = actionId,
+            TenantId           = tenantId,
             ColumnKey          = m.ColumnKey.Trim(),
             DisplayName        = m.DisplayName.Trim(),
             JsonPath           = m.JsonPath.Trim(),

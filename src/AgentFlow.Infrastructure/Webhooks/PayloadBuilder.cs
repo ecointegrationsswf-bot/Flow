@@ -38,10 +38,80 @@ public class PayloadBuilder : IPayloadBuilder
             flat[field.FieldPath] = typedValue;
         }
 
+        // rootArray: el body es un ARRAY raíz de objetos — ej. [{"IdPoliza":1},{"IdPoliza":2}].
+        // Para endpoints batch (jun 2026: descarga de PDFs de varias pólizas). El valor de un
+        // field puede venir como CSV ("1,2,3", típico de un [PARAM:...] del LLM) o como array
+        // JSON; cada ítem genera un elemento del array con ese field. Los fields de un solo
+        // valor se repiten como constantes en todos los elementos.
+        if (schema.Structure?.ToLower() == "rootarray")
+            return ExpandToRootArray(schema, collected, systemContext);
+
         // Si la estructura es nested, expandir dot-notation a objeto anidado
         return schema.Structure?.ToLower() == "nested"
             ? ExpandToNested(flat)
             : flat;
+    }
+
+    /// <summary>
+    /// Construye el array raíz para Structure=rootArray. Cada field se resuelve igual que
+    /// en flat, pero los valores multi-ítem (CSV o JSON array) se expanden: el elemento i
+    /// del array recibe el ítem i. El largo del array = máximo de ítems entre los fields.
+    /// </summary>
+    private List<Dictionary<string, object?>> ExpandToRootArray(
+        InputSchema schema, CollectedParams collected, SystemContext systemContext)
+    {
+        var perField = new List<(InputField Field, List<object?> Items)>();
+        var count = 1;
+
+        foreach (var field in schema.Fields)
+        {
+            var rawValue = ResolveSource(field, collected, systemContext);
+            if (rawValue is null && !field.Required && field.DefaultValue is not null)
+                rawValue = field.DefaultValue;
+
+            var items = SplitMultiValue(rawValue)
+                .Select(v => CastToDataType(v, field.DataType, field.Format))
+                .ToList();
+            if (items.Count == 0) items.Add(null);
+
+            perField.Add((field, items));
+            count = Math.Max(count, items.Count);
+        }
+
+        var result = new List<Dictionary<string, object?>>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var element = new Dictionary<string, object?>();
+            foreach (var (field, items) in perField)
+                element[field.FieldPath] = items.Count > i ? items[i] : items[^1]; // constantes se repiten
+            result.Add(element);
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// Divide un valor en sus ítems: array JSON ("[1,2]"), CSV ("1,2,3") o valor único.
+    /// </summary>
+    private static List<object?> SplitMultiValue(object? raw)
+    {
+        if (raw is null) return [];
+        var s = raw.ToString()?.Trim() ?? "";
+        if (s.Length == 0) return [];
+
+        if (s.StartsWith('['))
+        {
+            try
+            {
+                var arr = System.Text.Json.JsonSerializer.Deserialize<List<object?>>(s);
+                if (arr is not null) return arr.Select(x => (object?)x?.ToString()).ToList();
+            }
+            catch { /* cae al CSV/único */ }
+        }
+
+        return s.Contains(',')
+            ? s.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(x => (object?)x).ToList()
+            : [s];
     }
 
     /// <summary>

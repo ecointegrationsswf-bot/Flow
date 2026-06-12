@@ -20,6 +20,9 @@ public record UpdateTenantRequest(string? Name, string? Country, decimal? Monthl
 public record CreateTenantUserRequest(string FullName, string Email, string Password, string Role, bool BypassTwoFactor = false);
 public record ChangePasswordRequest(string NewPassword);
 public record SetUserActiveRequest(bool IsActive);
+// Editar usuario de tenant: nombre, rol y bypass 2FA. El email NO se edita
+// (es la identidad de login). La contraseña tiene su propio endpoint.
+public record UpdateTenantUserRequest(string? FullName, string? Role, bool? BypassTwoFactor);
 public record CreateAgentCategoryRequest(string Name);
 public record UpdateAgentCategoryRequest(string? Name, bool? IsActive);
 public record AgentTemplateRequest(
@@ -33,6 +36,19 @@ public record AgentTemplateRequest(
 public record MigrateTemplateRequest(Guid TenantId, bool Update = false);
 public record AdminCreateWhatsAppLineRequest(string DisplayName, string PhoneNumber, string InstanceId, string ApiToken);
 public record AdminUpdateWhatsAppLineRequest(string DisplayName, string PhoneNumber, string? InstanceId, string? ApiToken, bool IsActive);
+
+// Cross-tenant: el super admin elige el TenantId destino y el proveedor (UltraMsg | MetaCloudApi).
+// Para Meta, InstanceId lleva el phone_number_id y ApiToken queda vacío (se usan los campos Meta*).
+// Los secretos (ApiToken, MetaAccessToken, MetaAppSecret) solo se sobre-escriben en update si vienen con valor.
+public record AdminWaConfigCreateRequest(
+    Guid? TenantId, string DisplayName, string PhoneNumber, string InstanceId, string? ApiToken = null,
+    string? Provider = null, string? MetaWabaId = null, string? MetaAccessToken = null,
+    string? MetaAppSecret = null, string? MetaBusinessId = null);
+public record AdminWaConfigUpdateRequest(
+    string DisplayName, string PhoneNumber, string? InstanceId, string? ApiToken, bool IsActive,
+    string? Provider = null, string? MetaWabaId = null, string? MetaAccessToken = null,
+    string? MetaAppSecret = null, string? MetaBusinessId = null);
+public record AdminWaConfigTestMessageRequest(string To, string Message);
 public record CreateSuperAdminRequest(string FullName, string Email, string Password);
 public record UpdateSuperAdminRequest(string? FullName, string? Email, bool? IsActive, string? Password);
 
@@ -904,6 +920,34 @@ public class SuperAdminController(
         return Ok(new { user.Id, user.FullName, user.Email, Role = user.Role.ToString(), user.IsActive });
     }
 
+    /// <summary>
+    /// Edita los datos de un usuario de tenant: nombre, rol y bypass de 2FA.
+    /// El email (identidad de login) y la contraseña NO se tocan aquí.
+    /// </summary>
+    [HttpPut("tenants/{tenantId:guid}/users/{userId:guid}")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateTenantUser(Guid tenantId, Guid userId, [FromBody] UpdateTenantUserRequest req, CancellationToken ct)
+    {
+        var user = await db.AppUsers.FirstOrDefaultAsync(u => u.Id == userId && u.TenantId == tenantId, ct);
+        if (user is null) return NotFound(new { error = "Usuario no encontrado." });
+
+        if (!string.IsNullOrWhiteSpace(req.FullName))
+            user.FullName = req.FullName.Trim();
+
+        if (!string.IsNullOrWhiteSpace(req.Role))
+        {
+            if (!Enum.TryParse<UserRole>(req.Role, ignoreCase: true, out var role))
+                return BadRequest(new { error = "Rol invalido." });
+            user.Role = role;
+        }
+
+        if (req.BypassTwoFactor.HasValue)
+            user.BypassTwoFactor = req.BypassTwoFactor.Value;
+
+        await db.SaveChangesAsync(ct);
+        return Ok(new { user.Id, user.FullName, user.Email, Role = user.Role.ToString(), user.IsActive, user.BypassTwoFactor });
+    }
+
     // ── Super Admin Users ─────────────────────────────────
 
     [HttpGet("users")]
@@ -1329,6 +1373,216 @@ public class SuperAdminController(
             return success ? Ok(new { message = "Sesion cerrada." }) : StatusCode(502, new { error = "No se pudo cerrar sesion." });
         }
         catch (HttpRequestException) { return StatusCode(502, new { error = "Error al cerrar sesion." }); }
+    }
+
+    // ───── WhatsApp Config CROSS-TENANT (super admin) ─────────────────────
+    // Vista/edición de TODAS las líneas de WhatsApp de todos los tenants, agrupadas
+    // por tenant en el frontend. 100% ADITIVO: rutas nuevas (api/admin/whatsapp-config),
+    // distintas del CRUD legacy de líneas de prueba (api/admin/whatsapp-lines, TenantId==null).
+    // Las operaciones por línea (status/qr/restart/logout) se reutilizan de los endpoints
+    // /admin/whatsapp-lines/{id}/... que ya buscan por id sin filtrar tenant.
+
+    private static string? WaLast4(string? secret)
+        => string.IsNullOrEmpty(secret) ? null : secret.Length <= 4 ? "****" : secret[^4..];
+
+    /// <summary>
+    /// Lista TODAS las líneas WhatsApp (cualquier tenant, incluido null = "sin tenant / prueba")
+    /// con el nombre del tenant y los secretos enmascarados (solo últimos 4). Nunca expone
+    /// tokens en claro. Pensado para el grid agrupado por tenant del panel admin.
+    /// </summary>
+    [HttpGet("whatsapp-config")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> GetAllWhatsAppConfig(CancellationToken ct)
+    {
+        var lines = await (
+            from l in db.WhatsAppLines
+            join t in db.Tenants on l.TenantId equals t.Id into gt
+            from t in gt.DefaultIfEmpty()
+            orderby t.Name, l.CreatedAt
+            select new
+            {
+                l.Id,
+                l.TenantId,
+                TenantName = t != null ? t.Name : null,
+                l.DisplayName,
+                l.PhoneNumber,
+                l.InstanceId,
+                Provider = l.Provider.ToString(),
+                l.MetaWabaId,
+                l.MetaBusinessId,
+                MetaAccessTokenLast4 = l.MetaAccessToken == null ? null : l.MetaAccessToken,
+                MetaAppSecretLast4 = l.MetaAppSecret == null ? null : l.MetaAppSecret,
+                l.IsActive,
+                l.LastStatus,
+                l.LastStatusCheckedAt,
+                l.CreatedAt,
+                l.UpdatedAt,
+            }).ToListAsync(ct);
+
+        // El enmascarado se hace en memoria (EF no traduce el slice [^4..]).
+        var projected = lines.Select(l => new
+        {
+            l.Id,
+            l.TenantId,
+            l.TenantName,
+            l.DisplayName,
+            l.PhoneNumber,
+            l.InstanceId,
+            l.Provider,
+            l.MetaWabaId,
+            l.MetaBusinessId,
+            MetaAccessTokenLast4 = WaLast4(l.MetaAccessTokenLast4),
+            MetaAppSecretLast4 = WaLast4(l.MetaAppSecretLast4),
+            l.IsActive,
+            l.LastStatus,
+            l.LastStatusCheckedAt,
+            l.CreatedAt,
+            l.UpdatedAt,
+        });
+
+        return Ok(projected);
+    }
+
+    /// <summary>
+    /// Crea una línea WhatsApp para el tenant indicado (o sin tenant si TenantId es null).
+    /// Valida por proveedor igual que el controller del tenant y rechaza InstanceId duplicado
+    /// dentro del mismo tenant.
+    /// </summary>
+    [HttpPost("whatsapp-config")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> CreateWhatsAppConfig([FromBody] AdminWaConfigCreateRequest req, CancellationToken ct)
+    {
+        if (req.TenantId.HasValue && !await db.Tenants.AnyAsync(t => t.Id == req.TenantId.Value, ct))
+            return NotFound(new { error = "Tenant no encontrado." });
+
+        if (!Enum.TryParse<AgentFlow.Domain.Enums.ProviderType>(req.Provider, ignoreCase: true, out var provider))
+            provider = AgentFlow.Domain.Enums.ProviderType.UltraMsg;
+
+        if (provider == AgentFlow.Domain.Enums.ProviderType.UltraMsg)
+        {
+            if (string.IsNullOrWhiteSpace(req.InstanceId) || string.IsNullOrWhiteSpace(req.ApiToken))
+                return BadRequest(new { error = "UltraMsg requiere Instance ID y Token." });
+        }
+        else // MetaCloudApi
+        {
+            if (string.IsNullOrWhiteSpace(req.InstanceId) || string.IsNullOrWhiteSpace(req.MetaWabaId) || string.IsNullOrWhiteSpace(req.MetaAccessToken))
+                return BadRequest(new { error = "Meta requiere Phone Number ID, WABA ID y Access Token." });
+        }
+
+        var exists = await db.WhatsAppLines
+            .AnyAsync(l => l.TenantId == req.TenantId && l.InstanceId == req.InstanceId, ct);
+        if (exists)
+            return Conflict(new { error = "Ya existe una linea con ese Instance ID / Phone Number ID en este tenant." });
+
+        var line = new WhatsAppLine
+        {
+            Id = Guid.NewGuid(),
+            TenantId = req.TenantId,
+            DisplayName = req.DisplayName,
+            PhoneNumber = req.PhoneNumber,
+            InstanceId = req.InstanceId,
+            ApiToken = req.ApiToken ?? string.Empty,
+            Provider = provider,
+            MetaWabaId = req.MetaWabaId,
+            MetaAccessToken = req.MetaAccessToken,
+            MetaAppSecret = req.MetaAppSecret,
+            MetaBusinessId = req.MetaBusinessId,
+            IsActive = true,
+            CreatedAt = DateTime.UtcNow,
+        };
+
+        db.WhatsAppLines.Add(line);
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { line.Id, line.TenantId, line.DisplayName, line.InstanceId, Provider = line.Provider.ToString() });
+    }
+
+    /// <summary>
+    /// Edita una línea (cualquier tenant). Los secretos en blanco conservan el valor actual.
+    /// No permite mover la línea de tenant (el TenantId se fija al crear).
+    /// </summary>
+    [HttpPut("whatsapp-config/{id:guid}")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> UpdateWhatsAppConfig(Guid id, [FromBody] AdminWaConfigUpdateRequest req, CancellationToken ct)
+    {
+        var line = await db.WhatsAppLines.FindAsync([id], ct);
+        if (line is null) return NotFound(new { error = "Linea no encontrada." });
+
+        line.DisplayName = req.DisplayName;
+        line.PhoneNumber = req.PhoneNumber;
+        line.IsActive = req.IsActive;
+
+        if (Enum.TryParse<AgentFlow.Domain.Enums.ProviderType>(req.Provider, ignoreCase: true, out var provider))
+            line.Provider = provider;
+
+        if (!string.IsNullOrWhiteSpace(req.InstanceId))
+            line.InstanceId = req.InstanceId;
+        if (!string.IsNullOrWhiteSpace(req.ApiToken))
+            line.ApiToken = req.ApiToken;
+
+        if (!string.IsNullOrWhiteSpace(req.MetaWabaId))
+            line.MetaWabaId = req.MetaWabaId;
+        if (!string.IsNullOrWhiteSpace(req.MetaBusinessId))
+            line.MetaBusinessId = req.MetaBusinessId;
+        if (!string.IsNullOrWhiteSpace(req.MetaAccessToken))
+            line.MetaAccessToken = req.MetaAccessToken;
+        if (!string.IsNullOrWhiteSpace(req.MetaAppSecret))
+            line.MetaAppSecret = req.MetaAppSecret;
+
+        line.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new { line.Id, line.TenantId, line.DisplayName, line.InstanceId, Provider = line.Provider.ToString(), line.IsActive });
+    }
+
+    /// <summary>
+    /// Elimina una línea (cualquier tenant), desvinculando antes los agentes que la
+    /// referencian para no dejar FK huérfanas (mismo comportamiento que el tenant controller).
+    /// </summary>
+    [HttpDelete("whatsapp-config/{id:guid}")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> DeleteWhatsAppConfig(Guid id, CancellationToken ct)
+    {
+        var line = await db.WhatsAppLines.FindAsync([id], ct);
+        if (line is null) return NotFound(new { error = "Linea no encontrada." });
+
+        var agentsUsingLine = await db.AgentDefinitions
+            .Where(a => a.WhatsAppLineId == id)
+            .ToListAsync(ct);
+        foreach (var agent in agentsUsingLine)
+            agent.WhatsAppLineId = null;
+
+        db.WhatsAppLines.Remove(line);
+        await db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Envía un mensaje de prueba desde una línea (cualquier tenant), usando el proveedor
+    /// correcto (UltraMsg o Meta) vía la factory.
+    /// </summary>
+    [HttpPost("whatsapp-config/{id:guid}/test-message")]
+    [Authorize(Roles = "super_admin")]
+    public async Task<IActionResult> TestMessageWhatsAppConfig(
+        Guid id,
+        [FromBody] AdminWaConfigTestMessageRequest req,
+        [FromServices] AgentFlow.Domain.Interfaces.IChannelProviderFactory providerFactory,
+        CancellationToken ct)
+    {
+        var line = await db.WhatsAppLines.FindAsync([id], ct);
+        if (line is null) return NotFound(new { error = "Linea no encontrada." });
+
+        var provider = await providerFactory.GetProviderByLineAsync(id, ct);
+        if (provider is null)
+            return BadRequest(new { error = "No se pudo crear el proveedor para esta linea. Verifica las credenciales." });
+
+        var result = await provider.SendMessageAsync(
+            new AgentFlow.Domain.Interfaces.SendMessageRequest(req.To, req.Message), ct);
+
+        if (!result.Success)
+            return BadRequest(new { error = $"Error al enviar: {result.Error}" });
+
+        return Ok(new { message = "Mensaje de prueba enviado exitosamente.", externalId = result.ExternalMessageId, to = req.To });
     }
 
     // ───── Action Definitions ─────

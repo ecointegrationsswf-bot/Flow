@@ -36,7 +36,15 @@ public record AgentRunRequest(
     /// emite la acción + texto preliminar, y el handler re-invoca con este flag
     /// para obtener la respuesta natural respondiendo a la pregunta original.
     /// </summary>
-    bool PostChainRegeneration = false
+    bool PostChainRegeneration = false,
+    /// <summary>
+    /// Motor de flujos — Fase 3. Bloque "## FLUJO ACTIVO" precompilado por IWorkflowPromptBuilder:
+    /// paso actual del flujo + datos ya recolectados + transiciones válidas + reglas duras. Le da al
+    /// LLM su "guion con estás aquí". Se inyecta entre "## Contexto del cliente" y "## RESULTADO DE
+    /// ACCIÓN EJECUTADA". NULL/vacío = la conversación no tiene flujo activo → el prompt queda idéntico
+    /// al histórico (mismo patrón condicional que ActionsBlock / ReferenceDocumentsBlock).
+    /// </summary>
+    string? WorkflowBlock = null
 );
 
 /// <summary>

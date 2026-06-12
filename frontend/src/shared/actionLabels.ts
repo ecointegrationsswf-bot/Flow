@@ -23,6 +23,7 @@ export const ACTION_FRIENDLY_NAMES: Record<string, string> = {
   LABEL_CONVERSATIONS: 'Etiquetar conversaciones',
   SEND_LABELING_SUMMARY: 'Enviar resumen etiquetado',
   DOWNLOAD_DELINQUENCY_DATA: 'Descargar datos de morosidad',
+  DOWNLOAD_CANCELLATION_NOTICES: 'Descargar avisos de cancelación',
   WHATSAPP_LINE_HEALTH_CHECK: 'Verificar estado de líneas WhatsApp',
   // Acciones de prueba (uso interno Jam Consulting)
   GENERATE_TEST_PDF: 'Generar PDF de prueba',
@@ -32,6 +33,7 @@ export const ACTION_FRIENDLY_NAMES: Record<string, string> = {
   INSURED_INITIATE: 'Identificar asegurado',
   INSURED_VALIDATE: 'Validar código 2FA',
   SEND_2FA_CODE_EMAIL: 'Enviar código 2FA por email',
+  DOWNLOAD_POLICY_PDF: 'Descargar PDF de póliza',
 }
 
 export function getActionFriendlyName(slug: string | null | undefined): string {

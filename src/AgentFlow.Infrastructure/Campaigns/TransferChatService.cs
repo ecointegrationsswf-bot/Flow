@@ -40,32 +40,48 @@ public class TransferChatService(
 
     public async Task<bool> ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default)
     {
-        // 1) Solo aplica a conversaciones de campaña.
-        if (!conversation.CampaignId.HasValue) return false;
+        // 1) Resolver el template que gobierna esta conversación.
+        //    - Conversación de CAMPAÑA → el template de la campaña (comportamiento histórico).
+        //    - Inbound ORGÁNICO (sin campaña, jun 2026) → el maestro PRIMARIO del agente
+        //      activo (el mismo del que salen prompt y acciones). Antes el inbound directo
+        //      quedaba sin notificación activa: el escalado solo se veía en el Monitor.
+        Campaign? campaign = null;
+        CampaignTemplate? template;
 
-        // 2) Cargar campaña + template (lo necesitamos para chequear TRANSFER_CHAT
-        //    ANTES del cooldown — el return value indica "el template tiene la
-        //    acción vinculada", y debe ser true aunque el cooldown ya haya parado
-        //    la notificación: la pausa del agente debe persistir mientras la
-        //    acción esté vinculada).
-        var campaign = await db.Campaigns
-            .Include(c => c.CampaignTemplate)
-            .FirstOrDefaultAsync(c => c.Id == conversation.CampaignId.Value, ct);
-        if (campaign is null) return false;
+        if (conversation.CampaignId.HasValue)
+        {
+            // (lo necesitamos para chequear TRANSFER_CHAT ANTES del cooldown — el return
+            // value indica "el template tiene la acción vinculada", y debe ser true aunque
+            // el cooldown ya haya parado la notificación: la pausa del agente debe
+            // persistir mientras la acción esté vinculada).
+            campaign = await db.Campaigns
+                .Include(c => c.CampaignTemplate)
+                .FirstOrDefaultAsync(c => c.Id == conversation.CampaignId.Value, ct);
+            if (campaign is null) return false;
+            template = campaign.CampaignTemplate;
+        }
+        else
+        {
+            if (conversation.ActiveAgentId is not { } agentId) return false;
+            template = await db.CampaignTemplates.AsNoTracking()
+                .FirstOrDefaultAsync(t => t.TenantId == conversation.TenantId
+                                       && t.AgentDefinitionId == agentId
+                                       && t.IsPrimaryForAgent && t.IsActive, ct);
+        }
 
         // 3) Verificar que el template tenga TRANSFER_CHAT vinculada.
-        if (campaign.CampaignTemplate is null || campaign.CampaignTemplate.ActionIds.Count == 0)
+        if (template is null || template.ActionIds.Count == 0)
         {
-            log.LogDebug("[TransferChat] Template de campaña {CampaignId} sin ActionIds — skip.", campaign.Id);
+            log.LogDebug("[TransferChat] Conversación {Id} sin template con ActionIds — skip.", conversation.Id);
             return false;
         }
-        var actionIds = campaign.CampaignTemplate.ActionIds.ToList();
+        var actionIds = template.ActionIds.ToList();
         var hasTransferAction = await db.ActionDefinitions
             .AnyAsync(a => actionIds.Contains(a.Id) && a.Name == ActionName && a.IsActive, ct);
         if (!hasTransferAction)
         {
             log.LogDebug("[TransferChat] Template {TemplateId} no incluye TRANSFER_CHAT — skip.",
-                campaign.CampaignTemplate.Id);
+                template.Id);
             return false;
         }
 
@@ -79,11 +95,13 @@ public class TransferChatService(
             return true;
         }
 
-        // 5) Resolver destinatarios según si la campaña es manual o automática.
-        var isAutomatic = string.IsNullOrEmpty(campaign.LaunchedByUserId)
+        // 5) Resolver destinatarios. Inbound orgánico (campaign null) o campaña automática
+        //    → fan-out a todos los usuarios activos; campaña manual → solo el lanzador.
+        var isAutomatic = campaign is null
+                          || string.IsNullOrEmpty(campaign.LaunchedByUserId)
                           || string.Equals(campaign.LaunchedByUserId, "system", StringComparison.OrdinalIgnoreCase);
 
-        var recipients = isAutomatic
+        var recipients = isAutomatic || campaign is null
             ? await ResolveAllActiveUsersAsync(conversation.TenantId, ct)
             : await ResolveLauncherAsync(conversation.TenantId, campaign, ct);
 
@@ -91,7 +109,7 @@ public class TransferChatService(
         {
             log.LogWarning("[TransferChat] Sin destinatarios para conversación {Id} (campaña {CampaignId}, automatic={Auto}). " +
                            "Verificar AppUsers IsActive=1 del tenant o LaunchedByUserId.",
-                conversation.Id, campaign.Id, isAutomatic);
+                conversation.Id, campaign?.Id.ToString() ?? "(orgánico)", isAutomatic);
             // El template tiene TRANSFER_CHAT vinculada → seguimos pausando al
             // agente aunque no haya a quién notificar. Si no se pausara, el cliente
             // recibiría respuestas de la IA cuando ya pidió humano.
@@ -199,7 +217,7 @@ public class TransferChatService(
     }
 
     private static string BuildWhatsAppSummary(
-        Conversation conversation, Campaign campaign, List<Message> messages,
+        Conversation conversation, Campaign? campaign, List<Message> messages,
         string tenantName, bool isAutomatic)
     {
         var clientName = conversation.ClientName ?? conversation.ClientPhone;
@@ -208,8 +226,8 @@ public class TransferChatService(
         sb.AppendLine();
         sb.AppendLine($"*Cliente:* {clientName}");
         sb.AppendLine($"*Teléfono:* {conversation.ClientPhone}");
-        sb.AppendLine($"*Campaña:* {campaign.Name}");
-        if (isAutomatic)
+        sb.AppendLine($"*Campaña:* {campaign?.Name ?? "(chat directo, sin campaña)"}");
+        if (campaign is not null && isAutomatic)
             sb.AppendLine("*Origen:* Campaña automática");
         sb.AppendLine();
 
@@ -230,7 +248,7 @@ public class TransferChatService(
     }
 
     private static (string Subject, string Html) BuildEmailHtml(
-        Conversation conversation, Campaign campaign, List<Message> messages,
+        Conversation conversation, Campaign? campaign, List<Message> messages,
         string tenantName, bool isAutomatic)
     {
         var clientName = conversation.ClientName ?? conversation.ClientPhone;
@@ -264,8 +282,8 @@ public class TransferChatService(
 """);
         sb.Append($"<tr><td style=\"color:#6b7280;width:130px;\">Cliente:</td><td><b>{HtmlEscape(clientName ?? "(sin nombre)")}</b></td></tr>");
         sb.Append($"<tr><td style=\"color:#6b7280;\">Teléfono:</td><td><b>{HtmlEscape(conversation.ClientPhone)}</b></td></tr>");
-        sb.Append($"<tr><td style=\"color:#6b7280;\">Campaña:</td><td>{HtmlEscape(campaign.Name)}</td></tr>");
-        sb.Append($"<tr><td style=\"color:#6b7280;\">Origen:</td><td>{(isAutomatic ? "<span style=\"color:#92400e;\">Campaña automática</span>" : $"Manual ({HtmlEscape(campaign.LaunchedByUserId ?? "—")})")}</td></tr>");
+        sb.Append($"<tr><td style=\"color:#6b7280;\">Campaña:</td><td>{HtmlEscape(campaign?.Name ?? "(chat directo, sin campaña)")}</td></tr>");
+        sb.Append($"<tr><td style=\"color:#6b7280;\">Origen:</td><td>{(campaign is null ? "Cliente escribió directo por WhatsApp" : isAutomatic ? "<span style=\"color:#92400e;\">Campaña automática</span>" : $"Manual ({HtmlEscape(campaign.LaunchedByUserId ?? "—")})")}</td></tr>");
         if (!string.IsNullOrEmpty(conversation.PolicyNumber))
             sb.Append($"<tr><td style=\"color:#6b7280;\">Póliza:</td><td>{HtmlEscape(conversation.PolicyNumber)}</td></tr>");
         sb.Append("</table></div>");

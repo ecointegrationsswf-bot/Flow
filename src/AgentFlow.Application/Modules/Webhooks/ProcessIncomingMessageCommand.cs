@@ -61,6 +61,7 @@ public class ProcessIncomingMessageHandler(
     AgentFlow.Domain.Webhooks.IActionExecutorService actionExecutor,
     AgentFlow.Domain.Webhooks.IActionChainResolver actionChainResolver,
     AgentFlow.Domain.Webhooks.IActionPromptBuilder actionPromptBuilder,
+    AgentFlow.Domain.Flows.IWorkflowEngine workflowEngine,
     IDocumentReferencePromptBuilder documentReferencePromptBuilder,
     IWebhookEventDispatcher eventDispatcher,
     ISystemAuditLogger systemAudit,
@@ -275,20 +276,13 @@ public class ProcessIncomingMessageHandler(
                    ?? await channelFactory.GetProviderAsync(cmd.TenantId, ct))
                 : await channelFactory.GetProviderAsync(cmd.TenantId, ct);
 
-            // Pre-check de salud SIN red: si la línea está confirmada caída (≥2 fallos)
-            // no intentamos el envío (fallaría igual y bombardearía una línea muerta).
-            // Marcamos la respuesta como Failed para que el monitor lo muestre.
-            var lineKnownDown = cmd.WhatsAppLineId.HasValue
-                && await channelFactory.IsLineKnownDownAsync(cmd.WhatsAppLineId.Value, ct);
-
-            if (lineKnownDown)
-            {
-                logger.LogWarning("[Brain][LineHealth] Línea {LineId} confirmada caída — no se envía respuesta a {Phone}.",
-                    cmd.WhatsAppLineId, cmd.FromPhone);
-                outbound.Status = MessageStatus.Failed;
-                await conversations.SaveChangesAsync(ct);
-            }
-            else if (provider is not null)
+            // Opción B (inbound): NO pre-bloqueamos por la salud (foto diaria de las 6am,
+            // que marca "caída" a líneas en standby que SÍ funcionan → el cliente quedaba
+            // sin respuesta). El cliente acaba de escribir → la línea está viva AHORA.
+            // Intentamos el envío y, si el proveedor falla en el momento, el resultado real
+            // (r.Success=false) marca Failed. El pre-chequeo de salud (IsLineKnownDownAsync)
+            // sigue aplicando a campañas/bulk, no a una sola respuesta de inbound.
+            if (provider is not null)
             {
                 var bubbles = SplitIntoBubbles(decision.MessageToClient!);
                 string? lastExternalId = null;
@@ -474,6 +468,19 @@ public class ProcessIncomingMessageHandler(
         // Se lee al final, en el SetAsync de la sesión. null si no hubo acción.
         AgentFlow.Domain.Webhooks.LastActionResult? lastActionForPersist = null;
 
+        // Bolsa de datos DURABLE de la conversación que se acumula este turno (si una
+        // acción produce JSON útil). Se mergea contra conversation.ConversationDataJson
+        // y se persiste en BD. A diferencia del LastActionResult (plumbing efímero del
+        // chain, ej: idCodigo), esta bolsa NO expira: vive toda la conversación y se
+        // inyecta al agente en cada turno como "datos_consultados" — igual que los datos
+        // de una campaña (ContactDataJson). Genérica: hoy pólizas, mañana cualquier negocio.
+        string? conversationDataBagToPersist = null;
+
+        // Motor de flujos — Fase 3. Sesión del flujo activo (si el maestro tiene uno). NULL = sin
+        // flujo → todo el inbound se comporta como antes. Se asigna antes de invocar al LLM y se
+        // persiste (FlowStateJson) al cierre del turno.
+        AgentFlow.Domain.Flows.FlowSession? flowSession = null;
+
         if (!conversation.IsHumanHandled)
         {
             var agentId = dispatch.SelectedAgentId ?? conversation.ActiveAgentId;
@@ -638,6 +645,15 @@ public class ProcessIncomingMessageHandler(
                     }
                 }
 
+                // ── Memoria DURABLE de la conversación (datos_consultados) ──
+                // Inyectar en CADA turno los resultados de acciones ya ejecutadas en esta
+                // conversación (pólizas, saldos, etc.), igual que datos_completos de campaña.
+                // Vive toda la conversación, sin ventana de tiempo ni acople al flujo. Así el
+                // agente responde seguimientos con precisión aunque el dato se haya consultado
+                // varios turnos atrás. Es genérico: hoy 2FA/pólizas, mañana cualquier negocio.
+                if (!string.IsNullOrWhiteSpace(conversation.ConversationDataJson))
+                    clientContext["datos_consultados"] = conversation.ConversationDataJson;
+
                 // Action Trigger Protocol Fase 4: cargar sesión previa para saber si hay
                 // un LastActionResult pendiente del turno anterior que el agente deba ver.
                 // Si existe y es fresco, se inyecta al prompt en ESTE turno y luego se limpia
@@ -747,6 +763,30 @@ public class ProcessIncomingMessageHandler(
 
                     Console.WriteLine($"[WH-REFDOCS] tenant={cmd.TenantId} prioritize={brainCampaignTemplateId ?? campaignTemplate?.Id} refDocsPassed={referenceDocs?.Count ?? 0} blockLen={referenceDocsBlock?.Length ?? 0}");
 
+                    // ── Motor de flujos — Fase 3 ───────────────────────────────
+                    // Si el maestro tiene un flujo activo (CampaignTemplate.ActiveFlowId), cargarlo y
+                    // compilar el bloque "## FLUJO ACTIVO" (guion + estado + reglas) que verá el LLM.
+                    // Si no hay flujo, workflowBlock queda null y el prompt es idéntico al histórico.
+                    string? workflowBlock = null;
+                    try
+                    {
+                        flowSession = await workflowEngine.StartTurnAsync(
+                            cmd.TenantId, campaignTemplate?.ActiveFlowId, conversation, ct);
+                        if (flowSession is not null)
+                        {
+                            conversation.ActiveFlowId = flowSession.FlowId; // trazabilidad
+                            workflowBlock = flowSession.BuildBlock();
+                            logger.LogInformation(
+                                "[Flow] Flujo activo '{Name}' ({FlowId}) — WorkflowBlock {Chars} chars inyectado.",
+                                flowSession.FlowName, flowSession.FlowId, workflowBlock.Length);
+                        }
+                    }
+                    catch (Exception exFlow)
+                    {
+                        logger.LogWarning(exFlow, "[Flow] No se pudo preparar el flujo activo — se continúa sin flujo.");
+                        flowSession = null;
+                    }
+
                     // Reintento defensivo. Anthropic API ocasionalmente devuelve 5xx
                     // transitorios o se cuelga por algunos segundos cuando se le
                     // mandan PDFs grandes (3 docs × ~varios MB). Sin esto, una sola
@@ -765,7 +805,8 @@ public class ProcessIncomingMessageHandler(
                         ActionsBlock: actionCatalog.Block,
                         LastActionResult: lastActionForPrompt,
                         ReferenceDocuments: referenceDocs,
-                        ReferenceDocumentsBlock: referenceDocsBlock
+                        ReferenceDocumentsBlock: referenceDocsBlock,
+                        WorkflowBlock: workflowBlock
                     );
 
                     // Reintentos con backoff escalonado. Anthropic devuelve dos tipos
@@ -901,6 +942,27 @@ public class ProcessIncomingMessageHandler(
                                     break;
                                 }
 
+                                // ── GATE de autenticación (Fase 2, determinístico) ──
+                                // Si la acción requiere auth y el cliente NO está autenticado en esta
+                                // conversación (AuthenticatedUntil null o vencido), NO se ejecuta: se
+                                // responde pidiendo validar identidad. El LLM no puede saltarse esto.
+                                AgentFlow.Domain.Webhooks.ActionAuthConfig authCfg;
+                                try { authCfg = await actionChainResolver.GetAuthConfigAsync(cmd.TenantId, currentSlug, ct); }
+                                catch { authCfg = new AgentFlow.Domain.Webhooks.ActionAuthConfig(false, null, null); }
+
+                                bool isAuthenticated = conversation.AuthenticatedUntil is { } authUntil && authUntil > DateTime.UtcNow;
+                                if (authCfg.RequiresAuth && !isAuthenticated)
+                                {
+                                    logger.LogInformation("[ATP-Auth] Acción {Slug} requiere auth y la conversación no está autenticada → bloqueada (gate determinístico).", currentSlug);
+                                    // Motor de flujos: recordar la solicitud confidencial para reanudarla
+                                    // tras validar (el WorkflowBlock se lo recuerda al LLM una vez autenticado).
+                                    flowSession?.SetPending(currentSlug, currentParams);
+                                    replyText = string.IsNullOrWhiteSpace(authCfg.AuthRequiredMessage)
+                                        ? "Para esa solicitud necesito validar tu identidad primero. ¿Me confirmás tu número de cédula?"
+                                        : authCfg.AuthRequiredMessage;
+                                    break;
+                                }
+
                                 AgentFlow.Domain.Webhooks.ActionResult actionResult;
                                 try
                                 {
@@ -949,11 +1011,17 @@ public class ProcessIncomingMessageHandler(
 
                                 if (actionResult.Success)
                                 {
+                                    // Motor de flujos: si esta acción era la que estaba pendiente (gate),
+                                    // ya se cumplió → limpiar el pendingRequest.
+                                    flowSession?.NotifyActionExecuted(currentSlug);
+
                                     // Snapshot del response del PRIMER eslabón (depth=0). Lo usaremos al
                                     // final del turno como base del LastActionResult persistido en Redis,
                                     // y para interpolar el successMessage de las ChainRules.
                                     if (depth == 0)
-                                        firstChainRawResponse = actionResult.RawResponseJson;
+                                        // Saneado: este snapshot va a Redis y se inyecta al prompt
+                                        // (turno siguiente + regenerate). Sin blobs base64.
+                                        firstChainRawResponse = SanitizeJsonForPrompt(actionResult.RawResponseJson);
 
                                     // LastActionResult persistido refleja el PRIMER eslabón (la acción
                                     // que el LLM invocó). Razón: las acciones encadenadas suelen ser
@@ -966,6 +1034,52 @@ public class ProcessIncomingMessageHandler(
                                         DataForAgent: persistData,
                                         ExecutedAt: DateTime.UtcNow,
                                         RawResponseJson: firstChainRawResponse);
+
+                                    // ── Memoria DURABLE de la conversación (datos_consultados) ──
+                                    // Acumular el response de ESTA acción en la bolsa, keyed por slug.
+                                    // Solo si el response es un OBJETO JSON (las acciones "puente" con
+                                    // response vacío no aportan). Reemplaza la entrada del slug con su
+                                    // último resultado. Se persiste en BD al final del turno y se inyecta
+                                    // al agente cada turno — no expira, no depende del flujo (genérica).
+                                    if (!string.IsNullOrWhiteSpace(actionResult.RawResponseJson))
+                                    {
+                                        try
+                                        {
+                                            if (System.Text.Json.Nodes.JsonNode.Parse(actionResult.RawResponseJson) is System.Text.Json.Nodes.JsonObject)
+                                            {
+                                                var bagSource = conversationDataBagToPersist ?? conversation.ConversationDataJson;
+                                                var bag = (!string.IsNullOrWhiteSpace(bagSource)
+                                                    ? System.Text.Json.Nodes.JsonNode.Parse(bagSource) as System.Text.Json.Nodes.JsonObject
+                                                    : null) ?? new System.Text.Json.Nodes.JsonObject();
+                                                // Saneado anti-bloat: la bolsa se inyecta al prompt CADA turno;
+                                                // un base64 de PDF aquí revienta el límite de tokens (jun 2026).
+                                                bag[currentSlug] = System.Text.Json.Nodes.JsonNode.Parse(
+                                                    SanitizeJsonForPrompt(actionResult.RawResponseJson) ?? actionResult.RawResponseJson);
+                                                conversationDataBagToPersist = bag.ToJsonString();
+                                            }
+                                        }
+                                        catch (Exception ex)
+                                        {
+                                            logger.LogWarning(ex, "[ATP] No se pudo acumular ConversationDataJson para {ActionSlug}", currentSlug);
+                                        }
+                                    }
+
+                                    // ── SET auth (Fase 2, determinístico) ──
+                                    // Si esta acción declara una AuthPolicy y su resultado autentica
+                                    // (WhenPath ∈ EqualsAny), marcar la conversación como autenticada.
+                                    if (authCfg.AuthPolicy is { } authPol && !string.IsNullOrWhiteSpace(actionResult.RawResponseJson))
+                                    {
+                                        var observedAuth = ReadJsonPath(actionResult.RawResponseJson, authPol.WhenPath);
+                                        if (observedAuth is not null && authPol.EqualsAny is { Count: > 0 } eqAny
+                                            && eqAny.Any(v => string.Equals(v, observedAuth, StringComparison.OrdinalIgnoreCase)))
+                                        {
+                                            conversation.AuthenticatedUntil = DateTime.UtcNow.AddMinutes(authPol.DurationMinutes);
+                                            if (!string.IsNullOrWhiteSpace(authPol.IdentityPath))
+                                                conversation.AuthenticatedIdentityId = ReadJsonPath(actionResult.RawResponseJson, authPol.IdentityPath);
+                                            logger.LogInformation("[ATP-Auth] {Slug} autenticó la conversación hasta {Until} (identity={Id}).",
+                                                currentSlug, conversation.AuthenticatedUntil, conversation.AuthenticatedIdentityId ?? "(none)");
+                                        }
+                                    }
 
                                     try
                                     {
@@ -1003,7 +1117,11 @@ public class ProcessIncomingMessageHandler(
                                         executedSlug: currentSlug,
                                         tenantId: cmd.TenantId,
                                         rawResponseJson: actionResult.RawResponseJson,
-                                        ct: ct);
+                                        ct: ct,
+                                        // Motor de flujos: expone al encadenamiento el resultado del LLM
+                                        // (`llm.intent`/`llm.confidence`, Fase 1) y el estado de auth de la
+                                        // conversación (`auth.isAuthenticated`/`auth.until`, Fase 2).
+                                        extraContextJson: BuildChainExtraContext(agentResponse, conversation));
                                 }
                                 catch (Exception ex)
                                 {
@@ -1060,9 +1178,15 @@ public class ProcessIncomingMessageHandler(
                             // emitir más [ACTION:...]. Reemplaza el "validando..." preliminar
                             // por una respuesta natural que vuelve a la pregunta original.
                             //
-                            // Costo: 1 round-trip extra al LLM por turno con regenerate. Solo
-                            // se invoca cuando se configuró explícitamente en una ChainRule.
-                            if (chainRegenerateReply && lastActionForPersist is not null)
+                            // Costo: 1 round-trip extra al LLM por turno con regenerate. Se
+                            // invoca cuando una ChainRule lo pidió explícitamente, O cuando hay
+                            // un FLUJO ACTIVO y corrió alguna acción: en un flujo, el preliminar
+                            // ("voy a verificar…") NUNCA debe ser la respuesta final — el LLM debe
+                            // redactar el resultado real (incluyendo casos como NO_ENCONTRADO que
+                            // no tienen ChainRule). El blindaje POST_CHAIN (sin catálogo) evita que
+                            // re-dispare acciones en esta segunda invocación.
+                            var forceFlowRegen = flowSession is not null && lastActionForPersist is not null;
+                            if ((chainRegenerateReply || forceFlowRegen) && lastActionForPersist is not null)
                             {
                                 try
                                 {
@@ -1212,18 +1336,12 @@ public class ProcessIncomingMessageHandler(
                                ?? await channelFactory.GetProviderAsync(cmd.TenantId, ct))
                             : await channelFactory.GetProviderAsync(cmd.TenantId, ct);
 
-                        // Pre-check de salud SIN red: si la línea está confirmada caída
-                        // (≥2 fallos), no intentamos el envío y marcamos la respuesta Failed.
-                        var lineKnownDown = cmd.WhatsAppLineId.HasValue
-                            && await channelFactory.IsLineKnownDownAsync(cmd.WhatsAppLineId.Value, ct);
-
-                        if (lineKnownDown)
-                        {
-                            logger.LogWarning("[WhatsApp][LineHealth] Línea {LineId} confirmada caída — no se envía respuesta a {Phone}.",
-                                cmd.WhatsAppLineId, cmd.FromPhone);
-                            outbound.Status = MessageStatus.Failed;
-                        }
-                        else if (provider is not null)
+                        // Opción B (inbound): NO pre-bloqueamos por la salud diaria (líneas
+                        // en standby que SÍ funcionan quedaban bloqueadas, sin responder al
+                        // cliente). Intentamos el envío; si el proveedor falla en el momento,
+                        // r.Success=false marca Failed. El pre-chequeo de salud sigue para
+                        // campañas/bulk, no para una sola respuesta de inbound.
+                        if (provider is not null)
                         {
                             var bubbles = SplitIntoBubbles(replyText);
                             string? lastExternalId = null;
@@ -1308,15 +1426,24 @@ public class ProcessIncomingMessageHandler(
                 ValidationState: null,
                 EscalatedAt: null,
                 // Action Trigger Protocol Fase 4 — consume-on-read:
-                // Si este turno produjo un nuevo LastActionResult, persistirlo.
-                // Si no, el valor queda null — el del turno anterior (que ya se
-                // inyectó al prompt en este turno) no se propaga a otro más.
+                // El LastActionResult es plumbing EFÍMERO del chain (ej: idCodigo para el
+                // VALIDATE del turno siguiente). Los datos de NEGOCIO durables (pólizas,
+                // saldos, etc.) NO viven acá — viven en conversation.ConversationDataJson
+                // (bolsa durable inyectada cada turno como datos_consultados). Por eso si
+                // este turno no produjo acción, el valor queda null y no se propaga.
                 LastActionResult: lastActionForPersist
             ), TimeSpan.FromHours(72), ct);
         }
         catch { }
 
         conversation.LastActivityAt = DateTime.UtcNow;
+        // Persistir la memoria DURABLE de la conversación si este turno acumuló datos
+        // de alguna acción. Solo se escribe cuando hubo cambio (no pisa con null).
+        if (conversationDataBagToPersist is not null)
+            conversation.ConversationDataJson = conversationDataBagToPersist;
+        // Motor de flujos: persistir el estado del flujo (pendingRequest) si hubo flujo activo este turno.
+        if (flowSession is not null)
+            conversation.FlowStateJson = flowSession.SerializeState();
         await conversations.SaveChangesAsync(ct);
 
         return new ProcessIncomingMessageResult(
@@ -1343,6 +1470,69 @@ public class ProcessIncomingMessageHandler(
     /// Formato esperado: [ACTION:SEND_PAYMENT_LINK]
     /// Devuelve null si no hay tag.
     /// </summary>
+    /// <summary>
+    /// Guard anti-bloat. Devuelve una copia del JSON donde todo valor string de más de
+    /// maxLen caracteres (base64 de documentos, blobs) se reemplaza por un marcador corto.
+    /// Se aplica ANTES de persistir un response en la memoria durable (ConversationDataJson)
+    /// y en el LastActionResult (Redis), porque ambos se inyectan al prompt del LLM en turnos
+    /// posteriores: el base64 de un PDF (~886K chars) revienta el límite de tokens de Anthropic
+    /// ("prompt is too long", incidente 2026-06-10). Los consumidores que SÍ necesitan el blob
+    /// (OutputInterpreter al enviar el documento, chainOverrides del mismo turno) leen el
+    /// RawResponseJson crudo de la acción, que NO pasa por aquí.
+    /// </summary>
+    private static string? SanitizeJsonForPrompt(string? json, int maxLen = 2000)
+    {
+        if (string.IsNullOrWhiteSpace(json) || json.Length <= maxLen) return json;
+        try
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(json);
+            if (node is null) return json;
+            return SanitizeNode(node, maxLen) ? node.ToJsonString() : json;
+        }
+        catch { return json; }
+    }
+
+    private static bool SanitizeNode(System.Text.Json.Nodes.JsonNode node, int maxLen)
+    {
+        var changed = false;
+        switch (node)
+        {
+            case System.Text.Json.Nodes.JsonObject obj:
+                foreach (var key in obj.Select(p => p.Key).ToList())
+                {
+                    var child = obj[key];
+                    if (child is System.Text.Json.Nodes.JsonValue v
+                        && v.TryGetValue<string>(out var s) && s.Length > maxLen)
+                    {
+                        obj[key] = $"[contenido omitido: {s.Length} chars]";
+                        changed = true;
+                    }
+                    else if (child is not null)
+                    {
+                        changed |= SanitizeNode(child, maxLen);
+                    }
+                }
+                break;
+            case System.Text.Json.Nodes.JsonArray arr:
+                for (var i = 0; i < arr.Count; i++)
+                {
+                    var child = arr[i];
+                    if (child is System.Text.Json.Nodes.JsonValue v
+                        && v.TryGetValue<string>(out var s) && s.Length > maxLen)
+                    {
+                        arr[i] = $"[contenido omitido: {s.Length} chars]";
+                        changed = true;
+                    }
+                    else if (child is not null)
+                    {
+                        changed |= SanitizeNode(child, maxLen);
+                    }
+                }
+                break;
+        }
+        return changed;
+    }
+
     private static string? ExtractActionTag(string? text)
     {
         if (string.IsNullOrEmpty(text)) return null;
@@ -1501,6 +1691,74 @@ public class ProcessIncomingMessageHandler(
             System.Text.Json.JsonValueKind.False => "false",
             _ => current.ToString()
         };
+    }
+
+    /// <summary>
+    /// Motor de flujos: construye los namespaces que se mergean al contexto de evaluación
+    /// de las ChainRules, para que el encadenamiento pueda condicionar por:
+    ///  - `llm.intent` / `llm.confidence` (resultado del LLM del turno — Fase 1).
+    ///  - `auth.isAuthenticated` / `auth.until` / `auth.identityId` (estado de auth — Fase 2).
+    /// Refleja actualizaciones de auth hechas EN ESTE turno (set-auth corre antes de resolver
+    /// el siguiente eslabón). Forma: {"llm":{...},"auth":{...}}.
+    /// </summary>
+    private static string? BuildChainExtraContext(AgentResponse? agentResponse, AgentFlow.Domain.Entities.Conversation conversation)
+    {
+        var ctx = new System.Text.Json.Nodes.JsonObject();
+        if (agentResponse is not null)
+        {
+            ctx["llm"] = new System.Text.Json.Nodes.JsonObject
+            {
+                ["intent"] = agentResponse.DetectedIntent,
+                ["confidence"] = agentResponse.ConfidenceScore
+            };
+        }
+        bool isAuth = conversation.AuthenticatedUntil is { } au && au > DateTime.UtcNow;
+        ctx["auth"] = new System.Text.Json.Nodes.JsonObject
+        {
+            ["isAuthenticated"] = isAuth,
+            ["until"] = conversation.AuthenticatedUntil?.ToString("o"),
+            ["identityId"] = conversation.AuthenticatedIdentityId
+        };
+        return ctx.Count > 0 ? ctx.ToJsonString() : null;
+    }
+
+    /// <summary>
+    /// Lee un valor por dot-notation case-insensitive de un JSON crudo (primer match).
+    /// Devuelve null si el path no existe o no es JSON. Usado por el set-auth (Fase 2)
+    /// para leer WhenPath/IdentityPath del response del broker.
+    /// </summary>
+    private static string? ReadJsonPath(string? rawJson, string? path)
+    {
+        if (string.IsNullOrWhiteSpace(rawJson) || string.IsNullOrWhiteSpace(path))
+            return null;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(rawJson);
+            var cur = doc.RootElement;
+            foreach (var part in path.Split('.', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (cur.ValueKind != System.Text.Json.JsonValueKind.Object) return null;
+                bool found = false;
+                foreach (var p in cur.EnumerateObject())
+                {
+                    if (p.Name.Equals(part, StringComparison.OrdinalIgnoreCase))
+                    {
+                        cur = p.Value; found = true; break;
+                    }
+                }
+                if (!found) return null;
+            }
+            return cur.ValueKind switch
+            {
+                System.Text.Json.JsonValueKind.String => cur.GetString(),
+                System.Text.Json.JsonValueKind.Null => null,
+                System.Text.Json.JsonValueKind.Undefined => null,
+                System.Text.Json.JsonValueKind.True => "true",
+                System.Text.Json.JsonValueKind.False => "false",
+                _ => cur.ToString()
+            };
+        }
+        catch { return null; }
     }
 
     private static IReadOnlyDictionary<string, string?>? FlattenJsonForChain(string? rawJson)

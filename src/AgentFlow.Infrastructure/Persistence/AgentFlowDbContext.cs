@@ -25,6 +25,7 @@ public class AgentFlowDbContext(DbContextOptions<AgentFlowDbContext> options) : 
     public DbSet<CampaignTemplate> CampaignTemplates => Set<CampaignTemplate>();
     public DbSet<ActionDefinition> ActionDefinitions => Set<ActionDefinition>();
     public DbSet<TenantActionContract> TenantActionContracts => Set<TenantActionContract>();
+    public DbSet<TenantFlow> TenantFlows => Set<TenantFlow>();
     public DbSet<PromptTemplate> PromptTemplates => Set<PromptTemplate>();
     public DbSet<WebhookLog> WebhookLogs => Set<WebhookLog>();
     public DbSet<CampaignDispatchLog> CampaignDispatchLogs => Set<CampaignDispatchLog>();

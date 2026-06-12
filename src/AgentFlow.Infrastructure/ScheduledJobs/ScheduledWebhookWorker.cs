@@ -173,6 +173,18 @@ public class ScheduledWebhookWorker(
                 string.Equals(e.Slug, slug, StringComparison.OrdinalIgnoreCase));
             if (match is not null) return match;
         }
+
+        // Acciones de DESCARGA (IsDelinquencyDownload=1): cualquier slug rutea al executor
+        // de descargas. El Módulo de Descargas admite N acciones de descarga (ej:
+        // DOWNLOAD_CANCELLATION_NOTICES además de DOWNLOAD_DELINQUENCY_DATA) y todas
+        // comparten el mismo pipeline; sin esto, un cron de una acción de descarga nueva
+        // caía al DefaultWebhookExecutor (genérico) y fallaba.
+        if (job.ActionDefinition?.IsDelinquencyDownload == true)
+        {
+            var dl = executors.FirstOrDefault(e => e is DelinquencyDownloadExecutor);
+            if (dl is not null) return dl;
+        }
+
         // Fallback obligatorio: DefaultWebhookExecutor (slug "*").
         return executors.First(e => e.Slug == "*");
     }
