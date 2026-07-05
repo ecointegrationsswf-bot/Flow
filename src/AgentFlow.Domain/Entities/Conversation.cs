@@ -73,6 +73,15 @@ public class Conversation
     public string? ConversationDataJson { get; set; }
 
     /// <summary>
+    /// Escalamiento robusto — Fase D. Contador de ejecuciones EXITOSAS por slug en esta
+    /// conversación — forma { "SLUG_ACCION": n }. Lo usa el GATE anti-loop determinístico para
+    /// limitar reintentos (ej: reenvío de código 2FA: INSURED_INITIATE topado en 3) y escalar a
+    /// humano al alcanzar el tope. A diferencia de ConversationDataJson, esto NO se inyecta al
+    /// prompt (es estado de control, no datos del cliente). NULL = ninguna acción topada ejecutada.
+    /// </summary>
+    public string? ActionCallCountsJson { get; set; }
+
+    /// <summary>
     /// Motor de flujos — Fase 2. Estado de autenticación PROPIO (no del broker). UTC hasta
     /// cuándo el cliente está autenticado en esta conversación. Se setea cuando una acción
     /// con `AuthPolicy` devuelve un resultado que autentica (ej: status ∈ {VALIDO, AUTO_VALIDADO}).

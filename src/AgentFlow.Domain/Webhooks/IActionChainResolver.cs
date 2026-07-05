@@ -42,7 +42,23 @@ public interface IActionChainResolver
     /// sin auth) y para SETEAR el estado de auth tras una validación exitosa.
     /// </summary>
     Task<ActionAuthConfig> GetAuthConfigAsync(Guid tenantId, string slug, CancellationToken ct);
+
+    /// <summary>
+    /// Escalamiento robusto — Fase D. Devuelve el tope de ejecuciones por conversación de una
+    /// acción (leído del contrato per-tenant → global). Lo usa el orquestador para un GATE
+    /// determinístico anti-loop: p.ej. limitar cuántas veces se puede re-disparar INSURED_INITIATE
+    /// (reenvío de código 2FA) antes de escalar a humano. Sin cap configurado → <c>MaxCalls=null</c>
+    /// → comportamiento idéntico al actual (sin límite).
+    /// </summary>
+    Task<ActionCallCap> GetCallCapAsync(Guid tenantId, string slug, CancellationToken ct);
 }
+
+/// <summary>
+/// Escalamiento robusto — Fase D. Tope de ejecuciones por conversación de una acción.
+/// <c>MaxCalls=null</c> = sin límite (default). Cuando se alcanza, el orquestador NO ejecuta la
+/// acción: responde <c>ExhaustedMessage</c> al cliente y marca la conversación para escalar.
+/// </summary>
+public record ActionCallCap(int? MaxCalls, string? ExhaustedMessage);
 
 /// <summary>
 /// Config de auth de una acción (Fase 2). `RequiresAuth`=true exige auth previa para

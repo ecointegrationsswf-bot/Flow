@@ -29,6 +29,14 @@ public record ActionResult
     /// </summary>
     public string? RawResponseJson { get; init; }
 
+    /// <summary>
+    /// URLs públicas (Azure Blob) de los documentos/medios que la acción envió al cliente por
+    /// WhatsApp (outputAction=send_whatsapp_media). Quedan de RESPALDO y el handler las adjunta al
+    /// mensaje del agente como tags [media:URL] para que el documento se vea en el Monitor.
+    /// Null/vacío cuando la acción no envió media.
+    /// </summary>
+    public IReadOnlyList<string>? MediaUrls { get; init; }
+
     /// <summary>Resultado neutro — no se ejecutó nada (sin schema configurado o acción deshabilitada).</summary>
     public static ActionResult NoOp() => new() { Success = true };
 

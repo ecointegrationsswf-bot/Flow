@@ -17,6 +17,10 @@ public interface ITransferChatService
     /// acción y el agente sigue activo (comportamiento previo). El cooldown
     /// (LastTransferChatSentAt) solo afecta a la notificación; la pausa se mantiene
     /// mientras el template tenga la acción vinculada.
+    ///
+    /// <paramref name="forceRenotify"/> (escalamiento robusto Fase E): cuando es true, IGNORA el
+    /// cooldown y vuelve a notificar al ejecutivo (lo usa el watchdog de conversaciones escaladas
+    /// sin atender para enviar recordatorios). Default false = comportamiento histórico.
     /// </summary>
-    Task<bool> ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default);
+    Task<bool> ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default, bool forceRenotify = false);
 }

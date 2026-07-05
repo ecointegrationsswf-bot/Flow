@@ -584,6 +584,141 @@ Consumen el resolver: `ActionExecutorService`, `ActionChainResolver`, `ActionPro
 - `Basic` auth: `Authorization: Basic base64(user:pass)` — soportado en el contrato y
   en la pantalla del Webhook Builder.
 
+## Integración Ludo CRM (estrictamente aditiva, detrás de flag)
+
+> Plan vivo y detalle por fase en Obsidian:
+> `01-Proyectos/TalkIA/2026-06-13 - Plan integracion Ludo CRM (aditivo).md`.
+> **Ludo es la fuente de verdad** (prospectos/oportunidades/etapas). TalkIA es canal:
+> NO guarda IDs de prospecto/oportunidad — resuelve por teléfono E.164. Solo persiste
+> mapeos a nivel tenant/etapa. Todo va detrás de `Tenant.LudoIntegrationEnabled` (default
+> 0 → comportamiento byte-por-byte idéntico al actual).
+
+### Decisiones de base (corrigen el documento de diseño del cliente)
+- **Multitenancy por fila** (TenantId), NO schema-per-tenant. Crear Tenant + hijos.
+- **Salida (Dirección B) = solo Action Executor** (ATP), NO un `LudoCrmClient` tipado:
+  `registrar_oportunidad`/`mover_fase` son Actions webhook cuyo `TenantActionContract`
+  apunta a la API de Ludo.
+- **Auth inbound = HMAC-SHA256** sobre `"{timestamp}.{rawBody}"` con secreto
+  `Ludo:WebhookSecret` (lo define Ludo, se inyecta en deploy) + anti-replay (ventana 300s).
+  Reusa la primitiva de Meta. Sin secreto → 503 (no aprovisiona).
+- **Vertical `seguro`: plantilla vetada.** El gate de autenticación se ANTEPONE siempre al
+  prompt generado; el LLM solo especializa el cuerpo (no puede quitar el gate). Lección PASESA.
+- **DDL idempotente en `Program.cs` del API** (`IF NOT EXISTS`), NO migraciones EF. El Worker
+  NO corre DDL (solo registra el DbContext); el API es la autoridad del esquema.
+
+### El gate de intención = el Motor de Flujos (lienzo)
+El criterio que dispara las Actions vive en el lienzo (`TenantFlow`), vinculado al maestro por
+`CampaignTemplate.ActiveFlowId`. `FlowSession.BuildBlock()` inyecta `## FLUJO ACTIVO` con
+etapas (de `StageLabelMap`) + criterios → el agente emite `[ACTION:registrar_oportunidad]` /
+`[ACTION:mover_fase]`. Estructura determinista (lienzo) + lenguaje flexible (LLM), sin tocar
+`AnthropicAgentRunner`.
+
+### Estado de implementación
+- ✅ **Fase 1 (Fundación):** entidades `LudoTenantMap` (global, idempotencia), `StageLabelMap`
+  (etapa↔label por tenant, clave estable `LudoStageId`), `LudoOutboxItem` (cola de reintento) +
+  configs + DbSets. Columnas `Tenant.LudoIntegrationEnabled`, `CampaignTemplate.Objetivo`,
+  `CampaignTemplate.GeneratedByLlm`. DDL idempotente en `AgentFlow.API/Program.cs`.
+- ✅ **Fase 2 (Provisioning, Dirección A):** `Domain/Provisioning/ProvisioningContracts.cs`,
+  `Infrastructure/Provisioning/LudoWebhookSignature.cs` (HMAC), `TenantProvisioningService.cs`
+  (idempotente por `LudoTenantMap`, transaccional todo-o-nada, valida welcome único, crea
+  Tenant [WhatsApp pendiente de conexión, flag ON] + agentes + maestros Borrador + homologa
+  etapas→labels+`StageLabelMap`), `API/Controllers/ProvisioningController.cs`
+  (`POST /api/provisioning/tenant`; 503 sin secreto, 401 firma inválida, 400 welcome≠1,
+  200 reenvío, 201 alta).
+- ✅ **Fase 3 (Generador de maestros):** `CampaignTemplateGenerator.cs` (Claude sonnet-4-6 con
+  meta-prompt JSON; gate vetado `seguro` inviolable; **fallback determinista — nunca lanza**),
+  `API/Controllers/CampaignTemplateGenerationController.cs`
+  (`POST /api/campaign-templates/{id}/regenerate`; versionado seguro: si activo → borrador
+  nuevo, si borrador → en sitio). Wire en provisioning: genera ANTES de la transacción.
+- ✅ Tests: `tests/LudoIntegrationTests/` (11/11 verde, EF InMemory, sin red).
+- ⚠️ **Pendiente de deploy** (Fases 1–3 son additive; provisioning protegido por 503 hasta
+  inyectar `Ludo:WebhookSecret`).
+
+### Fase 4 (Salida, Dirección B) — LO QUE FALTA
+**Bloqueante externo:** el **contrato real de la API de Ludo** (endpoints/auth/payloads de
+`upsertOpportunity` y `moveStage`) — del documento hermano (lado Ludo). Sin eso, el
+`TenantActionContract` de salida no se puede configurar de verdad.
+Tareas pendientes:
+1. **Seed de 2 ActionDefinitions globales** `registrar_oportunidad` y `mover_fase`
+   (`RequiresWebhook=true`), idempotente.
+2. **`TenantActionContract` por tenant** apuntando a la API de Ludo (auth de Ludo en el
+   contrato). ← depende del contrato real.
+3. **Lienzo Ludo:** diseñar el `TenantFlow` del pipeline y poblar criterios de avance desde
+   `StageLabelMap`; vincular con `ActiveFlowId`. (El Motor de Flujos ya inyecta el bloque.)
+4. **Traducción `etapa → ludoStageId`:** nuevo `IStageMappingResolver` que resuelve por
+   `StageLabelMap` antes de llamar al webhook de `mover_fase`. Enganche **aditivo y gated**
+   (solo si `LudoIntegrationEnabled` + slug Ludo) — sin cambiar comportamiento de no-Ludo.
+5. **Degradación suave:** ante fallo de la llamada a Ludo, encolar en `LudoOutboxItem` (tabla
+   ya creada) + **drainer job en `ScheduledWebhookWorker`** con backoff. El circuit breaker de
+   `ActionExecutorService` ya da el mensaje amable al cliente.
+6. **Desambiguación de oportunidad por `objetivo`** cuando un teléfono tiene varias activas.
+
+### Fase 5 (Re-sync de etapas, Dirección C) — pendiente
+`POST /api/ludo/stages/sync` (mismo HMAC) + `StageLabelSyncService` que reconcilia
+`StageLabelMap` (alta / renombrado por `ludoStageId` estable / baja soft `IsActive=0` /
+reorden) + UI de revisión de maestros.
+
+## Escalamiento a humano — mecánica y plan de robustez
+
+> Plan detallado en Obsidian: `01-Proyectos/TalkIA/2026-06-15 - Plan escalamiento robusto (no-silencio).md`.
+
+**Mecánica actual (ojo, causa el "bot mudo"):**
+- El gate `ProcessIncomingMessageCommand.cs:489` `if (!conversation.IsHumanHandled)` envuelve TODO
+  el bloque del agente. Si `IsHumanHandled=true`, el mensaje del cliente se guarda pero NO se procesa
+  → silencio total, sin acuse ni re-enganche.
+- La **auto-escalada** (`ShouldEscalate`/`[INTENT:humano]`) setea `Status=EscalatedToHuman` (L~1395) y,
+  si el maestro tiene `TRANSFER_CHAT`, `TransferChatService` notifica (WhatsApp `NotifyPhone` + email)
+  y devuelve `shouldPause=true` → `IsHumanHandled=true` (L~1401). Desde ahí, mudo.
+- La auto-reactivación (L~392–401) cubre `Closed/Unresponsive/WaitingClient`, **NO** `EscalatedToHuman`.
+  Solo `ReactivateAgentCommand`/`TakeConversationCommand` (humano) tocan `IsHumanHandled`.
+- 2FA: **no hay acción de reenvío** del código; única salida ante "no llegó" = escalar. El bot SÍ
+  conoce `correoEnmascarado` y SÍ sabe si está fuera de horario (bloque en `AnthropicAgentRunner.cs:138`).
+
+**Principio del fix (aprobado conceptualmente):** enmudecer la IA cuando un **humano TOMA** la
+conversación, no cuando OCURRE la escalada. `Status=EscalatedToHuman` = marcador (no silencia);
+`IsHumanHandled` lo setea solo *Tomar conversación*. Tras auto-escalar, el bot **sigue respondiendo
+otros temas** y solo calla en la toma humana. Todo detrás de `Tenant.KeepAiActiveUntilTakeover`
+(default 0 → idéntico a hoy), rollout PASESA primero. Fases: D reenvío 2FA → A+B no-silencio →
+C horario → E watchdog zombi.
+
+**Fase D IMPLEMENTADA (cap de reintentos, genérico y aditivo):** contrato con
+`maxCallsPerConversation`+`callsExhaustedMessage` (`ActionConfigBundleJson` + `GetCallCapAsync`);
+contador `Conversation.ActionCallCountsJson` (no se inyecta al prompt) + DDL idempotente; gate
+determinístico en `ProcessIncomingMessageCommand` (tras el gate de auth): si `count >= maxCalls` →
+no ejecuta, responde el mensaje y `ShouldEscalate`. Sin el campo en el contrato → sin límite
+(idéntico). El reenvío = el agente re-invoca `INSURED_INITIATE` (código FRESCO). Tests en
+`tests/LudoIntegrationTests/CallCapTests.cs`. **Falta:** config PASESA (contrato `INSURED_INITIATE`
+`maxCallsPerConversation=3` + bloque de reenvío en el prompt) + deploy API+Worker.
+
+**Fases A+B IMPLEMENTADAS (no-silencio, GENÉRICO no PASESA-específico):** flag
+`Tenant.KeepAiActiveUntilTakeover` (bit default 0 → idéntico a hoy) + DDL idempotente. Fase A: la
+auto-escalada con el flag on NO setea `IsHumanHandled` (solo notifica + `Status=EscalatedToHuman`);
+el gate L493 no se toca; la IA sigue activa y solo enmudece en la TOMA humana
+(`TakeConversationCommand`). El camino de escalada por prompt no resoluble (L699) sí mutea (no tiene
+con qué responder). Fase B: `AgentRunRequest.EscalationBlock` + inyección en `AnthropicAgentRunner`
+(bloque "## ESCALADA EN CURSO": seguir ayudando otros temas, no prometer resolver lo escalado, fijar
+expectativa), armado cuando flag on + EscalatedToHuman + !IsHumanHandled. Política pura testeada en
+`Domain/Conversations/EscalationPolicy.cs` + `EscalationPolicyTests.cs`.
+
+**Fase C IMPLEMENTADA (horario):** `TransferChatService` recibe `IBusinessHoursClock` y taggea
+"⏰ Fuera de horario — seguimiento al próximo día hábil" en la notificación al ejecutivo (WhatsApp +
+asunto email). **Fase E IMPLEMENTADA (watchdog):** `ExecuteIfApplicableAsync` acepta `forceRenotify`;
+`EscalatedConversationWatchdogExecutor` (slug `ESCALATED_WATCHDOG`, registrado en el Worker) barre
+escaladas `EscalatedToHuman`+`!IsHumanHandled` de tenants con `KeepAiActiveUntilTakeover`, viejas
+>15min, y re-notifica (recordatorio cada ≥1h) reusando TransferChatService.
+
+**Auto-habilitación (genérica):** al guardar un maestro (Create/Update/Clone en
+`CampaignTemplatesController`) que tenga `TRANSFER_CHAT` vinculada, se auto-prende
+`Tenant.KeepAiActiveUntilTakeover=1` (`EnableKeepAiActiveIfTransferChatAsync`). Así configurar la
+transferencia a humano ACTIVA el no-silencio — no es una opción aparte que recordar. No se apaga al
+quitar TRANSFER_CHAT (inofensivo sin la acción; un tenant puede tenerlo explícito). Backfill aplicado
+(2026-06-15) a los tenants que ya la tenían: AFTA, Internacional de seguros, Prueba, SOMOS, PASESA.
+
+**Iniciativa escalamiento COMPLETA en código (D + A+B + C + E), compila API+Worker, 21/21 tests.
+Falta para activar:** flag `KeepAiActiveUntilTakeover` en PASESA, config 2FA (cap `INSURED_INITIATE`
++ reenvío en lienzo/prompt), crear el job cron `ESCALATED_WATCHDOG` (ej `*/15 * * * *` AllTenants, vía
+skill `scheduled-jobs`), poblar `AppUser.NotifyPhone`, y **deploy API+Worker**.
+
 ## Integración con Tobroker
 
 Tobroker corre en SQL Server 2022 Enterprise. El agente de cobros puede consultar

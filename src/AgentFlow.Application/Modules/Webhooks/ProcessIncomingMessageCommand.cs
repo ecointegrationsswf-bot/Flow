@@ -476,10 +476,19 @@ public class ProcessIncomingMessageHandler(
         // de una campaña (ContactDataJson). Genérica: hoy pólizas, mañana cualquier negocio.
         string? conversationDataBagToPersist = null;
 
+        // Escalamiento robusto Fase D: si este turno cambió algún contador de ejecución (cap
+        // anti-loop), aquí queda el JSON serializado a persistir al cierre. Null = sin cambio.
+        string? actionCallCountsToPersist = null;
+
         // Motor de flujos — Fase 3. Sesión del flujo activo (si el maestro tiene uno). NULL = sin
         // flujo → todo el inbound se comporta como antes. Se asigna antes de invocar al LLM y se
         // persiste (FlowStateJson) al cierre del turno.
         AgentFlow.Domain.Flows.FlowSession? flowSession = null;
+
+        // URLs (Azure Blob) de documentos que las acciones enviaron al cliente por WhatsApp en
+        // este turno. Se adjuntan al mensaje del agente como [media:URL] para que el documento
+        // quede de respaldo y se VEA en el Monitor (mismo formato que el media inbound).
+        var sentMediaUrls = new List<string>();
 
         if (!conversation.IsHumanHandled)
         {
@@ -794,6 +803,18 @@ public class ProcessIncomingMessageHandler(
                     // aunque la siguiente llamada hubiera funcionado. Reintentamos
                     // UNA vez con un pequeño delay; si la segunda también falla, deja
                     // que la excepción la atrape el catch externo (fallback al cliente).
+                    // Escalamiento robusto Fase B: si la conversación ya está escalada pero aún sin
+                    // tomar por un humano (y el tenant activó KeepAiActiveUntilTakeover), inyectar guía
+                    // para que el agente siga ayudando sin prometer resolver lo escalado. Sin el flag o
+                    // sin escalada, queda null → prompt idéntico al histórico.
+                    string? escalationBlock =
+                        AgentFlow.Domain.Conversations.EscalationPolicy.ShouldInjectEscalationBlock(
+                            tenant.KeepAiActiveUntilTakeover,
+                            conversation.Status == ConversationStatus.EscalatedToHuman,
+                            conversation.IsHumanHandled)
+                            ? BuildEscalationBlock()
+                            : null;
+
                     var runRequest = new AgentRunRequest(
                         Agent: agent, Conversation: conversation,
                         IncomingMessage: cmd.Message, RecentHistory: recentHistorySnapshot,
@@ -806,7 +827,8 @@ public class ProcessIncomingMessageHandler(
                         LastActionResult: lastActionForPrompt,
                         ReferenceDocuments: referenceDocs,
                         ReferenceDocumentsBlock: referenceDocsBlock,
-                        WorkflowBlock: workflowBlock
+                        WorkflowBlock: workflowBlock,
+                        EscalationBlock: escalationBlock
                     );
 
                     // Reintentos con backoff escalonado. Anthropic devuelve dos tipos
@@ -934,6 +956,12 @@ public class ProcessIncomingMessageHandler(
                             bool chainRegenerateReply = false;
                             var depth = 0;
 
+                            // Escalamiento robusto Fase D: contadores de ejecución por slug (anti-loop de
+                            // reintentos, ej: reenvío de código 2FA). Se carga de la columna durable y se
+                            // re-persiste al final del turno si cambió. Genérico: solo actúa si la acción
+                            // tiene MaxCallsPerConversation en su contrato.
+                            var actionCallCounts = ParseCallCounts(conversation.ActionCallCountsJson);
+
                             while (!string.IsNullOrEmpty(currentSlug) && depth < MaxChainDepth)
                             {
                                 if (!executedSlugs.Add(currentSlug))
@@ -960,6 +988,26 @@ public class ProcessIncomingMessageHandler(
                                     replyText = string.IsNullOrWhiteSpace(authCfg.AuthRequiredMessage)
                                         ? "Para esa solicitud necesito validar tu identidad primero. ¿Me confirmás tu número de cédula?"
                                         : authCfg.AuthRequiredMessage;
+                                    break;
+                                }
+
+                                // ── GATE anti-loop de reintentos (Fase D, determinístico) ──
+                                // Si la acción declara un tope de ejecuciones por conversación y ya se
+                                // alcanzó (ej: INSURED_INITIATE re-disparado 3 veces para reenviar el
+                                // código 2FA), NO se ejecuta: se responde el mensaje configurado y se
+                                // marca para escalar a humano. El LLM no puede saltarse esto.
+                                AgentFlow.Domain.Webhooks.ActionCallCap callCap;
+                                try { callCap = await actionChainResolver.GetCallCapAsync(cmd.TenantId, currentSlug, ct); }
+                                catch { callCap = new AgentFlow.Domain.Webhooks.ActionCallCap(null, null); }
+
+                                if (callCap.MaxCalls is int maxCalls && maxCalls > 0
+                                    && actionCallCounts.GetValueOrDefault(currentSlug) >= maxCalls)
+                                {
+                                    logger.LogInformation("[ATP-CallCap] Acción {Slug} alcanzó el tope ({Max}) en esta conversación → no se ejecuta, se escala.", currentSlug, maxCalls);
+                                    replyText = string.IsNullOrWhiteSpace(callCap.ExhaustedMessage)
+                                        ? "No pude completar tu solicitud tras varios intentos. Te conecto con un asesor que te ayudará."
+                                        : callCap.ExhaustedMessage;
+                                    agentResponse = agentResponse with { ShouldEscalate = true };
                                     break;
                                 }
 
@@ -1014,6 +1062,18 @@ public class ProcessIncomingMessageHandler(
                                     // Motor de flujos: si esta acción era la que estaba pendiente (gate),
                                     // ya se cumplió → limpiar el pendingRequest.
                                     flowSession?.NotifyActionExecuted(currentSlug);
+
+                                    // Fase D: contar la ejecución exitosa solo si la acción tiene cap
+                                    // configurado (evita escribir contadores para acciones sin tope).
+                                    if (callCap.MaxCalls is int)
+                                    {
+                                        actionCallCounts[currentSlug] = actionCallCounts.GetValueOrDefault(currentSlug) + 1;
+                                        actionCallCountsToPersist = SerializeCallCounts(actionCallCounts);
+                                    }
+
+                                    // Acumular las URLs de documentos enviados al cliente (respaldo + Monitor).
+                                    if (actionResult.MediaUrls is { Count: > 0 } urls)
+                                        sentMediaUrls.AddRange(urls);
 
                                     // Snapshot del response del PRIMER eslabón (depth=0). Lo usaremos al
                                     // final del turno como base del LastActionResult persistido en Redis,
@@ -1283,11 +1343,18 @@ public class ProcessIncomingMessageHandler(
                 // rechaza "messages: text content blocks must be non-empty"). Marcamos
                 // este turno como "técnico": persistimos en BD un placeholder para mantener
                 // el historial válido, pero NO se notifica al monitor ni se envía por WhatsApp.
-                var hasVisibleReply = !string.IsNullOrWhiteSpace(replyText);
+                // Un envío de documento cuenta como respuesta visible aunque no haya texto.
+                var hasVisibleReply = !string.IsNullOrWhiteSpace(replyText) || sentMediaUrls.Count > 0;
                 if (!hasVisibleReply)
                 {
                     replyText = "[turno técnico — acción ejecutada sin texto al cliente]";
                 }
+
+                // Adjuntar los documentos enviados como tags [media:URL] — quedan de respaldo y el
+                // Monitor los renderiza como adjuntos (misma convención que el media inbound).
+                var contentToPersist = replyText;
+                foreach (var mediaUrl in sentMediaUrls)
+                    contentToPersist += $"\n[media:{mediaUrl}]";
 
                 // Persistir respuesta
                 var outbound = new Message
@@ -1296,7 +1363,7 @@ public class ProcessIncomingMessageHandler(
                     ConversationId = conversation.Id,
                     Direction = MessageDirection.Outbound,
                     Status = MessageStatus.Sent,
-                    Content = replyText,
+                    Content = contentToPersist,
                     IsFromAgent = true,
                     AgentName = agent.AvatarName ?? agent.Name,
                     DetectedIntent = agentResponse.DetectedIntent,
@@ -1382,7 +1449,12 @@ public class ProcessIncomingMessageHandler(
                         // Pausa automática SOLO si el template tiene TRANSFER_CHAT vinculada.
                         // Sin la acción, el agente sigue activo (comportamiento previo).
                         var shouldPause = await transferChat.ExecuteIfApplicableAsync(conversation, ct);
-                        if (shouldPause) conversation.IsHumanHandled = true;
+                        // Escalamiento robusto (genérico): con KeepAiActiveUntilTakeover, la auto-escalada
+                        // NO silencia a la IA — solo notifica + marca EscalatedToHuman. El mute lo dispara
+                        // la TOMA humana (HandledByUserId). Sin el flag, comportamiento idéntico al actual.
+                        if (AgentFlow.Domain.Conversations.EscalationPolicy.ShouldMuteOnAutoEscalation(
+                                shouldPause, tenant.KeepAiActiveUntilTakeover))
+                            conversation.IsHumanHandled = true;
                     }
                     catch (Exception ex) { Console.WriteLine($"[TransferChat] Error: {ex.Message}"); }
                     try { await notifier.NotifyEscalationAsync(cmd.TenantId.ToString(), conversation.Id); }
@@ -1441,6 +1513,9 @@ public class ProcessIncomingMessageHandler(
         // de alguna acción. Solo se escribe cuando hubo cambio (no pisa con null).
         if (conversationDataBagToPersist is not null)
             conversation.ConversationDataJson = conversationDataBagToPersist;
+        // Escalamiento robusto Fase D: persistir los contadores de ejecución si cambiaron este turno.
+        if (actionCallCountsToPersist is not null)
+            conversation.ActionCallCountsJson = actionCallCountsToPersist;
         // Motor de flujos: persistir el estado del flujo (pendingRequest) si hubo flujo activo este turno.
         if (flowSession is not null)
             conversation.FlowStateJson = flowSession.SerializeState();
@@ -1480,6 +1555,41 @@ public class ProcessIncomingMessageHandler(
     /// (OutputInterpreter al enviar el documento, chainOverrides del mismo turno) leen el
     /// RawResponseJson crudo de la acción, que NO pasa por aquí.
     /// </summary>
+    /// <summary>
+    /// Escalamiento robusto Fase D: parsea el JSON de contadores de ejecución por slug
+    /// ({"SLUG": n}). Tolerante: ante JSON inválido devuelve un diccionario vacío (nunca lanza).
+    /// </summary>
+    private static Dictionary<string, int> ParseCallCounts(string? json)
+    {
+        var dict = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(json)) return dict;
+        try
+        {
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, int>>(json);
+            if (parsed is not null)
+                foreach (var (k, v) in parsed) dict[k] = v;
+        }
+        catch { /* JSON corrupto → contadores en cero, no rompe el turno */ }
+        return dict;
+    }
+
+    /// <summary>Serializa los contadores de ejecución por slug para persistir en ActionCallCountsJson.</summary>
+    private static string SerializeCallCounts(Dictionary<string, int> counts)
+        => System.Text.Json.JsonSerializer.Serialize(counts);
+
+    /// <summary>
+    /// Escalamiento robusto Fase B: bloque genérico que guía al agente cuando la conversación está
+    /// escalada a un humano pero nadie la tomó aún. Genérico (no por tenant): el comportamiento se
+    /// activa con Tenant.KeepAiActiveUntilTakeover.
+    /// </summary>
+    private static string BuildEscalationBlock() =>
+        "## ESCALADA EN CURSO\n" +
+        "Esta conversación ya fue derivada a un asesor humano, pero todavía nadie la ha tomado.\n" +
+        "- Seguí atendiendo al cliente con normalidad: respondé cualquier consulta que SÍ podés resolver.\n" +
+        "- Para el tema que motivó la derivación, NO prometas resolverlo vos ni inventes resultados; " +
+        "recordá brevemente que un asesor lo retomará (si están fuera de horario, en el próximo horario de atención).\n" +
+        "- No repitas el aviso de derivación en cada mensaje; mencionalo solo si el cliente pregunta por él.";
+
     private static string? SanitizeJsonForPrompt(string? json, int maxLen = 2000)
     {
         if (string.IsNullOrWhiteSpace(json) || json.Length <= maxLen) return json;

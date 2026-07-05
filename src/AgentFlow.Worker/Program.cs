@@ -249,6 +249,9 @@ builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.FollowUpSweepExecutor>();
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.CampaignAutoCloseSweepExecutor>();
+// Escalamiento robusto Fase E — watchdog de escaladas sin atender (slug ESCALATED_WATCHDOG)
+builder.Services.AddScoped<IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.EscalatedConversationWatchdogExecutor>();
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.ConversationLabelingJob>();
 builder.Services.AddScoped<IScheduledJobExecutor,

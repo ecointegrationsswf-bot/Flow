@@ -49,6 +49,7 @@ public class OutputInterpreter(
         {
             var root = doc.RootElement;
             var agentParts = new List<string>();
+            var mediaUrls = new List<string>();
             var shouldEscalate = false;
 
             foreach (var field in schema.Fields)
@@ -98,7 +99,7 @@ public class OutputInterpreter(
                                 break;
 
                             case "send_whatsapp_media":
-                                await HandleWhatsAppMediaAsync(raw, field, context, agentParts, ct);
+                                await HandleWhatsAppMediaAsync(raw, field, context, agentParts, mediaUrls, ct);
                                 break;
 
                             case "inject_context":
@@ -133,7 +134,10 @@ public class OutputInterpreter(
 
             return ActionResult.Ok(
                 dataForAgent: agentParts.Count > 0 ? string.Join(" | ", agentParts) : null,
-                shouldEscalate: shouldEscalate);
+                shouldEscalate: shouldEscalate) with
+            {
+                MediaUrls = mediaUrls.Count > 0 ? mediaUrls : null
+            };
         }
     }
 
@@ -280,6 +284,7 @@ public class OutputInterpreter(
         OutputField field,
         OutputContext context,
         List<string> agentParts,
+        List<string> mediaUrls,
         CancellationToken ct)
     {
         if (raw is null || string.IsNullOrEmpty(field.MimeType))
@@ -311,6 +316,11 @@ public class OutputInterpreter(
             };
             var filename = $"webhook-media/{context.TenantId}/{DateTime.UtcNow:yyyyMMdd}/{Guid.NewGuid()}.{ext}";
             var publicUrl = await blobStorage.UploadWhatsAppMediaAsync(filename, bytes, field.MimeType, ct);
+
+            // RESPALDO + visibilidad en el Monitor: registramos la URL del blob apenas se sube,
+            // independiente de si el envío por WhatsApp después falla. El handler la adjunta al
+            // mensaje del agente como [media:URL].
+            mediaUrls.Add(publicUrl);
 
             logger.LogInformation("[OutputInterpreter] Media subida a blob: {Url}", publicUrl);
 

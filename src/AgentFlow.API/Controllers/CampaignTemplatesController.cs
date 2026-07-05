@@ -387,6 +387,7 @@ public class CampaignTemplatesController(
 
         db.CampaignTemplates.Add(template);
         await db.SaveChangesAsync(ct);
+        await EnableKeepAiActiveIfTransferChatAsync(tenantId, template.ActionIds, ct);
         return Ok(new { template.Id, template.Name });
     }
 
@@ -476,7 +477,31 @@ public class CampaignTemplatesController(
         db.Entry(template).Property(t => t.AttentionEndTime).IsModified = true;
 
         await db.SaveChangesAsync(ct);
+        await EnableKeepAiActiveIfTransferChatAsync(tenantId, template.ActionIds, ct);
         return Ok(new { template.Id, template.Name });
+    }
+
+    /// <summary>
+    /// Escalamiento robusto: si el maestro tiene TRANSFER_CHAT vinculada, auto-habilita el
+    /// no-silencio del tenant (<see cref="AgentFlow.Domain.Entities.Tenant.KeepAiActiveUntilTakeover"/>).
+    /// Así configurar la transferencia a humano ACTIVA el comportamiento — no es una opción aparte
+    /// que recordar. No se apaga al quitar TRANSFER_CHAT (sin la acción el flag es inofensivo, y un
+    /// tenant pudo haberlo querido explícito).
+    /// </summary>
+    private async Task EnableKeepAiActiveIfTransferChatAsync(Guid tenantId, List<Guid> actionIds, CancellationToken ct)
+    {
+        if (actionIds is null || actionIds.Count == 0) return;
+        var transferId = await db.ActionDefinitions
+            .Where(a => a.Name == "TRANSFER_CHAT" && (a.TenantId == tenantId || a.TenantId == null))
+            .Select(a => a.Id)
+            .FirstOrDefaultAsync(ct);
+        if (transferId == Guid.Empty || !actionIds.Contains(transferId)) return;
+        var tenant = await db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId, ct);
+        if (tenant is not null && !tenant.KeepAiActiveUntilTakeover)
+        {
+            tenant.KeepAiActiveUntilTakeover = true;
+            await db.SaveChangesAsync(ct);
+        }
     }
 
     /// <summary>
@@ -664,6 +689,7 @@ public class CampaignTemplatesController(
 
         db.CampaignTemplates.Add(copy);
         await db.SaveChangesAsync(ct);
+        await EnableKeepAiActiveIfTransferChatAsync(tenantId, copy.ActionIds, ct);
         return Ok(new { copy.Id, copy.Name });
     }
 

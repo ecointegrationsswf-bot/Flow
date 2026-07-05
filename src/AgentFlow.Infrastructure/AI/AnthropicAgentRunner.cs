@@ -193,6 +193,15 @@ public class AnthropicAgentRunner(
             sb.AppendLine(req.WorkflowBlock);
         }
 
+        // Escalamiento robusto Fase B: guía cuando la conversación está escalada pero sin tomar por
+        // un humano (Tenant.KeepAiActiveUntilTakeover). Mismo guard que WorkflowBlock (no en el
+        // regenerate POST_CHAIN). NULL/vacío → no se inyecta (prompt idéntico al histórico).
+        if (!string.IsNullOrEmpty(req.EscalationBlock) && !req.PostChainRegeneration)
+        {
+            sb.AppendLine();
+            sb.AppendLine(req.EscalationBlock);
+        }
+
         // ── Action Trigger Protocol Fase 4 — resultado de acción previa ────
         // Si en el turno anterior (o en este, vía chain) se ejecutó una acción y
         // devolvió datos, el handler los pasa aquí para que el agente los incluya
