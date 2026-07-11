@@ -126,7 +126,8 @@ public sealed class TenantProvisioningService(
                     req.NombreNegocio,
                     req.Agentes.First(a => a.Welcome).Objetivo,
                     req.Etapas,
-                    generated[welcomeSlug].StageCriteria);
+                    generated[welcomeSlug].StageCriteria,
+                    objetivoKey: welcomeSlug); // clave "objetivo" v1 = slug del agente welcome
                 ludoFlowId = Guid.NewGuid();
                 db.TenantFlows.Add(new TenantFlow
                 {
@@ -142,13 +143,14 @@ public sealed class TenantProvisioningService(
 
             // 3.3 Maestros de campaña en BORRADOR (generados con LLM — ver Fase 3).
             var masters = new List<ProvisionedMaster>();
+            CampaignTemplate? welcomeMaster = null;
             foreach (var seed in req.Agentes)
             {
                 var agent = agentBySlug[seed.Slug];
                 var gen = generated[seed.Slug];
                 var templateId = Guid.NewGuid();
                 var name = $"{req.NombreNegocio} — {seed.Slug}";
-                db.CampaignTemplates.Add(new CampaignTemplate
+                var master = new CampaignTemplate
                 {
                     Id = templateId,
                     TenantId = tenantId,
@@ -163,8 +165,57 @@ public sealed class TenantProvisioningService(
                     ActiveFlowId = seed.Welcome ? ludoFlowId : null,
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow,
-                });
+                };
+                db.CampaignTemplates.Add(master);
+                if (seed.Welcome) welcomeMaster = master;
                 masters.Add(new ProvisionedMaster(seed.Slug, templateId, name));
+            }
+
+            // 3.3b Fase 4 — SALIDA hacia Ludo (solo si Ludo mandó su integrationToken).
+            // Deja el circuito completo listo: contratos per-tenant con el token (X-Api-Key)
+            // + acciones vinculadas al maestro welcome (el catálogo ATP enumera las keys de
+            // ActionConfigs) + WebhookContractEnabled para que el executor corra.
+            if (!string.IsNullOrWhiteSpace(req.IntegrationToken))
+            {
+                var ludoActionIds = await db.ActionDefinitions
+                    .Where(a => a.TenantId == null && a.IsActive
+                             && LudoIntegrationDefaults.AllSlugs.Contains(a.Name))
+                    .Select(a => new { a.Id, a.Name })
+                    .ToListAsync(ct);
+
+                if (ludoActionIds.Count > 0)
+                {
+                    tenant.WebhookContractEnabled = true;
+                    foreach (var a in ludoActionIds)
+                    {
+                        db.TenantActionContracts.Add(new TenantActionContract
+                        {
+                            Id = Guid.NewGuid(),
+                            ActionDefinitionId = a.Id,
+                            TenantId = tenantId,
+                            ContractJson = LudoIntegrationDefaults.BuildContractJson(
+                                a.Name, req.LudoApiBaseUrl, req.IntegrationToken),
+                            IsActive = true,
+                            CreatedAt = DateTime.UtcNow,
+                        });
+                        if (!tenant.AssignedActionIds.Contains(a.Id))
+                            tenant.AssignedActionIds.Add(a.Id);
+                    }
+
+                    // Vincular las acciones al maestro welcome: entradas vacías en ActionConfigs
+                    // ({} por acción) — el TriggerConfig/contrato se hereda del TenantActionContract.
+                    if (welcomeMaster is not null)
+                    {
+                        var cfg = new System.Text.Json.Nodes.JsonObject();
+                        foreach (var a in ludoActionIds)
+                            cfg[a.Id.ToString()] = new System.Text.Json.Nodes.JsonObject();
+                        welcomeMaster.ActionConfigs = cfg.ToJsonString();
+                    }
+                }
+                else
+                {
+                    log.LogWarning("Provisioning: integrationToken recibido pero las acciones Ludo globales no existen aún (¿seeder no corrió?). Se aprovisiona sin salida.");
+                }
             }
 
             // 3.4 Homologar etapas como etiquetas + poblar StageLabelMap.

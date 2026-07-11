@@ -750,6 +750,44 @@ public class CampaignTemplatesController(
     }
 
     /// <summary>
+    /// Reactiva un maestro inactivo. Si el agente NO tiene otro primario activo,
+    /// este se promueve a primario (queda usable de inmediato); si ya hay un
+    /// primario, se activa como secundario (promoverlo se hace editándolo, con la
+    /// modal de swap). No pasa por ResolvePrimarySwapAsync para no forzar un 409
+    /// en un simple "encender".
+    /// </summary>
+    [HttpPost("{id:guid}/activate")]
+    public async Task<IActionResult> Activate(Guid id, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var template = await db.CampaignTemplates
+            .FirstOrDefaultAsync(t => t.Id == id && t.TenantId == tenantId, ct);
+        if (template is null) return NotFound();
+
+        var hasPrimary = await db.CampaignTemplates.AnyAsync(t =>
+            t.TenantId == tenantId
+            && t.AgentDefinitionId == template.AgentDefinitionId
+            && t.Id != template.Id
+            && t.IsActive
+            && t.IsPrimaryForAgent, ct);
+
+        template.IsActive = true;
+        template.IsPrimaryForAgent = !hasPrimary;
+        template.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            ok = true,
+            message = template.IsPrimaryForAgent
+                ? "Maestro activado como primario del agente."
+                : "Maestro activado (el agente ya tiene otro primario).",
+            template.Id,
+            isPrimaryForAgent = template.IsPrimaryForAgent,
+        });
+    }
+
+    /// <summary>
     /// Helper de Create/Update — decide si el nuevo/editado maestro puede ser
     /// primario para el agente. Reglas:
     ///   • Si el tenant tiene BrainEnabled=true → no hay primario obligatorio;

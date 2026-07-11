@@ -23,7 +23,8 @@ public static class LudoFlowBuilder
         string nombreNegocio,
         string objetivo,
         IReadOnlyList<StageSeed> etapas,
-        IReadOnlyList<StageCriterion>? criterios)
+        IReadOnlyList<StageCriterion>? criterios,
+        string? objetivoKey = null)
     {
         if (etapas is null || etapas.Count == 0)
             return FlowJsonEmpty;
@@ -45,12 +46,19 @@ public static class LudoFlowBuilder
             .ToList();
         if (withCriteria.Count > 0)
             sb.Append("Criterios de avance: " + string.Join("; ", withCriteria) + ". ");
-        sb.Append("Para avanzar la oportunidad de fase, emití [ACTION:mover_fase] [PARAM:etapa=<nombre exacto de la etapa>] cuando se cumpla su criterio.");
+        sb.Append("Para avanzar la oportunidad de fase, emití [ACTION:mover_fase] [PARAM:etapa=<nombre exacto de la etapa>]");
+        if (!string.IsNullOrWhiteSpace(objetivoKey))
+            sb.Append($" [PARAM:objetivo={objetivoKey}]");
+        sb.Append(" cuando se cumpla su criterio.");
         var pipelineInstruction = sb.ToString();
 
+        var registrarParams = string.IsNullOrWhiteSpace(objetivoKey)
+            ? "[PARAM:resumen=<resumen breve de lo que pide el cliente>]"
+            : $"[PARAM:objetivo={objetivoKey}] [PARAM:resumen=<resumen breve de lo que pide el cliente>]";
         var califInstruction =
             $"Evaluá si el cliente muestra una intención CALIFICADA según el objetivo del agente: «{objetivo}». " +
-            "Si califica, registrá la oportunidad. Si todavía no califica, seguí conversando sin registrar nada.";
+            $"Si califica, registrá la oportunidad emitiendo [ACTION:registrar_oportunidad] {registrarParams}. " +
+            "Si todavía no califica, seguí conversando sin registrar nada.";
 
         var nodes = new JsonArray
         {

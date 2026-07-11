@@ -185,6 +185,9 @@ builder.Services.AddScoped<AgentFlow.Domain.Provisioning.ICampaignTemplateGenera
     AgentFlow.Infrastructure.Provisioning.CampaignTemplateGenerator>();
 builder.Services.AddScoped<AgentFlow.Domain.Provisioning.ITenantProvisioningService,
     AgentFlow.Infrastructure.Provisioning.TenantProvisioningService>();
+// Gestión de maestros para partners externos (Ludo hoy) — prompt/documentos/horarios/activar
+builder.Services.AddScoped<AgentFlow.Domain.Provisioning.ITenantMasterManagementService,
+    AgentFlow.Infrastructure.Provisioning.TenantMasterManagementService>();
 
 // ── CampaignIntakeService v2 (reemplazo de la fase A+B+C de n8n) ─────
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDuplicateChecker,
@@ -392,6 +395,9 @@ builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IOutputInterpreter,
 builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ActionConfigReader>();
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionExecutorService,
     AgentFlow.Infrastructure.Webhooks.ActionExecutorService>();
+// Integración Ludo Fase 4 — enricher gated de las acciones de salida hacia Ludo
+builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ILudoActionEnricher,
+    AgentFlow.Infrastructure.Webhooks.LudoActionEnricher>();
 // Auto-encadenamiento server-side de acciones (Paso 5 del Webhook Builder).
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionChainResolver,
     AgentFlow.Infrastructure.Webhooks.ActionChainResolver>();
@@ -1554,6 +1560,16 @@ try
             .SeedAsync(db, seedLogger).GetAwaiter().GetResult();
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] CampaignAutomationSeeder: {ex.Message}"); }
+
+    // ── Ludo Fase 4: seed acciones de salida hacia Ludo + drainer del outbox (idempotente) ──
+    try
+    {
+        var ludoLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("LudoActionSeeder");
+        AgentFlow.Infrastructure.Provisioning.LudoActionSeeder
+            .SeedAsync(db, ludoLogger).GetAwaiter().GetResult();
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] LudoActionSeeder: {ex.Message}"); }
 
     if (!db.SuperAdmins.Any())
     {

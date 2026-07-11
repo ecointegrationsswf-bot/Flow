@@ -11,7 +11,14 @@ public sealed record ProvisionTenantRequest(
     string NombreNegocio,
     string? WhatsappInstanceId,  // instancia UltraMsg (la línea aún se conecta a mano)
     IReadOnlyList<AgentSeed> Agentes,
-    IReadOnlyList<StageSeed> Etapas);
+    IReadOnlyList<StageSeed> Etapas,
+    // ── Fase 4 (opcionales — retrocompatibles con payloads viejos) ──
+    // Token de integración del tenant en Ludo (jam_...). Si viene, el provisioning deja
+    // la SALIDA hacia Ludo lista: TenantActionContracts de registrar_oportunidad /
+    // mover_fase / registrar_nota + acciones vinculadas al maestro welcome.
+    string? IntegrationToken = null,
+    // Base URL del API de Ludo. Null = productiva (site14).
+    string? LudoApiBaseUrl = null);
 
 /// <summary>Agente a sembrar. Exactamente uno debe tener <see cref="Welcome"/>=true.</summary>
 public sealed record AgentSeed(string Slug, string Objetivo, bool Welcome);
