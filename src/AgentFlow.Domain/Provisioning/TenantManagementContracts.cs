@@ -7,6 +7,11 @@ namespace AgentFlow.Domain.Provisioning;
 /// </summary>
 public sealed record UpdateMasterRequest(
     string AgentSlug,
+    // Opcional: apuntar a una VERSIÓN específica del maestro (ej. el borrador creado por
+    // una regeneración — el id sale de la respuesta del PUT o de GET /masters). Sin él,
+    // se resuelve el primario activo del agente (o el más reciente). Con templateId +
+    // activar:true, la versión indicada REEMPLAZA a la primaria actual (swap).
+    Guid? TemplateId = null,
     // Nuevo objetivo en lenguaje natural → REGENERA el prompt con IA (versionado seguro:
     // si el maestro está activo se crea un borrador nuevo; si es borrador, en sitio).
     string? Objetivo = null,

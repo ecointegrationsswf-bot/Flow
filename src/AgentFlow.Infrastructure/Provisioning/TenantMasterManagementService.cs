@@ -70,9 +70,25 @@ public sealed class TenantMasterManagementService(
         if (string.IsNullOrWhiteSpace(req.AgentSlug))
             return new(false, "agentSlug es requerido.");
 
-        var master = await ResolveMasterAsync(tenantId, req.AgentSlug, ct);
-        if (master is null)
-            return new(false, $"No existe un maestro para el agente '{req.AgentSlug}' en este tenant.");
+        CampaignTemplate? master;
+        if (req.TemplateId is { } templateId)
+        {
+            // Versión específica (ej. activar el borrador de una regeneración). Acotado
+            // al tenant Y al agente indicado — un id ajeno no resuelve.
+            var agentId = await db.AgentDefinitions
+                .Where(a => a.TenantId == tenantId && a.Name == req.AgentSlug)
+                .Select(a => (Guid?)a.Id).FirstOrDefaultAsync(ct);
+            master = agentId is null ? null : await db.CampaignTemplates.FirstOrDefaultAsync(t =>
+                t.Id == templateId && t.TenantId == tenantId && t.AgentDefinitionId == agentId.Value, ct);
+            if (master is null)
+                return new(false, $"templateId '{templateId}' no existe para el agente '{req.AgentSlug}' de este tenant.");
+        }
+        else
+        {
+            master = await ResolveMasterAsync(tenantId, req.AgentSlug, ct);
+            if (master is null)
+                return new(false, $"No existe un maestro para el agente '{req.AgentSlug}' en este tenant.");
+        }
 
         // Validar horarios ANTES de tocar nada (todo-o-nada).
         TimeOnly? from = null, until = null;
@@ -154,15 +170,30 @@ public sealed class TenantMasterManagementService(
         // ── Activación / desactivación (sobre el maestro ORIGINAL resuelto) ─────
         if (req.Activar == true)
         {
-            var hasPrimary = await db.CampaignTemplates.AnyAsync(t =>
+            var currentPrimary = await db.CampaignTemplates.FirstOrDefaultAsync(t =>
                 t.TenantId == tenantId
                 && t.AgentDefinitionId == target.AgentDefinitionId
                 && t.Id != target.Id && t.IsActive && t.IsPrimaryForAgent, ct);
-            target.IsActive = true;
-            target.IsPrimaryForAgent = !hasPrimary;
-            messages.Add(target.IsPrimaryForAgent
-                ? "Maestro activado como PRIMARIO del agente."
-                : "Maestro activado como secundario (el agente ya tiene otro primario).");
+
+            if (currentPrimary is not null && req.TemplateId is not null)
+            {
+                // templateId explícito = "esta es la versión nueva" → SWAP: la versión
+                // indicada reemplaza a la primaria (que baja a secundaria activa,
+                // recuperable). Sin templateId se mantiene la regla conservadora.
+                currentPrimary.IsPrimaryForAgent = false;
+                currentPrimary.UpdatedAt = DateTime.UtcNow;
+                target.IsActive = true;
+                target.IsPrimaryForAgent = true;
+                messages.Add($"Maestro activado como PRIMARIO (reemplaza a la versión anterior '{currentPrimary.Name}', que queda como secundaria).");
+            }
+            else
+            {
+                target.IsActive = true;
+                target.IsPrimaryForAgent = currentPrimary is null;
+                messages.Add(target.IsPrimaryForAgent
+                    ? "Maestro activado como PRIMARIO del agente."
+                    : "Maestro activado como secundario (el agente ya tiene otro primario).");
+            }
         }
         else if (req.Activar == false)
         {

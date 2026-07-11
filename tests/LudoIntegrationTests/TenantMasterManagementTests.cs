@@ -218,6 +218,42 @@ public class TenantMasterManagementTests
     }
 
     [Fact]
+    public async Task UpdateMaster_ActivateDraftByTemplateId_SwapsPrimary()
+    {
+        await using var db = NewDb();
+        var (tid, agentId, live) = Seed(db, masterActivo: true, masterPrimario: true);
+        var svc = NewSvc(db);
+
+        // 1) Regenerar el activo → crea borrador
+        var regen = await svc.UpdateMasterAsync(tid, new UpdateMasterRequest("ventas", Objetivo: "Nuevo objetivo"), CancellationToken.None);
+        Assert.True(regen.Ok);
+        var draftId = regen.TemplateId!.Value;
+        Assert.NotEqual(live.Id, draftId);
+
+        // 2) Activar el borrador POR ID → swap: el borrador pasa a primario, el viejo baja
+        var act = await svc.UpdateMasterAsync(tid, new UpdateMasterRequest("ventas", TemplateId: draftId, Activar: true), CancellationToken.None);
+        Assert.True(act.Ok);
+        Assert.True(act.IsPrimary);
+        Assert.Equal(draftId, act.TemplateId);
+
+        var oldLive = await db.CampaignTemplates.FindAsync(live.Id);
+        Assert.False(oldLive!.IsPrimaryForAgent); // demovido
+        Assert.True(oldLive.IsActive);            // sigue activo (recuperable)
+        var newLive = await db.CampaignTemplates.FindAsync(draftId);
+        Assert.True(newLive!.IsActive && newLive.IsPrimaryForAgent);
+    }
+
+    [Fact]
+    public async Task UpdateMaster_ForeignTemplateId_Rejected()
+    {
+        await using var db = NewDb();
+        var (tid, _, _) = Seed(db);
+        var svc = NewSvc(db);
+        var r = await svc.UpdateMasterAsync(tid, new UpdateMasterRequest("ventas", TemplateId: Guid.NewGuid(), Activar: true), CancellationToken.None);
+        Assert.False(r.Ok);
+    }
+
+    [Fact]
     public async Task ListDocuments_ReturnsIdsForDeletion()
     {
         await using var db = NewDb();
