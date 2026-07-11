@@ -143,6 +143,7 @@ public sealed class TenantProvisioningService(
 
             // 3.3 Maestros de campaña en BORRADOR (generados con LLM — ver Fase 3).
             var masters = new List<ProvisionedMaster>();
+            var masterEntities = new List<CampaignTemplate>();
             CampaignTemplate? welcomeMaster = null;
             foreach (var seed in req.Agentes)
             {
@@ -163,10 +164,15 @@ public sealed class TenantProvisioningService(
                     IsPrimaryForAgent = false,         // un borrador nunca es el primario orgánico
                     // El maestro welcome conduce el pipeline → lleva el lienzo Ludo. Los demás no.
                     ActiveFlowId = seed.Welcome ? ludoFlowId : null,
+                    // Defaults operativos: ventana de envío de campañas visible desde el día 1
+                    // (editable luego en el portal o vía la API de gestión de partners).
+                    SendFrom = "08:00",
+                    SendUntil = "18:00",
                     CreatedAt = DateTime.UtcNow,
                     UpdatedAt = DateTime.UtcNow,
                 };
                 db.CampaignTemplates.Add(master);
+                masterEntities.Add(master);
                 if (seed.Welcome) welcomeMaster = master;
                 masters.Add(new ProvisionedMaster(seed.Slug, templateId, name));
             }
@@ -219,6 +225,7 @@ public sealed class TenantProvisioningService(
             }
 
             // 3.4 Homologar etapas como etiquetas + poblar StageLabelMap.
+            var stageLabelIds = new List<Guid>();
             foreach (var etapa in req.Etapas ?? [])
             {
                 // Etiqueta (dedupe por nombre dentro del tenant nuevo — recién creado, así que
@@ -251,7 +258,16 @@ public sealed class TenantProvisioningService(
                     IsActive = true,
                     CreatedAt = DateTime.UtcNow,
                 });
+
+                stageLabelIds.Add(label.Id);
             }
+
+            // 3.4b Asociar las etiquetas de etapa a TODOS los maestros: sin esto el job de
+            // etiquetado nocturno no clasifica las conversaciones en etapas del pipeline
+            // (y la pestaña Etiquetas del portal queda vacía).
+            if (stageLabelIds.Count > 0)
+                foreach (var m in masterEntities)
+                    m.LabelIds = stageLabelIds.ToList();
 
             // 3.5 Mapeo idempotente (cierra el ciclo: futuros reenvíos caen en el paso 1).
             db.LudoTenantMaps.Add(new LudoTenantMap

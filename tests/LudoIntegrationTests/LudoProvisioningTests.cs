@@ -131,6 +131,10 @@ public class LudoProvisioningTests
         Assert.All(masters, m => Assert.False(m.IsActive));          // BORRADOR
         Assert.All(masters, m => Assert.False(m.IsPrimaryForAgent)); // nunca primario
         Assert.All(masters, m => Assert.False(m.GeneratedByLlm));
+        // Completitud operativa del alta externa: etiquetas de etapa asociadas + ventana de envío default.
+        Assert.All(masters, m => Assert.Equal(3, m.LabelIds.Count));
+        Assert.All(masters, m => Assert.Equal("08:00", m.SendFrom));
+        Assert.All(masters, m => Assert.Equal("18:00", m.SendUntil));
 
         Assert.Equal(1, await db.LudoTenantMaps.CountAsync());
     }
