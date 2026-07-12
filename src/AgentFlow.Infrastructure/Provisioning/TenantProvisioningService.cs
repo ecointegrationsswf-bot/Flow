@@ -85,6 +85,9 @@ public sealed class TenantProvisioningService(
                 WhatsAppApiToken = string.Empty,   // pendiente de conexión manual
                 WhatsAppPhoneNumber = string.Empty,
                 LudoIntegrationEnabled = true,
+                // Los documentos del maestro se cargan vía la API de gestión externa →
+                // la lectura RAG debe quedar operativa desde el alta, sin paso manual.
+                ReferenceDocumentsEnabled = true,
                 // API key Anthropic dedicada a los tenants Ludo (inyectada en deploy como
                 // Ludo:DefaultLlmApiKey). Si no está configurada → null → el tenant hereda la
                 // key global de config, igual que cualquier tenant sin key propia.

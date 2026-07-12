@@ -120,6 +120,7 @@ public class LudoProvisioningTests
         var tenant = await db.Tenants.FindAsync(result.TenantId);
         Assert.NotNull(tenant);
         Assert.True(tenant!.LudoIntegrationEnabled);
+        Assert.True(tenant.ReferenceDocumentsEnabled); // RAG operativo desde el alta (docs vía API externa)
         Assert.Equal(string.Empty, tenant.WhatsAppApiToken); // pendiente de conexión
 
         Assert.Equal(2, await db.AgentDefinitions.CountAsync(a => a.TenantId == result.TenantId));
