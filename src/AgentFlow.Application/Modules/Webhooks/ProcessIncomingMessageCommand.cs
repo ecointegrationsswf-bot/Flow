@@ -1039,13 +1039,22 @@ public class ProcessIncomingMessageHandler(
 
                                 // Mensajes para el cliente: solo apendear DataForAgent/ErrorMessage del
                                 // ÚLTIMO eslabón (las acciones intermedias son transparentes).
-                                if (actionResult.Success && !string.IsNullOrEmpty(actionResult.DataForAgent))
+                                // EXCEPCIÓN Ludo: la sincronización con el CRM (registrar_oportunidad /
+                                // mover_fase / registrar_nota) es plomería interna — sus resultados y
+                                // errores NUNCA se muestran al cliente (se loguean y el outbox reintenta).
+                                var isLudoCrmSync = AgentFlow.Domain.Provisioning.LudoIntegrationDefaults.IsLudoActionSlug(currentSlug);
+                                if (isLudoCrmSync && !actionResult.Success)
+                                {
+                                    logger.LogWarning("[Ludo] Acción {Slug} falló (transparente para el cliente): {Msg}",
+                                        currentSlug, actionResult.ErrorMessage);
+                                }
+                                if (actionResult.Success && !string.IsNullOrEmpty(actionResult.DataForAgent) && !isLudoCrmSync)
                                 {
                                     replyText = string.IsNullOrEmpty(replyText)
                                         ? actionResult.DataForAgent
                                         : $"{replyText}\n\n{actionResult.DataForAgent}";
                                 }
-                                else if (!actionResult.Success && !string.IsNullOrEmpty(actionResult.ErrorMessage))
+                                else if (!actionResult.Success && !string.IsNullOrEmpty(actionResult.ErrorMessage) && !isLudoCrmSync)
                                 {
                                     replyText = string.IsNullOrEmpty(replyText)
                                         ? actionResult.ErrorMessage

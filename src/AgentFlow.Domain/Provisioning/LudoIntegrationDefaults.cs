@@ -56,19 +56,24 @@ public static class LudoIntegrationDefaults
                 fields:
                 [
                     SystemField("telefono", "contact.phone"),
-                    SystemField("nombre", "contact.name"),
+                    // nombre viene de la CONVERSACIÓN (confirmado por el cliente), no del
+                    // perfil de WhatsApp (alias poco confiables tipo "VL"). requiresConfirmation
+                    // bloquea la ejecución hasta que el agente lo capture.
+                    ConversationField("nombre", "nombre"),
                     ConversationField("objetivo", "objetivo"),
                     ConversationField("monto", "monto", dataType: "number"),
                     ConversationField("resumenConversacion", "resumen"),
                 ],
                 trigger: Trigger(
-                    description: "Registra una oportunidad de venta en el CRM cuando el cliente muestra una intención calificada (quiere cotizar, comprar o contratar).",
+                    description: "Registra una oportunidad de venta en el CRM cuando el cliente muestra una intención calificada (quiere cotizar, comprar o contratar). ANTES de ejecutarla, confirmá el NOMBRE COMPLETO del cliente en la conversación (si no lo dio claramente, pedíselo) y pasalo en [PARAM:nombre=...] — nunca uses el alias del perfil de WhatsApp.",
                     examples:
                     [
                         "quiero cotizar una póliza para mi auto",
                         "me interesa contratar el seguro",
                         "cuánto me costaría asegurar mi casa",
-                    ])),
+                    ],
+                    requiresConfirmation: ["nombre"],
+                    clarificationPrompt: "Para registrar su solicitud, ¿me confirma su nombre completo, por favor?")),
 
             MoverFaseSlug => Contract(
                 url: $"{baseUrl}/api/integration/oportunidad/{OpportunityIdPlaceholder}/fase",
@@ -83,7 +88,7 @@ public static class LudoIntegrationDefaults
                     ConversationField("motivo", "motivo"),
                 ],
                 trigger: Trigger(
-                    description: "Avanza la oportunidad del cliente a la siguiente fase del pipeline cuando se cumple el criterio de avance de esa fase.",
+                    description: "Avanza la oportunidad del cliente a la fase del pipeline cuyo criterio se cumple. OBLIGATORIO: incluí SIEMPRE [PARAM:etapa=<nombre EXACTO de la etapa destino>] (ej. [PARAM:etapa=INTERESADO]) — sin ese parámetro la acción no hace nada.",
                     examples:
                     [
                         "confirmo, quiero avanzar con la póliza",
@@ -162,10 +167,17 @@ public static class LudoIntegrationDefaults
         ["dataType"] = "string",
     };
 
-    private static JsonObject Trigger(string description, string[] examples) => new()
+    private static JsonObject Trigger(string description, string[] examples,
+        string[]? requiresConfirmation = null, string? clarificationPrompt = null)
     {
-        ["description"] = description,
-        ["triggerExamples"] = new JsonArray(examples.Select(e => (JsonNode)e).ToArray()),
-        ["requiresConfirmation"] = new JsonArray(),
-    };
+        var o = new JsonObject
+        {
+            ["description"] = description,
+            ["triggerExamples"] = new JsonArray(examples.Select(e => (JsonNode)e).ToArray()),
+            ["requiresConfirmation"] = new JsonArray((requiresConfirmation ?? []).Select(r => (JsonNode)r).ToArray()),
+        };
+        if (!string.IsNullOrWhiteSpace(clarificationPrompt))
+            o["clarificationPrompt"] = clarificationPrompt;
+        return o;
+    }
 }
