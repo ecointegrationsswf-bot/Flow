@@ -113,9 +113,9 @@ export function PdfViewerModal({
     <dialog
       ref={dialogRef}
       onClose={onClose}
-      className="m-0 h-screen w-screen max-h-screen max-w-full rounded-none border-none bg-transparent p-0 backdrop:bg-black/60"
+      className="h-[92vh] w-[min(96vw,1150px)] overflow-hidden rounded-xl border-none bg-transparent p-0 shadow-2xl backdrop:bg-black/60"
     >
-      <div className="flex h-full w-full flex-col bg-gray-900">
+      <div className="flex h-full w-full flex-col overflow-hidden rounded-xl bg-gray-900">
         {/* Toolbar */}
         <div className="flex items-center justify-between border-b border-gray-700 bg-gray-800 px-4 py-2.5">
           <div className="flex items-center gap-3 min-w-0">
@@ -209,9 +209,9 @@ export function PdfViewerModal({
               <iframe
                 src={blobUrl}
                 title={fileName}
-                className="h-[calc(100vh-60px)] w-full max-w-4xl rounded bg-white shadow-2xl"
+                className="h-[calc(92vh-80px)] w-full max-w-4xl rounded bg-white shadow-2xl"
                 style={{
-                  minHeight: scale > 100 ? `${100 / (scale / 100)}vh` : undefined,
+                  minHeight: scale > 100 ? `${92 / (scale / 100)}vh` : undefined,
                 }}
               />
             </div>
