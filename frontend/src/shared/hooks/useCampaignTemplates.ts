@@ -237,6 +237,21 @@ export function useDeactivateCampaignTemplate() {
 }
 
 /**
+ * Reactiva un maestro inactivo. Si el agente no tiene otro primario activo,
+ * el backend lo promueve a primario; si ya hay uno, queda como secundario.
+ */
+export function useActivateCampaignTemplate() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => {
+      const { data } = await api.post(`/campaign-templates/${id}/activate`)
+      return data as { ok: boolean; message: string; isPrimaryForAgent: boolean }
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['campaign-templates'] }),
+  })
+}
+
+/**
  * Detalles del 409 al borrar un maestro vinculado a campañas. La UI lo usa
  * para mostrar la modal y ofrecer inactivar.
  */

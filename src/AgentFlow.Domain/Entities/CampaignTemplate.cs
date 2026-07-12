@@ -177,6 +177,21 @@ public class CampaignTemplate
     /// </summary>
     public Guid? ActiveFlowId { get; set; }
 
+    /// <summary>
+    /// Integración Ludo CRM — Fase 1. Objetivo en lenguaje natural de este maestro (ej:
+    /// "Calificar y cerrar pólizas nuevas"). Lo usa el CampaignTemplateGenerator (Fase 3)
+    /// para generar el system prompt y los criterios de avance de etapa. NULL en maestros
+    /// no generados — sin efecto sobre el comportamiento actual.
+    /// </summary>
+    public string? Objetivo { get; set; }
+
+    /// <summary>
+    /// Integración Ludo CRM — Fase 1. Marca los maestros producidos por el generador LLM
+    /// (Fase 3). Default false: los maestros creados a mano hoy quedan en false, idénticos
+    /// a como están. Solo informativo/auditoría.
+    /// </summary>
+    public bool GeneratedByLlm { get; set; }
+
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 

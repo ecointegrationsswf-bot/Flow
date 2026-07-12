@@ -60,8 +60,9 @@ export function AppLayout() {
           {sidebarCollapsed ? <PanelLeft className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}
         </button>
 
-        {/* Nav */}
-        <nav className="flex-1 space-y-1 px-2">
+        {/* Nav — overflow-y-auto: en pantallas cortas el menú scrollea DENTRO del
+            sidebar en vez de desbordar el fondo oscuro. */}
+        <nav className="flex-1 space-y-1 overflow-y-auto px-2">
           {visibleItems.map(({ to, icon: Icon, label, permission }) => (
             <NavLink
               key={to}

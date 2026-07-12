@@ -126,6 +126,9 @@ builder.Services.AddScoped<IOutputInterpreter,
 builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ActionConfigReader>();
 builder.Services.AddScoped<IActionExecutorService,
     AgentFlow.Infrastructure.Webhooks.ActionExecutorService>();
+// Integración Ludo Fase 4 — enricher gated de las acciones de salida hacia Ludo
+builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ILudoActionEnricher,
+    AgentFlow.Infrastructure.Webhooks.LudoActionEnricher>();
 builder.Services.AddScoped<IActionChainResolver,
     AgentFlow.Infrastructure.Webhooks.ActionChainResolver>();
 builder.Services.AddScoped<IActionPromptBuilder,
@@ -249,6 +252,12 @@ builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.FollowUpSweepExecutor>();
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.CampaignAutoCloseSweepExecutor>();
+// Escalamiento robusto Fase E — watchdog de escaladas sin atender (slug ESCALATED_WATCHDOG)
+builder.Services.AddScoped<IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.EscalatedConversationWatchdogExecutor>();
+// Integración Ludo Fase 4 — drainer del outbox de salida (slug LUDO_OUTBOX_DRAINER)
+builder.Services.AddScoped<IScheduledJobExecutor,
+    AgentFlow.Infrastructure.ScheduledJobs.LudoOutboxDrainerExecutor>();
 builder.Services.AddScoped<IScheduledJobExecutor,
     AgentFlow.Infrastructure.ScheduledJobs.ConversationLabelingJob>();
 builder.Services.AddScoped<IScheduledJobExecutor,

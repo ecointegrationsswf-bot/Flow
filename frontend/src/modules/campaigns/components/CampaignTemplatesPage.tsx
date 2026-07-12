@@ -1,15 +1,17 @@
 import { useState, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ClipboardList, Plus, Pencil, Trash2, Clock, Tag, Copy, Search, X, AlertTriangle } from 'lucide-react'
+import { ClipboardList, Plus, Pencil, Trash2, Clock, Tag, Copy, Search, X, AlertTriangle, Power, PowerOff, Eye } from 'lucide-react'
 import {
   useCampaignTemplates,
+  useCampaignTemplate,
   useDeleteCampaignTemplate,
   useDeactivateCampaignTemplate,
+  useActivateCampaignTemplate,
   useDuplicateCampaignTemplate,
   type DeleteTemplateBlockedConflict,
 } from '@/shared/hooks/useCampaignTemplates'
 import { usePermissions } from '@/shared/hooks/usePermissions'
-import { confirmDialog } from '@/shared/components/dialog'
+import { confirmDialog, toast } from '@/shared/components/dialog'
 
 export function CampaignTemplatesPage() {
   const { hasPermission } = usePermissions()
@@ -18,7 +20,33 @@ export function CampaignTemplatesPage() {
   const { data: templates, isLoading, isError, refetch } = useCampaignTemplates()
   const deleteMut = useDeleteCampaignTemplate()
   const deactivateMut = useDeactivateCampaignTemplate()
+  const activateMut = useActivateCampaignTemplate()
   const duplicateMut = useDuplicateCampaignTemplate()
+
+  // Toggle Activar/Desactivar desde la card. Desactivar abre una modal propia
+  // (no confirm nativo) que explica el efecto; activar es directo con toast.
+  // Si el agente no tiene primario, el backend promueve el activado a primario.
+  const [deactivateModal, setDeactivateModal] = useState<{ id: string; name: string; agentName: string | null } | null>(null)
+
+  const handleToggleActive = async (t: { id: string; name: string; isActive: boolean; agentName?: string | null }) => {
+    if (t.isActive) {
+      setDeactivateModal({ id: t.id, name: t.name, agentName: t.agentName ?? null })
+    } else {
+      const res = await activateMut.mutateAsync(t.id)
+      toast.success(res?.message ?? 'Maestro activado.')
+    }
+  }
+
+  const confirmDeactivate = async () => {
+    if (!deactivateModal) return
+    try {
+      await deactivateMut.mutateAsync(deactivateModal.id)
+      toast.success('Maestro desactivado.')
+      setDeactivateModal(null)
+    } catch {
+      // la modal queda abierta; el error global lo maneja React Query
+    }
+  }
 
   // Filtros
   const [search, setSearch] = useState('')
@@ -27,6 +55,13 @@ export function CampaignTemplatesPage() {
   // Estado del modal de duplicar
   const [duplicateModal, setDuplicateModal] = useState<{ id: string; name: string } | null>(null)
   const [newName, setNewName] = useState('')
+
+  // Modo consulta (solo lectura) — disponible para TODOS los usuarios, incluso sin
+  // permiso de edición. Clave para maestros gestionados externamente (ej. Ludo CRM):
+  // permite verificar prompt/horarios/config sin riesgo de tocar nada.
+  const [viewId, setViewId] = useState<string | null>(null)
+  const { data: viewDetail, isLoading: viewLoading } = useCampaignTemplate(viewId ?? undefined)
+  const viewCard = viewId ? templates?.find((t) => t.id === viewId) : null
 
   // Modal mostrada cuando el backend bloquea el delete con 409 porque hay
   // campañas vinculadas. Ofrece al usuario inactivar el maestro como alternativa.
@@ -198,35 +233,182 @@ export function CampaignTemplatesPage() {
                     )}
                   </div>
 
-                  {canEdit && (
-                    <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
-                      <button
-                        onClick={() => openDuplicate(t.id, t.name)}
-                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-purple-600 transition-colors"
-                        title="Copiar maestro"
-                      >
-                        <Copy className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => navigate(`/campaign-templates/${t.id}/edit`)}
-                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
-                        title="Editar"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(t.id)}
-                        className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
-                        title="Eliminar"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  )}
+                  <div className="mt-4 flex justify-end gap-1 border-t border-gray-100 pt-3">
+                    <button
+                      onClick={() => setViewId(t.id)}
+                      className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                      title="Ver detalle (solo lectura)"
+                    >
+                      <Eye className="h-4 w-4" />
+                    </button>
+                    {canEdit && (
+                      <>
+                        <button
+                          onClick={() => handleToggleActive(t)}
+                          disabled={deactivateMut.isPending || activateMut.isPending}
+                          className={`rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 transition-colors disabled:opacity-50 ${
+                            t.isActive ? 'hover:text-amber-600' : 'hover:text-green-600'
+                          }`}
+                          title={t.isActive ? 'Desactivar maestro' : 'Activar maestro'}
+                        >
+                          {t.isActive ? <PowerOff className="h-4 w-4" /> : <Power className="h-4 w-4" />}
+                        </button>
+                        <button
+                          onClick={() => openDuplicate(t.id, t.name)}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-purple-600 transition-colors"
+                          title="Copiar maestro"
+                        >
+                          <Copy className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => navigate(`/campaign-templates/${t.id}/edit`)}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-blue-600 transition-colors"
+                          title="Editar"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(t.id)}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100 hover:text-red-600 transition-colors"
+                          title="Eliminar"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal — modo consulta (solo lectura) */}
+      {viewId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-xl bg-white shadow-xl">
+            <div className="flex items-start justify-between gap-3 border-b border-gray-100 p-5">
+              <div className="flex items-start gap-3">
+                <div className="rounded-full bg-blue-100 p-2">
+                  <Eye className="h-5 w-5 text-blue-700" />
+                </div>
+                <div>
+                  <h2 className="text-base font-semibold text-gray-900">{viewCard?.name ?? 'Maestro'}</h2>
+                  <p className="mt-0.5 text-xs text-gray-500">
+                    Modo consulta — solo lectura · Agente: {viewCard?.agentName ?? '—'}
+                  </p>
+                </div>
+              </div>
+              <span className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${viewCard?.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                {viewCard?.isActive ? 'Activo' : 'Inactivo'}
+              </span>
+            </div>
+
+            {viewLoading || !viewDetail ? (
+              <div className="py-12 text-center text-sm text-gray-400">Cargando detalle...</div>
+            ) : (
+              <div className="flex-1 overflow-y-auto p-5">
+                <div className="mb-4 grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-3">
+                  <div>
+                    <p className="text-xs font-medium uppercase text-gray-400">Horario de envío</p>
+                    <p className="text-gray-800">{viewDetail.sendFrom && viewDetail.sendUntil ? `${viewDetail.sendFrom} – ${viewDetail.sendUntil}` : 'Hereda del tenant'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase text-gray-400">Seguimientos</p>
+                    <p className="text-gray-800">{viewCard && viewCard.followUpHours.length > 0 ? viewCard.followUpHours.map(h => `${h}h`).join(', ') : 'Ninguno'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase text-gray-400">Cierre automático</p>
+                    <p className="text-gray-800">{viewCard?.autoCloseHours}h</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase text-gray-400">Etiquetas</p>
+                    <p className="text-gray-800">{viewCard?.labelIds.length ?? 0}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase text-gray-400">Flujo (lienzo)</p>
+                    <p className="text-gray-800">{viewDetail.activeFlowId ? 'Vinculado' : '—'}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase text-gray-400">Email</p>
+                    <p className="text-gray-800">{viewCard?.sendEmail ? viewCard.emailAddress : '—'}</p>
+                  </div>
+                </div>
+
+                <p className="mb-1 text-xs font-medium uppercase text-gray-400">Prompt del agente (system prompt)</p>
+                <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-lg border border-gray-200 bg-gray-50 p-3 font-mono text-xs leading-relaxed text-gray-800">
+                  {viewDetail.systemPrompt || '(sin prompt)'}
+                </pre>
+              </div>
+            )}
+
+            <div className="flex justify-end border-t border-gray-100 px-5 py-3">
+              <button
+                onClick={() => setViewId(null)}
+                className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 transition-colors"
+              >
+                Cerrar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal — confirmar desactivación de un maestro */}
+      {deactivateModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-xl">
+            <div className="flex items-start gap-3 border-b border-gray-100 p-5">
+              <div className="rounded-full bg-amber-100 p-2">
+                <PowerOff className="h-5 w-5 text-amber-700" />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-base font-semibold text-gray-900">Desactivar maestro</h2>
+                <p className="mt-1 text-sm text-gray-600">
+                  <strong>{deactivateModal.name}</strong>
+                  {deactivateModal.agentName && (
+                    <span className="text-gray-500"> · Agente: {deactivateModal.agentName}</span>
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-2 px-5 py-4 text-sm text-gray-700">
+              <p className="flex items-start gap-2">
+                <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                El agente <strong>dejará de usar este maestro</strong> para responder conversaciones nuevas.
+              </p>
+              <p className="flex items-start gap-2">
+                <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500" />
+                No estará disponible para <strong>crear campañas nuevas</strong>.
+              </p>
+              <p className="flex items-start gap-2">
+                <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
+                Las campañas <strong>ya lanzadas</strong> siguen funcionando con su configuración actual.
+              </p>
+              <p className="flex items-start gap-2">
+                <span className="mt-0.5 h-1.5 w-1.5 shrink-0 rounded-full bg-green-500" />
+                Podés <strong>reactivarlo cuando quieras</strong> desde esta misma pantalla.
+              </p>
+            </div>
+
+            <div className="flex justify-end gap-2 border-t border-gray-100 px-5 py-4">
+              <button
+                onClick={() => setDeactivateModal(null)}
+                className="rounded-lg px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmDeactivate}
+                disabled={deactivateMut.isPending}
+                className="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 disabled:opacity-50 transition-colors"
+              >
+                {deactivateMut.isPending ? 'Desactivando...' : 'Desactivar'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

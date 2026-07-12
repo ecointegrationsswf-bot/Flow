@@ -72,8 +72,9 @@ export function AdminLayout() {
             : <PanelLeftClose className="h-4 w-4" />}
         </button>
 
-        {/* Nav */}
-        <nav className="flex-1 space-y-1 px-2">
+        {/* Nav — overflow-y-auto: el menú ya supera el alto de pantallas cortas;
+            scrollea DENTRO del sidebar en vez de desbordar el fondo oscuro. */}
+        <nav className="flex-1 space-y-1 overflow-y-auto px-2">
           {adminNav.map(({ to, icon: Icon, label }) => (
             <NavLink
               key={to}

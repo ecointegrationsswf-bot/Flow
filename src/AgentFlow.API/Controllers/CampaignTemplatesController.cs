@@ -387,6 +387,7 @@ public class CampaignTemplatesController(
 
         db.CampaignTemplates.Add(template);
         await db.SaveChangesAsync(ct);
+        await EnableKeepAiActiveIfTransferChatAsync(tenantId, template.ActionIds, ct);
         return Ok(new { template.Id, template.Name });
     }
 
@@ -476,7 +477,31 @@ public class CampaignTemplatesController(
         db.Entry(template).Property(t => t.AttentionEndTime).IsModified = true;
 
         await db.SaveChangesAsync(ct);
+        await EnableKeepAiActiveIfTransferChatAsync(tenantId, template.ActionIds, ct);
         return Ok(new { template.Id, template.Name });
+    }
+
+    /// <summary>
+    /// Escalamiento robusto: si el maestro tiene TRANSFER_CHAT vinculada, auto-habilita el
+    /// no-silencio del tenant (<see cref="AgentFlow.Domain.Entities.Tenant.KeepAiActiveUntilTakeover"/>).
+    /// Así configurar la transferencia a humano ACTIVA el comportamiento — no es una opción aparte
+    /// que recordar. No se apaga al quitar TRANSFER_CHAT (sin la acción el flag es inofensivo, y un
+    /// tenant pudo haberlo querido explícito).
+    /// </summary>
+    private async Task EnableKeepAiActiveIfTransferChatAsync(Guid tenantId, List<Guid> actionIds, CancellationToken ct)
+    {
+        if (actionIds is null || actionIds.Count == 0) return;
+        var transferId = await db.ActionDefinitions
+            .Where(a => a.Name == "TRANSFER_CHAT" && (a.TenantId == tenantId || a.TenantId == null))
+            .Select(a => a.Id)
+            .FirstOrDefaultAsync(ct);
+        if (transferId == Guid.Empty || !actionIds.Contains(transferId)) return;
+        var tenant = await db.Tenants.FirstOrDefaultAsync(t => t.Id == tenantId, ct);
+        if (tenant is not null && !tenant.KeepAiActiveUntilTakeover)
+        {
+            tenant.KeepAiActiveUntilTakeover = true;
+            await db.SaveChangesAsync(ct);
+        }
     }
 
     /// <summary>
@@ -664,6 +689,7 @@ public class CampaignTemplatesController(
 
         db.CampaignTemplates.Add(copy);
         await db.SaveChangesAsync(ct);
+        await EnableKeepAiActiveIfTransferChatAsync(tenantId, copy.ActionIds, ct);
         return Ok(new { copy.Id, copy.Name });
     }
 
@@ -721,6 +747,44 @@ public class CampaignTemplatesController(
         await db.SaveChangesAsync(ct);
 
         return Ok(new { ok = true, message = "Maestro inactivado.", template.Id });
+    }
+
+    /// <summary>
+    /// Reactiva un maestro inactivo. Si el agente NO tiene otro primario activo,
+    /// este se promueve a primario (queda usable de inmediato); si ya hay un
+    /// primario, se activa como secundario (promoverlo se hace editándolo, con la
+    /// modal de swap). No pasa por ResolvePrimarySwapAsync para no forzar un 409
+    /// en un simple "encender".
+    /// </summary>
+    [HttpPost("{id:guid}/activate")]
+    public async Task<IActionResult> Activate(Guid id, CancellationToken ct)
+    {
+        var tenantId = tenantCtx.TenantId;
+        var template = await db.CampaignTemplates
+            .FirstOrDefaultAsync(t => t.Id == id && t.TenantId == tenantId, ct);
+        if (template is null) return NotFound();
+
+        var hasPrimary = await db.CampaignTemplates.AnyAsync(t =>
+            t.TenantId == tenantId
+            && t.AgentDefinitionId == template.AgentDefinitionId
+            && t.Id != template.Id
+            && t.IsActive
+            && t.IsPrimaryForAgent, ct);
+
+        template.IsActive = true;
+        template.IsPrimaryForAgent = !hasPrimary;
+        template.UpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(ct);
+
+        return Ok(new
+        {
+            ok = true,
+            message = template.IsPrimaryForAgent
+                ? "Maestro activado como primario del agente."
+                : "Maestro activado (el agente ya tiene otro primario).",
+            template.Id,
+            isPrimaryForAgent = template.IsPrimaryForAgent,
+        });
     }
 
     /// <summary>

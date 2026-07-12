@@ -230,4 +230,12 @@ public class ActionConfigBundleJson
 
     /// <summary>Motor de flujos Fase 2: mensaje a responder cuando se bloquea por falta de auth.</summary>
     public string? AuthRequiredMessage { get; init; }
+
+    /// <summary>Escalamiento robusto Fase D: tope de ejecuciones de esta acción por conversación
+    /// (anti-loop de reintentos, ej: reenvío de código 2FA). Null = sin límite (default).</summary>
+    public int? MaxCallsPerConversation { get; init; }
+
+    /// <summary>Escalamiento robusto Fase D: mensaje al cliente cuando se alcanza el tope
+    /// (la acción NO se ejecuta y la conversación se marca para escalar).</summary>
+    public string? CallsExhaustedMessage { get; init; }
 }

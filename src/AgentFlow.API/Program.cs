@@ -180,6 +180,15 @@ builder.Services.AddScoped<AgentFlow.Application.Modules.Reports.IEffectivenessR
     AgentFlow.Infrastructure.Reports.EffectivenessReportService>();
 builder.Services.AddScoped<AgentFlow.Infrastructure.Reports.ConversationDetailsExcelExporter>();
 
+// ── Integración Ludo CRM — Fase 2/3 (provisioning + generador de maestros) ─────
+builder.Services.AddScoped<AgentFlow.Domain.Provisioning.ICampaignTemplateGenerator,
+    AgentFlow.Infrastructure.Provisioning.CampaignTemplateGenerator>();
+builder.Services.AddScoped<AgentFlow.Domain.Provisioning.ITenantProvisioningService,
+    AgentFlow.Infrastructure.Provisioning.TenantProvisioningService>();
+// Gestión de maestros para partners externos (Ludo hoy) — prompt/documentos/horarios/activar
+builder.Services.AddScoped<AgentFlow.Domain.Provisioning.ITenantMasterManagementService,
+    AgentFlow.Infrastructure.Provisioning.TenantMasterManagementService>();
+
 // ── CampaignIntakeService v2 (reemplazo de la fase A+B+C de n8n) ─────
 builder.Services.AddScoped<AgentFlow.Domain.Interfaces.IDuplicateChecker,
     AgentFlow.Infrastructure.Campaigns.V2.DuplicateChecker>();
@@ -386,6 +395,9 @@ builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IOutputInterpreter,
 builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ActionConfigReader>();
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionExecutorService,
     AgentFlow.Infrastructure.Webhooks.ActionExecutorService>();
+// Integración Ludo Fase 4 — enricher gated de las acciones de salida hacia Ludo
+builder.Services.AddScoped<AgentFlow.Infrastructure.Webhooks.ILudoActionEnricher,
+    AgentFlow.Infrastructure.Webhooks.LudoActionEnricher>();
 // Auto-encadenamiento server-side de acciones (Paso 5 del Webhook Builder).
 builder.Services.AddScoped<AgentFlow.Domain.Webhooks.IActionChainResolver,
     AgentFlow.Infrastructure.Webhooks.ActionChainResolver>();
@@ -564,6 +576,10 @@ var app = builder.Build();
             BEGIN
                 ALTER TABLE Conversations ADD FlowStateJson nvarchar(max) NULL;
             END
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Conversations') AND name = 'ActionCallCountsJson')
+            BEGIN
+                ALTER TABLE Conversations ADD ActionCallCountsJson nvarchar(max) NULL;
+            END
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'ActiveFlowId')
             BEGIN
                 ALTER TABLE CampaignTemplates ADD ActiveFlowId uniqueidentifier NULL;
@@ -584,6 +600,71 @@ var app = builder.Build();
                     UpdatedAt datetime2 NULL
                 );
                 CREATE INDEX IX_TenantFlows_TenantId ON TenantFlows (TenantId);
+            END");
+        // Integración Ludo CRM — Fase 1 (Fundación). Tablas + columnas ADITIVAS, todas via
+        // guard idempotente (no migración EF, por el drift de prod). Con Tenant.LudoIntegrationEnabled=0
+        // (default) nada de esto tiene efecto: comportamiento byte-por-byte idéntico al actual.
+        db2.Database.ExecuteSqlRaw(@"
+            -- Flag por tenant (opt-in, sin big-bang)
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'LudoIntegrationEnabled')
+                ALTER TABLE Tenants ADD LudoIntegrationEnabled bit NOT NULL DEFAULT 0;
+            -- Escalamiento robusto (genérico): no mutear la IA en auto-escalada (opt-in por tenant)
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'KeepAiActiveUntilTakeover')
+                ALTER TABLE Tenants ADD KeepAiActiveUntilTakeover bit NOT NULL DEFAULT 0;
+            -- Objetivo NL + marca de maestro generado por LLM
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'Objetivo')
+                ALTER TABLE CampaignTemplates ADD Objetivo nvarchar(max) NULL;
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'GeneratedByLlm')
+                ALTER TABLE CampaignTemplates ADD GeneratedByLlm bit NOT NULL DEFAULT 0;");
+        // Mapeo idempotente ludoTenantId ↔ tenantId (global). Clave de idempotencia del provisioning.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'LudoTenantMaps')
+            BEGIN
+                CREATE TABLE LudoTenantMaps (
+                    Id uniqueidentifier NOT NULL CONSTRAINT PK_LudoTenantMaps PRIMARY KEY,
+                    LudoTenantId nvarchar(64) NOT NULL,
+                    TenantId uniqueidentifier NOT NULL,
+                    TipoNegocio nvarchar(50) NULL,
+                    CreatedAt datetime2 NOT NULL CONSTRAINT DF_LudoTenantMaps_CreatedAt DEFAULT SYSUTCDATETIME()
+                );
+                CREATE UNIQUE INDEX UX_LudoTenantMaps_LudoTenantId ON LudoTenantMaps (LudoTenantId);
+            END");
+        // Homologación etapa Ludo ↔ etiqueta TalkIA, por tenant. Clave estable = LudoStageId.
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'StageLabelMaps')
+            BEGIN
+                CREATE TABLE StageLabelMaps (
+                    Id uniqueidentifier NOT NULL CONSTRAINT PK_StageLabelMaps PRIMARY KEY,
+                    TenantId uniqueidentifier NOT NULL,
+                    LudoStageId nvarchar(64) NOT NULL,
+                    LabelId uniqueidentifier NOT NULL,
+                    Nombre nvarchar(100) NOT NULL,
+                    Orden int NOT NULL CONSTRAINT DF_StageLabelMaps_Orden DEFAULT 0,
+                    IsActive bit NOT NULL CONSTRAINT DF_StageLabelMaps_IsActive DEFAULT 1,
+                    CreatedAt datetime2 NOT NULL CONSTRAINT DF_StageLabelMaps_CreatedAt DEFAULT SYSUTCDATETIME(),
+                    UpdatedAt datetime2 NULL
+                );
+                CREATE UNIQUE INDEX UX_StageLabelMaps_Tenant_Stage ON StageLabelMaps (TenantId, LudoStageId);
+            END");
+        // Outbox de reintento para llamadas de salida a Ludo (degradación suave, Dirección B).
+        db2.Database.ExecuteSqlRaw(@"
+            IF NOT EXISTS (SELECT 1 FROM sys.tables WHERE name = 'LudoOutboxItems')
+            BEGIN
+                CREATE TABLE LudoOutboxItems (
+                    Id uniqueidentifier NOT NULL CONSTRAINT PK_LudoOutboxItems PRIMARY KEY,
+                    TenantId uniqueidentifier NOT NULL,
+                    ConversationId uniqueidentifier NULL,
+                    PhoneE164 nvarchar(32) NOT NULL,
+                    ActionSlug nvarchar(64) NOT NULL,
+                    PayloadJson nvarchar(max) NOT NULL,
+                    Status nvarchar(20) NOT NULL CONSTRAINT DF_LudoOutboxItems_Status DEFAULT 'Pending',
+                    Attempts int NOT NULL CONSTRAINT DF_LudoOutboxItems_Attempts DEFAULT 0,
+                    LastError nvarchar(max) NULL,
+                    NextAttemptAt datetime2 NULL,
+                    CreatedAt datetime2 NOT NULL CONSTRAINT DF_LudoOutboxItems_CreatedAt DEFAULT SYSUTCDATETIME(),
+                    UpdatedAt datetime2 NULL
+                );
+                CREATE INDEX IX_LudoOutboxItems_Status_NextAttempt ON LudoOutboxItems (Status, NextAttemptAt);
             END");
         // Credenciales Meta WhatsApp Cloud API por línea (aditivo, nullable). Las
         // líneas UltraMsg las dejan en NULL. phone_number_id se reutiliza en InstanceId.
@@ -1479,6 +1560,16 @@ try
             .SeedAsync(db, seedLogger).GetAwaiter().GetResult();
     }
     catch (Exception ex) { Console.WriteLine($"[Schema] CampaignAutomationSeeder: {ex.Message}"); }
+
+    // ── Ludo Fase 4: seed acciones de salida hacia Ludo + drainer del outbox (idempotente) ──
+    try
+    {
+        var ludoLogger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>()
+            .CreateLogger("LudoActionSeeder");
+        AgentFlow.Infrastructure.Provisioning.LudoActionSeeder
+            .SeedAsync(db, ludoLogger).GetAwaiter().GetResult();
+    }
+    catch (Exception ex) { Console.WriteLine($"[Schema] LudoActionSeeder: {ex.Message}"); }
 
     if (!db.SuperAdmins.Any())
     {

@@ -44,7 +44,15 @@ public record AgentRunRequest(
     /// ACCIÓN EJECUTADA". NULL/vacío = la conversación no tiene flujo activo → el prompt queda idéntico
     /// al histórico (mismo patrón condicional que ActionsBlock / ReferenceDocumentsBlock).
     /// </summary>
-    string? WorkflowBlock = null
+    string? WorkflowBlock = null,
+    /// <summary>
+    /// Escalamiento robusto — Fase B. Bloque "## ESCALADA EN CURSO" que se inyecta cuando la
+    /// conversación ya fue escalada a un asesor PERO ningún humano la tomó todavía (y el tenant
+    /// tiene KeepAiActiveUntilTakeover). Le dice al agente: seguí ayudando con OTROS temas, NO
+    /// prometas resolver el tema escalado, fijá expectativa de contacto. NULL/vacío = no aplica →
+    /// prompt idéntico al histórico (mismo patrón condicional que WorkflowBlock).
+    /// </summary>
+    string? EscalationBlock = null
 );
 
 /// <summary>

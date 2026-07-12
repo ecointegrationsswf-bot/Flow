@@ -1,6 +1,7 @@
 using System.Text.Json;
 using AgentFlow.Domain.Entities;
 using AgentFlow.Domain.Enums;
+using AgentFlow.Domain.Provisioning;
 using AgentFlow.Domain.Webhooks;
 using AgentFlow.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
@@ -32,6 +33,7 @@ public class ActionExecutorService(
     IOutputInterpreter outputInterpreter,
     ActionConfigReader configReader,
     IMemoryCache cache,
+    ILudoActionEnricher ludoEnricher,
     ILogger<ActionExecutorService> logger) : IActionExecutorService
 {
     private const string ValidateIdentitySlug = "VALIDATE_IDENTITY";
@@ -58,7 +60,7 @@ public class ActionExecutorService(
         // ── 1. Feature flag por tenant ──
         var tenant = await db.Tenants
             .Where(t => t.Id == tenantId)
-            .Select(t => new { t.WebhookContractEnabled })
+            .Select(t => new { t.WebhookContractEnabled, t.LudoIntegrationEnabled })
             .FirstOrDefaultAsync(ct);
 
         if (tenant is null || !tenant.WebhookContractEnabled)
@@ -158,6 +160,31 @@ public class ActionExecutorService(
             return ActionResult.NoOp();
         }
 
+        // ── 6b. Integración Ludo (GATED — solo tenants Ludo + slugs Ludo) ──
+        // mover_fase necesita dos resoluciones que el LLM no hace: etapa→faseId
+        // (StageLabelMap) y teléfono→{oportunidadId} en la URL (GET /prospecto).
+        // Los params originales se conservan para el outbox (reintento re-resuelve).
+        var isLudoCall = tenant.LudoIntegrationEnabled
+                         && LudoIntegrationDefaults.IsLudoActionSlug(actionSlug);
+        var originalParams = collectedParams;
+        if (isLudoCall)
+        {
+            var enriched = await ludoEnricher.EnrichAsync(
+                tenantId, actionSlug, contactPhone, collectedParams, bundle.EndpointConfig, ct);
+            if (!enriched.Success)
+                return ActionResult.Fail(enriched.UserMessage ?? "No pude completar la solicitud.");
+
+            bundle = new ActionConfigBundle
+            {
+                EndpointConfig = enriched.Endpoint,
+                InputSchema = bundle.InputSchema,
+                OutputSchema = bundle.OutputSchema,
+                TriggerConfig = bundle.TriggerConfig,
+                ChainRules = bundle.ChainRules,
+            };
+            collectedParams = enriched.Params;
+        }
+
         // ── 7. Construir SystemContext y Payload ──
         // Obtener CampaignId real (no el template) desde la conversación
         Guid? runtimeCampaignId = null;
@@ -216,6 +243,16 @@ public class ActionExecutorService(
             logger.LogWarning("[ActionExecutor] HTTP fallo {Action}: {Error}",
                 actionSlug, httpResult.ErrorMessage);
 
+            // Degradación suave Ludo: el evento de negocio NO se pierde — queda en el
+            // outbox y el LUDO_OUTBOX_DRAINER lo reintenta (mover_fase es idempotente).
+            // Solo errores transitorios (5xx/timeout/red); un 4xx es payload/token malo
+            // y reintentarlo idéntico no lo arregla.
+            // (StatusCode 0 = error de red/timeout — sin respuesta HTTP.)
+            if (isLudoCall && httpResult.StatusCode is not (>= 400 and < 500))
+                await TryEnqueueLudoOutboxAsync(
+                    tenantId, conversationId, contactPhone, actionSlug, originalParams,
+                    httpResult.ErrorMessage, ct);
+
             var msg = httpResult.StatusCode switch
             {
                 >= 400 and < 500 => "Hubo un inconveniente procesando tu solicitud.",
@@ -253,6 +290,63 @@ public class ActionExecutorService(
         // OutputSchema parseado, que puede ocultar campos como `status`).
         return interpreted with { RawResponseJson = httpResult.Body };
     }
+
+    /// <summary>
+    /// Integración Ludo — degradación suave. Encola (upsert) el evento fallido en
+    /// LudoOutboxItems para que el LUDO_OUTBOX_DRAINER lo reintente. Se guardan los
+    /// params ORIGINALES del agente (ej. etapa) — el reintento re-resuelve faseId y
+    /// oportunidadId con datos frescos. Nunca lanza: un fallo aquí no rompe el turno.
+    /// </summary>
+    private async Task TryEnqueueLudoOutboxAsync(
+        Guid tenantId, Guid? conversationId, string contactPhone, string actionSlug,
+        CollectedParams originalParams, string? error, CancellationToken ct)
+    {
+        try
+        {
+            var payloadJson = JsonSerializer.Serialize(originalParams.Values);
+            var existing = await db.LudoOutboxItems
+                .FirstOrDefaultAsync(o => o.TenantId == tenantId
+                                       && o.PhoneE164 == contactPhone
+                                       && o.ActionSlug == actionSlug
+                                       && o.Status == "Pending", ct);
+            if (existing is not null)
+            {
+                // Ya hay un reintento pendiente para este (tenant, teléfono, acción):
+                // refrescamos el payload (el estado más nuevo gana) sin duplicar la cola.
+                existing.PayloadJson = payloadJson;
+                existing.ConversationId = conversationId ?? existing.ConversationId;
+                existing.LastError = Truncate(error, 500);
+                existing.UpdatedAt = DateTime.UtcNow;
+            }
+            else
+            {
+                db.LudoOutboxItems.Add(new LudoOutboxItem
+                {
+                    Id = Guid.NewGuid(),
+                    TenantId = tenantId,
+                    ConversationId = conversationId,
+                    PhoneE164 = contactPhone,
+                    ActionSlug = actionSlug,
+                    PayloadJson = payloadJson,
+                    Status = "Pending",
+                    Attempts = 0,
+                    LastError = Truncate(error, 500),
+                    NextAttemptAt = DateTime.UtcNow.AddMinutes(2),
+                    CreatedAt = DateTime.UtcNow,
+                });
+            }
+            await db.SaveChangesAsync(ct);
+            logger.LogInformation("[ActionExecutor] Ludo outbox: encolado {Action} tenant={TenantId} phone={Phone}",
+                actionSlug, tenantId, contactPhone);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "[ActionExecutor] No pude encolar en LudoOutbox {Action}.", actionSlug);
+        }
+    }
+
+    private static string? Truncate(string? s, int max) =>
+        s is null ? null : (s.Length <= max ? s : s[..max]);
 
     /// <summary>
     /// Deserializa un ContractJson (shape de DefaultWebhookContract / TenantActionContract)

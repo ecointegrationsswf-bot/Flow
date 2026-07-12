@@ -33,12 +33,13 @@ public class TransferChatService(
     AgentFlowDbContext db,
     IChannelProviderFactory channelFactory,
     IEmailService emailService,
+    IBusinessHoursClock businessHours,
     ILogger<TransferChatService> log) : ITransferChatService
 {
     private const string ActionName = "TRANSFER_CHAT";
     private const int SummaryMessageCount = 10;
 
-    public async Task<bool> ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default)
+    public async Task<bool> ExecuteIfApplicableAsync(Conversation conversation, CancellationToken ct = default, bool forceRenotify = false)
     {
         // 1) Resolver el template que gobierna esta conversación.
         //    - Conversación de CAMPAÑA → el template de la campaña (comportamiento histórico).
@@ -88,7 +89,8 @@ public class TransferChatService(
         // 4) Cooldown: 1 NOTIFICACIÓN por conversación (no afecta la pausa).
         //    Si ya se notificó, devolvemos true igual para que el caller mantenga
         //    al agente pausado — el template SÍ tiene la acción vinculada.
-        if (conversation.LastTransferChatSentAt.HasValue)
+        //    Fase E: el watchdog pasa forceRenotify=true para enviar recordatorios saltando el cooldown.
+        if (!forceRenotify && conversation.LastTransferChatSentAt.HasValue)
         {
             log.LogInformation("[TransferChat] Conversación {Id} ya notificada el {When} — no re-notifico, pero el agente sigue pausado.",
                 conversation.Id, conversation.LastTransferChatSentAt.Value);
@@ -124,16 +126,19 @@ public class TransferChatService(
             .OrderBy(m => m.SentAt)
             .ToListAsync(ct);
 
-        // 7) Obtener tenant para subject/branding del email.
-        var tenant = await db.Tenants
-            .Where(t => t.Id == conversation.TenantId)
-            .Select(t => new { t.Name })
-            .FirstOrDefaultAsync(ct);
+        // 7) Obtener tenant (entidad completa) para subject/branding + cálculo de horario.
+        var tenant = await db.Tenants.AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == conversation.TenantId, ct);
         var tenantName = tenant?.Name ?? "Tu cuenta";
 
+        // Fase C: ¿estamos fuera del horario de atención? Si sí, la notificación le avisa al
+        // ejecutivo que es un seguimiento para el próximo día hábil (no una urgencia inmediata).
+        var outOfHours = tenant is not null
+                         && !businessHours.IsWithinBusinessHours(DateTime.UtcNow, tenant, template);
+
         // 8) Enviar WhatsApp + email a cada destinatario.
-        var waSummary = BuildWhatsAppSummary(conversation, campaign, recentMessages, tenantName, isAutomatic);
-        var (emailSubject, emailHtml) = BuildEmailHtml(conversation, campaign, recentMessages, tenantName, isAutomatic);
+        var waSummary = BuildWhatsAppSummary(conversation, campaign, recentMessages, tenantName, isAutomatic, outOfHours);
+        var (emailSubject, emailHtml) = BuildEmailHtml(conversation, campaign, recentMessages, tenantName, isAutomatic, outOfHours);
 
         IChannelProvider? waProvider = null;
         try { waProvider = await channelFactory.GetProviderAsync(conversation.TenantId, ct); }
@@ -218,11 +223,13 @@ public class TransferChatService(
 
     private static string BuildWhatsAppSummary(
         Conversation conversation, Campaign? campaign, List<Message> messages,
-        string tenantName, bool isAutomatic)
+        string tenantName, bool isAutomatic, bool outOfHours)
     {
         var clientName = conversation.ClientName ?? conversation.ClientPhone;
         var sb = new StringBuilder();
         sb.AppendLine($"⚠️ *Solicitud de atención humana — {tenantName}*");
+        if (outOfHours)
+            sb.AppendLine("⏰ _Fuera de horario de atención — seguimiento para el próximo día hábil._");
         sb.AppendLine();
         sb.AppendLine($"*Cliente:* {clientName}");
         sb.AppendLine($"*Teléfono:* {conversation.ClientPhone}");
@@ -249,10 +256,11 @@ public class TransferChatService(
 
     private static (string Subject, string Html) BuildEmailHtml(
         Conversation conversation, Campaign? campaign, List<Message> messages,
-        string tenantName, bool isAutomatic)
+        string tenantName, bool isAutomatic, bool outOfHours)
     {
         var clientName = conversation.ClientName ?? conversation.ClientPhone;
-        var subject = $"⚠️ Cliente solicita atención humana — {clientName} ({tenantName})";
+        var subject = (outOfHours ? "⏰ [Fuera de horario] " : "⚠️ ") +
+                      $"Cliente solicita atención humana — {clientName} ({tenantName})";
 
         var sb = new StringBuilder();
         sb.Append("""

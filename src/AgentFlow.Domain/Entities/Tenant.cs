@@ -196,6 +196,24 @@ public class Tenant
     /// </summary>
     public string CodigoPaisDefault { get; set; } = "507";
 
+    /// <summary>
+    /// Interruptor de la integración con Ludo CRM (Fase 1 — Fundación). Cuando es
+    /// false (default), el sistema se comporta byte-por-byte como antes de la
+    /// integración: NO se inyecta bloque de etapas Ludo al prompt, NO se aprovisiona
+    /// nada, y los endpoints /api/provisioning|/api/ludo no tienen efecto sobre este
+    /// tenant. Es un opt-in por tenant para migración sin big-bang.
+    /// </summary>
+    public bool LudoIntegrationEnabled { get; set; }
+
+    /// <summary>
+    /// Escalamiento robusto (genérico, opt-in por tenant). Cuando es true, una auto-escalada a
+    /// humano NO silencia a la IA: la conversación se marca EscalatedToHuman (badge en el Monitor)
+    /// y se notifica al ejecutivo, pero el agente SIGUE respondiendo (incluyendo otros temas). La IA
+    /// solo enmudece cuando un humano TOMA la conversación (HandledByUserId, vía "Tomar conversación").
+    /// Default false = comportamiento actual byte-por-byte (la auto-escalada pausa la IA).
+    /// </summary>
+    public bool KeepAiActiveUntilTakeover { get; set; }
+
     public ICollection<AgentDefinition> Agents { get; set; } = [];
     public ICollection<Campaign> Campaigns { get; set; } = [];
     public ICollection<AppUser> Users { get; set; } = [];

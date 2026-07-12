@@ -156,6 +156,20 @@ public class ActionChainResolver(
     }
 
     /// <summary>
+    /// Escalamiento robusto Fase D: tope de ejecuciones por conversación de una acción,
+    /// leído del contrato (per-tenant → global). Sin contrato o sin el campo → sin límite.
+    /// </summary>
+    public async Task<ActionCallCap> GetCallCapAsync(Guid tenantId, string slug, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(slug))
+            return new ActionCallCap(null, null);
+        var bundle = await LoadBundleAsync(slug, tenantId, ct);
+        if (bundle is null)
+            return new ActionCallCap(null, null);
+        return new ActionCallCap(bundle.MaxCallsPerConversation, bundle.CallsExhaustedMessage);
+    }
+
+    /// <summary>
     /// Carga y deserializa el bundle del contrato de una acción: per-tenant
     /// (TenantActionContract) → fallback global (ActionDefinition.DefaultWebhookContract).
     /// Devuelve null si no hay contrato o no deserializa.
