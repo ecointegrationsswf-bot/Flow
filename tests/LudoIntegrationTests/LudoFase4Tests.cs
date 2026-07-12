@@ -291,10 +291,14 @@ public class LudoFase4Tests
         Assert.All(contracts, c => Assert.Contains("jam_tenant_token", c.ContractJson));
         Assert.All(contracts, c => Assert.Contains("https://ludo.example.com", c.ContractJson));
 
-        // Acciones vinculadas al maestro welcome (keys de ActionConfigs = ids Ludo).
+        // Acciones vinculadas al maestro welcome (keys de ActionConfigs = ids Ludo)
+        // y también en ActionIds (los checkboxes de la UI leen de ahí).
         var master = await db.CampaignTemplates.SingleAsync(t => t.TenantId == result.TenantId);
         foreach (var id in tenant.AssignedActionIds)
+        {
             Assert.Contains(id.ToString(), master.ActionConfigs!);
+            Assert.Contains(id, master.ActionIds);
+        }
     }
 
     [Fact]

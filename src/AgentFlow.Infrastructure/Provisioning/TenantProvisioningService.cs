@@ -219,6 +219,10 @@ public sealed class TenantProvisioningService(
                         foreach (var a in ludoActionIds)
                             cfg[a.Id.ToString()] = new System.Text.Json.Nodes.JsonObject();
                         welcomeMaster.ActionConfigs = cfg.ToJsonString();
+                        // También en ActionIds: el catálogo ATP usa la UNIÓN de ambos, pero
+                        // la UI pinta los checkboxes desde ActionIds — sin esto se ven
+                        // desmarcadas y un toggle accidental borraría su ActionConfigs.
+                        welcomeMaster.ActionIds = ludoActionIds.Select(a => a.Id).ToList();
                     }
                 }
                 else
