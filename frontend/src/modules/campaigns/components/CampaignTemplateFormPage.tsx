@@ -1233,7 +1233,7 @@ export function CampaignTemplateFormPage() {
             <p className="text-xs text-gray-400">Cargando prompts...</p>
           ) : !availablePrompts?.length ? (
             <div className="rounded-md bg-gray-50 p-3">
-              <p className="text-xs text-gray-500">No hay prompts disponibles. El administrador debe crearlos desde el portal admin.</p>
+              <p className="text-xs text-gray-500">No hay prompt templates en este tenant. Este maestro usa su propio prompt — podés editarlo directamente abajo.</p>
             </div>
           ) : (
             <div className="space-y-2">
@@ -1254,15 +1254,16 @@ export function CampaignTemplateFormPage() {
             </div>
           )}
 
-          {/* Editor de la copia local del prompt */}
-          {selectedPromptIds.length > 0 && (() => {
-            const source = availablePrompts?.find(p => p.id === selectedPromptIds[0])
-            const isModified = localSystemPrompt !== sourcePromptText
+          {/* Editor del prompt del maestro — siempre visible: el maestro puede tener
+              prompt propio (ej. generado por provisioning externo) sin template vinculado */}
+          {(() => {
+            const source = selectedPromptIds.length > 0 ? availablePrompts?.find(p => p.id === selectedPromptIds[0]) : undefined
+            const isModified = !!source && localSystemPrompt !== sourcePromptText
             return (
               <div className="mt-6 rounded-lg border border-gray-200 bg-white p-4">
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-gray-900">Prompt del maestro (copia editable)</h3>
+                    <h3 className="text-sm font-semibold text-gray-900">Prompt del maestro</h3>
                     {source && (
                       <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
                         Copia de: {source.name}
@@ -1283,15 +1284,17 @@ export function CampaignTemplateFormPage() {
                     >
                       <Maximize2 className="h-3.5 w-3.5" /> Expandir
                     </button>
-                    <button
-                      type="button"
-                      onClick={resyncPromptFromTemplate}
-                      disabled={loadingPromptDetail}
-                      className="rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                      title="Vuelve a copiar el texto original del template, descartando tus cambios locales."
-                    >
-                      Re-sincronizar desde template
-                    </button>
+                    {source && (
+                      <button
+                        type="button"
+                        onClick={resyncPromptFromTemplate}
+                        disabled={loadingPromptDetail}
+                        className="rounded-md border border-gray-300 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                        title="Vuelve a copiar el texto original del template, descartando tus cambios locales."
+                      >
+                        Re-sincronizar desde template
+                      </button>
+                    )}
                   </div>
                 </div>
                 <textarea
@@ -1312,9 +1315,9 @@ export function CampaignTemplateFormPage() {
           })()}
 
           {/* Modal expandido: edición a pantalla completa */}
-          {promptExpanded && selectedPromptIds.length > 0 && (() => {
-            const source = availablePrompts?.find(p => p.id === selectedPromptIds[0])
-            const isModified = localSystemPrompt !== sourcePromptText
+          {promptExpanded && (() => {
+            const source = selectedPromptIds.length > 0 ? availablePrompts?.find(p => p.id === selectedPromptIds[0]) : undefined
+            const isModified = !!source && localSystemPrompt !== sourcePromptText
             return (
               <div
                 className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
@@ -1324,7 +1327,7 @@ export function CampaignTemplateFormPage() {
                   <div className="flex items-center justify-between border-b border-gray-200 px-6 py-4">
                     <div className="flex items-center gap-2">
                       <FileText className="h-5 w-5 text-indigo-500" />
-                      <h2 className="text-base font-semibold text-gray-900">Prompt del maestro (copia editable)</h2>
+                      <h2 className="text-base font-semibold text-gray-900">Prompt del maestro</h2>
                       {source && (
                         <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
                           Copia de: {source.name}
@@ -1337,14 +1340,16 @@ export function CampaignTemplateFormPage() {
                       )}
                     </div>
                     <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={resyncPromptFromTemplate}
-                        disabled={loadingPromptDetail}
-                        className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-                      >
-                        Re-sincronizar desde template
-                      </button>
+                      {source && (
+                        <button
+                          type="button"
+                          onClick={resyncPromptFromTemplate}
+                          disabled={loadingPromptDetail}
+                          className="rounded-md border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          Re-sincronizar desde template
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => setPromptExpanded(false)}
