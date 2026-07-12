@@ -1459,6 +1459,34 @@ public class ProcessIncomingMessageHandler(
                     catch (Exception ex) { Console.WriteLine($"[TransferChat] Error: {ex.Message}"); }
                     try { await notifier.NotifyEscalationAsync(cmd.TenantId.ToString(), conversation.Id); }
                     catch { }
+
+                    // Integración Ludo: al escalar a humano, registrar una nota en la oportunidad
+                    // con el resumen de la conversación. Best-effort y gated: un fallo aquí jamás
+                    // bloquea la escalada; el executor encola en el outbox si Ludo no responde.
+                    if (tenant.LudoIntegrationEnabled)
+                    {
+                        try
+                        {
+                            var nota = BuildLudoEscalationNote(recentHistorySnapshot, cmd.Message, agentResponse.ReplyText);
+                            await actionExecutor.ExecuteAsync(
+                                actionSlug: AgentFlow.Domain.Provisioning.LudoIntegrationDefaults.RegistrarNotaSlug,
+                                tenantId: cmd.TenantId,
+                                campaignTemplateId: campaignTemplate?.Id,
+                                contactPhone: cmd.FromPhone,
+                                conversationId: conversation.Id,
+                                collectedParams: new AgentFlow.Domain.Webhooks.CollectedParams
+                                {
+                                    Values = new Dictionary<string, string?> { ["contenido"] = nota }
+                                },
+                                agentSlug: agent.Name,
+                                systemContextOverrides: null,
+                                ct: ct);
+                        }
+                        catch (Exception ex)
+                        {
+                            logger.LogWarning(ex, "[Ludo] No se pudo registrar la nota de escalada para conv {ConvId}", conversation.Id);
+                        }
+                    }
                 }
 
                 if (agentResponse.ShouldClose)
@@ -1571,6 +1599,36 @@ public class ProcessIncomingMessageHandler(
         }
         catch { /* JSON corrupto → contadores en cero, no rompe el turno */ }
         return dict;
+    }
+
+    /// <summary>
+    /// Arma el contenido de la nota que se registra en Ludo al escalar a humano:
+    /// motivo + últimos intercambios de la conversación (acotado para no saturar el CRM).
+    /// </summary>
+    private static string BuildLudoEscalationNote(
+        IReadOnlyList<Message> recentHistory, string? lastInbound, string? agentReply)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("ESCALADA A EJECUTIVO — resumen de la conversación (WhatsApp):");
+
+        foreach (var m in recentHistory.TakeLast(8))
+        {
+            var who = m.Direction == MessageDirection.Inbound ? "Cliente" : "Agente";
+            var text = (m.Content ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            if (text.Length > 160) text = text[..160] + "…";
+            if (text.Length > 0) sb.AppendLine($"- {who}: {text}");
+        }
+
+        var inbound = (lastInbound ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+        if (inbound.Length > 0)
+            sb.AppendLine($"- Cliente: {(inbound.Length > 160 ? inbound[..160] + "…" : inbound)}");
+
+        var reply = (agentReply ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+        if (reply.Length > 0)
+            sb.AppendLine($"- Agente (motivo de la escalada): {(reply.Length > 200 ? reply[..200] + "…" : reply)}");
+
+        var nota = sb.ToString().TrimEnd();
+        return nota.Length > 1500 ? nota[..1500] : nota;
     }
 
     /// <summary>Serializa los contadores de ejecución por slug para persistir en ActionCallCountsJson.</summary>
