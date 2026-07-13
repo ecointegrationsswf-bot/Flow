@@ -327,4 +327,27 @@ public class LudoFase4Tests
         Assert.False(tenant!.WebhookContractEnabled);
         Assert.Equal(0, await db.TenantActionContracts.CountAsync(c => c.TenantId == result.TenantId));
     }
+
+    // ── Detector de consentimiento formal (ACEPTO → mover_fase CERRADO determinista) ──
+
+    [Theory]
+    [InlineData("ACEPTO")]
+    [InlineData("acepto")]
+    [InlineData("Sí, acepto")]
+    [InlineData("si acepto!")]
+    [InlineData("Acepto.")]
+    [InlineData("ok acepto")]
+    public void IsFormalConsent_True(string msg) =>
+        Assert.True(LudoIntegrationDefaults.IsFormalConsent(msg));
+
+    [Theory]
+    [InlineData("no acepto")]
+    [InlineData("No, no acepto eso")]
+    [InlineData("acepto que me llamen la próxima semana para hablar")]
+    [InlineData("¿qué pasa si no acepto?")]
+    [InlineData("")]
+    [InlineData(null)]
+    [InlineData("hola buenas tardes")]
+    public void IsFormalConsent_False(string? msg) =>
+        Assert.False(LudoIntegrationDefaults.IsFormalConsent(msg));
 }

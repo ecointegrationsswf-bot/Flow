@@ -1498,6 +1498,41 @@ public class ProcessIncomingMessageHandler(
                     }
                 }
 
+                // Integración Ludo: el consentimiento formal del protocolo de venta (el
+                // cliente escribe ACEPTO) cierra la venta → la oportunidad pasa a CERRADO
+                // de forma DETERMINISTA, sin depender de que el LLM emita la acción en ese
+                // turno. Best-effort; idempotente (si el agente también movió fase, Ludo
+                // responde 200 con la misma fase). El nombre de etapa CERRADO viene del
+                // vertical seguro; si el tenant no la tiene, el enricher falla silencioso.
+                if (tenant.LudoIntegrationEnabled
+                    && AgentFlow.Domain.Provisioning.LudoIntegrationDefaults.IsFormalConsent(cmd.Message))
+                {
+                    try
+                    {
+                        await actionExecutor.ExecuteAsync(
+                            actionSlug: AgentFlow.Domain.Provisioning.LudoIntegrationDefaults.MoverFaseSlug,
+                            tenantId: cmd.TenantId,
+                            campaignTemplateId: campaignTemplate?.Id,
+                            contactPhone: cmd.FromPhone,
+                            conversationId: conversation.Id,
+                            collectedParams: new AgentFlow.Domain.Webhooks.CollectedParams
+                            {
+                                Values = new Dictionary<string, string?>
+                                {
+                                    ["etapa"] = "CERRADO",
+                                    ["motivo"] = "Cliente confirmó la contratación con ACEPTO (consentimiento formal).",
+                                }
+                            },
+                            agentSlug: agent.Name,
+                            systemContextOverrides: null,
+                            ct: ct);
+                    }
+                    catch (Exception ex)
+                    {
+                        logger.LogWarning(ex, "[Ludo] No se pudo mover a CERRADO tras el ACEPTO en conv {ConvId}", conversation.Id);
+                    }
+                }
+
                 if (agentResponse.ShouldClose)
                 {
                     conversation.Status = ConversationStatus.Closed;

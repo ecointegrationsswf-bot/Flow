@@ -37,6 +37,32 @@ public static class LudoIntegrationDefaults
         && AllSlugs.Contains(slug, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// Detecta el consentimiento FORMAL del protocolo de venta ("ACEPTO"): mensaje corto
+    /// cuyo contenido es la palabra acepto (tolerante a "sí, acepto", tildes y signos),
+    /// sin negación. Un "acepto" dentro de una frase larga NO cuenta — el protocolo exige
+    /// la palabra como respuesta al resumen final.
+    /// </summary>
+    public static bool IsFormalConsent(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message)) return false;
+
+        var tokens = new List<string>();
+        var current = new System.Text.StringBuilder();
+        foreach (var ch in message.Normalize(System.Text.NormalizationForm.FormD))
+        {
+            var cat = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(ch);
+            if (cat == System.Globalization.UnicodeCategory.NonSpacingMark) continue; // quita tildes
+            if (char.IsLetter(ch)) current.Append(char.ToLowerInvariant(ch));
+            else if (current.Length > 0) { tokens.Add(current.ToString()); current.Clear(); }
+        }
+        if (current.Length > 0) tokens.Add(current.ToString());
+
+        return tokens.Count is > 0 and <= 4
+            && tokens.Contains("acepto")
+            && !tokens.Contains("no");
+    }
+
+    /// <summary>
     /// Construye el ContractJson (shape ActionConfigBundleJson) de una acción Ludo.
     /// <paramref name="apiKey"/> vacío ⇒ contrato plantilla (DefaultWebhookContract global);
     /// con valor ⇒ contrato per-tenant (TenantActionContract).
