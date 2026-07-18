@@ -31,6 +31,8 @@ export interface AdminTenantConfig {
   messageBufferSeconds: number
   // Rate limit de envíos masivos (campañas iniciales + follow-ups)
   campaignMessagesPerMinute: number
+  /** Espaciamiento fijo en segundos (opcional). >0 manda sobre msg/min; null = apagado. */
+  campaignSecondsBetweenMessages: number | null
   campaignMaxPerHour: number
   campaignMaxPerDay: number
   campaignDispatchEnabled: boolean
@@ -144,6 +146,8 @@ export interface CampaignRateLimitsPayload {
   maxPerHour: number
   maxPerDay: number
   dispatchEnabled: boolean
+  /** Espaciamiento fijo en segundos (opcional). null/0 = usar msg/min. */
+  secondsBetweenMessages: number | null
 }
 
 export function useAdminUpdateTenantCampaignRateLimits() {
@@ -155,6 +159,7 @@ export function useAdminUpdateTenantCampaignRateLimits() {
         maxPerHour: p.maxPerHour,
         maxPerDay: p.maxPerDay,
         dispatchEnabled: p.dispatchEnabled,
+        secondsBetweenMessages: p.secondsBetweenMessages,
       }).then((r: { data: unknown }) => r.data),
     onSuccess: (_d, v) => invalidateConfig(qc, v.tenantId),
   })

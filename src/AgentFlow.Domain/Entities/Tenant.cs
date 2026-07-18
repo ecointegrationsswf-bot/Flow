@@ -61,6 +61,24 @@ public class Tenant
     public int CampaignMessagesPerMinute { get; set; } = 6;
 
     /// <summary>
+    /// Espaciamiento FIJO en segundos entre mensajes masivos (opcional). Si está
+    /// configurado (&gt;0) MANDA sobre <see cref="CampaignMessagesPerMinute"/> y permite
+    /// cadencias más lentas que 1 msg/min (ej. 180 = un mensaje cada ~3 minutos).
+    /// Null/0 = comportamiento clásico (60 / CampaignMessagesPerMinute). El jitter
+    /// ±20% y el piso técnico de 3s aplican igual en ambos modos.
+    /// </summary>
+    public int? CampaignSecondsBetweenMessages { get; set; }
+
+    /// <summary>
+    /// Cadencia efectiva del envío masivo (dispatcher + sweeper de follow-ups):
+    /// segundos base entre mensajes, respetando el piso técnico.
+    /// </summary>
+    public double GetCampaignBaseDelaySeconds(int floorSeconds) =>
+        CampaignSecondsBetweenMessages is int s && s > 0
+            ? Math.Max(floorSeconds, s)
+            : Math.Max(floorSeconds, 60.0 / Math.Max(1, CampaignMessagesPerMinute));
+
+    /// <summary>
     /// Tope de mensajes por hora por tenant. Reemplaza la constante hardcoded
     /// MaxPerHour=200 en CampaignDispatcherService cuando se migra al worker v2.
     /// </summary>

@@ -288,8 +288,9 @@ public partial class CampaignDispatcherService(
         // Configuración del tenant (rate limit, topes) con safe-floor sobre el delay.
         var maxPerHour = Math.Max(1, tenant.CampaignMaxPerHour);
         var maxPerDay = Math.Max(1, tenant.CampaignMaxPerDay);
-        var messagesPerMinute = Math.Max(1, tenant.CampaignMessagesPerMinute);
-        var baseDelaySeconds = Math.Max(MinDelaySecondsFloor, 60.0 / messagesPerMinute);
+        // Cadencia: CampaignSecondsBetweenMessages (si está configurado) manda sobre
+        // msg/min y permite espaciamientos mayores a 1 minuto (ej. 180 = cada ~3 min).
+        var baseDelaySeconds = tenant.GetCampaignBaseDelaySeconds(MinDelaySecondsFloor);
 
         // ── 4. Contar envíos del día por tenant (para límite diario) ─
         var todayUtc = DateTime.UtcNow.Date;

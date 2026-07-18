@@ -611,6 +611,9 @@ var app = builder.Build();
             -- Escalamiento robusto (genérico): no mutear la IA en auto-escalada (opt-in por tenant)
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'KeepAiActiveUntilTakeover')
                 ALTER TABLE Tenants ADD KeepAiActiveUntilTakeover bit NOT NULL DEFAULT 0;
+            -- Espaciamiento fijo opcional entre mensajes masivos (manda sobre msg/min; permite < 1 msg/min)
+            IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('Tenants') AND name = 'CampaignSecondsBetweenMessages')
+                ALTER TABLE Tenants ADD CampaignSecondsBetweenMessages int NULL;
             -- Objetivo NL + marca de maestro generado por LLM
             IF NOT EXISTS (SELECT 1 FROM sys.columns WHERE object_id = OBJECT_ID('CampaignTemplates') AND name = 'Objetivo')
                 ALTER TABLE CampaignTemplates ADD Objetivo nvarchar(max) NULL;

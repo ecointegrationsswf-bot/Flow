@@ -81,6 +81,8 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
 
   // Rate limit
   const [msgPerMin, setMsgPerMin] = useState(6)
+  // Espaciamiento fijo en segundos ('' = apagado → rige msg/min)
+  const [secondsBetween, setSecondsBetween] = useState<number | ''>('')
   const [maxPerHour, setMaxPerHour] = useState(200)
   const [maxPerDay, setMaxPerDay] = useState(1000)
   const [dispatchEnabled, setDispatchEnabled] = useState(true)
@@ -97,6 +99,7 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
     setSenderEmail(tenant.senderEmail ?? '')
     setBufferSeconds(tenant.messageBufferSeconds ?? 5)
     setMsgPerMin(tenant.campaignMessagesPerMinute ?? 6)
+    setSecondsBetween(tenant.campaignSecondsBetweenMessages ?? '')
     setMaxPerHour(tenant.campaignMaxPerHour ?? 200)
     setMaxPerDay(tenant.campaignMaxPerDay ?? 1000)
     setDispatchEnabled(tenant.campaignDispatchEnabled ?? true)
@@ -143,6 +146,7 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
         maxPerHour,
         maxPerDay,
         dispatchEnabled,
+        secondsBetweenMessages: secondsBetween === '' || secondsBetween <= 0 ? null : secondsBetween,
       })
       setRateLimitsSaved(true)
       setTimeout(() => setRateLimitsSaved(false), 2500)
@@ -152,10 +156,15 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
     }
   }
 
+  // Cadencia efectiva: segundos fijos (si configurados) mandan sobre msg/min.
+  const secondsActive = secondsBetween !== '' && secondsBetween > 0
+  const effectivePerHour = secondsActive
+    ? 3600 / Math.max(3, Number(secondsBetween))
+    : msgPerMin * 60
+
   // Estimación: cuánto tarda una campaña de N contactos con la config actual.
   const estimateHoursForN = (n: number): string => {
-    const ratePerMinute = Math.min(msgPerMin, maxPerHour / 60)
-    const cappedRatePerHour = Math.min(ratePerMinute * 60, maxPerHour)
+    const cappedRatePerHour = Math.min(effectivePerHour, maxPerHour)
     const hours = n / cappedRatePerHour
     if (hours < 1) return `${Math.ceil(hours * 60)} min`
     return `~${hours.toFixed(1)}h`
@@ -394,9 +403,9 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
 
         <div className="space-y-5">
           {/* Mensajes por minuto */}
-          <div>
+          <div className={secondsActive ? 'opacity-50' : ''}>
             <label className="mb-1 flex items-center justify-between text-sm font-medium text-gray-700">
-              <span>Mensajes por minuto</span>
+              <span>Mensajes por minuto{secondsActive && <span className="ml-2 rounded-full bg-gray-200 px-2 py-0.5 text-[10px] font-medium text-gray-600">sin efecto — rige el espaciamiento fijo</span>}</span>
               <span className="font-mono text-orange-700">{msgPerMin} msg/min</span>
             </label>
             <p className="mb-2 text-xs text-gray-500">
@@ -415,6 +424,47 @@ export function AdminTenantConfigTab({ tenantId }: Props) {
                 onChange={(e) => setMsgPerMin(Number(e.target.value))}
                 className="w-20 rounded-md border border-gray-300 px-2 py-1 text-sm"
               />
+            </div>
+          </div>
+
+          {/* Espaciamiento fijo entre mensajes (manda sobre msg/min) */}
+          <div className="rounded-lg border border-orange-200 bg-orange-50/50 p-3">
+            <label className="mb-1 flex items-center justify-between text-sm font-medium text-gray-700">
+              <span>Segundos entre mensajes (opcional)</span>
+              <span className="font-mono text-orange-700">
+                {secondsActive
+                  ? `1 msg cada ${Math.max(3, Number(secondsBetween))} seg`
+                  : 'apagado'}
+              </span>
+            </label>
+            <p className="mb-2 text-xs text-gray-500">
+              Espaciamiento FIJO entre mensajes masivos. Si lo configurás, <strong>manda sobre
+              "Mensajes por minuto"</strong> y permite cadencias más lentas que 1 msg/min —
+              ej. <strong>180</strong> = un mensaje cada ~3 minutos. Se aplica con una variación
+              natural de ±20% (anti-detección). Vacío o 0 = apagado (rige msg/min). Mínimo técnico: 3s.
+            </p>
+            <div className="flex items-center gap-3">
+              <input
+                type="number" min={0} max={3600} placeholder="ej. 180"
+                value={secondsBetween}
+                onChange={(e) => setSecondsBetween(e.target.value === '' ? '' : Number(e.target.value))}
+                className="w-28 rounded-md border border-gray-300 px-2 py-1 text-sm"
+              />
+              {secondsActive && (
+                <span className="text-xs text-gray-600">
+                  ≈ {(3600 / Math.max(3, Number(secondsBetween))).toFixed(1)} msg/hora efectivos
+                  (con jitter: cada {Math.round(Math.max(3, Number(secondsBetween)) * 0.8)}–{Math.round(Math.max(3, Number(secondsBetween)) * 1.2)} seg)
+                </span>
+              )}
+              {secondsActive && (
+                <button
+                  type="button"
+                  onClick={() => setSecondsBetween('')}
+                  className="rounded-md border border-gray-300 px-2 py-1 text-xs text-gray-600 hover:bg-gray-100"
+                >
+                  Apagar
+                </button>
+              )}
             </div>
           </div>
 

@@ -378,6 +378,7 @@ public class SuperAdminController(
             t.MessageBufferSeconds,
             // Rate limit de envíos masivos (campañas + sweepers de follow-up)
             t.CampaignMessagesPerMinute,
+            t.CampaignSecondsBetweenMessages,
             t.CampaignMaxPerHour,
             t.CampaignMaxPerDay,
             t.CampaignDispatchEnabled,
@@ -392,7 +393,11 @@ public class SuperAdminController(
         int MessagesPerMinute,
         int MaxPerHour,
         int MaxPerDay,
-        bool DispatchEnabled);
+        bool DispatchEnabled,
+        // Espaciamiento fijo en segundos (opcional). >0 manda sobre MessagesPerMinute
+        // y permite cadencias más lentas que 1 msg/min (ej. 180 = cada 3 minutos).
+        // null/0 = apagado (se usa MessagesPerMinute).
+        int? SecondsBetweenMessages = null);
 
     /// <summary>
     /// Configura los topes de envío masivo del tenant. Aplica a campañas iniciales
@@ -410,6 +415,8 @@ public class SuperAdminController(
             return BadRequest(new { error = "Tope por hora debe estar entre 1 y 5000." });
         if (req.MaxPerDay < req.MaxPerHour || req.MaxPerDay > 100000)
             return BadRequest(new { error = "Tope diario debe ser >= tope por hora y <= 100000." });
+        if (req.SecondsBetweenMessages is int sbm && (sbm < 0 || sbm > 3600))
+            return BadRequest(new { error = "Segundos entre mensajes debe estar entre 3 y 3600 (o vacío para usar msg/min)." });
 
         var t = await db.Tenants.FindAsync([tenantId], ct);
         if (t is null) return NotFound();
@@ -418,11 +425,14 @@ public class SuperAdminController(
         t.CampaignMaxPerHour        = req.MaxPerHour;
         t.CampaignMaxPerDay         = req.MaxPerDay;
         t.CampaignDispatchEnabled   = req.DispatchEnabled;
+        // 0 o null = apagar el espaciamiento fijo (vuelve a regir msg/min)
+        t.CampaignSecondsBetweenMessages =
+            req.SecondsBetweenMessages is int s && s > 0 ? Math.Max(3, s) : null;
 
         await db.SaveChangesAsync(ct);
         return Ok(new {
-            t.CampaignMessagesPerMinute, t.CampaignMaxPerHour,
-            t.CampaignMaxPerDay, t.CampaignDispatchEnabled
+            t.CampaignMessagesPerMinute, t.CampaignSecondsBetweenMessages,
+            t.CampaignMaxPerHour, t.CampaignMaxPerDay, t.CampaignDispatchEnabled
         });
     }
 

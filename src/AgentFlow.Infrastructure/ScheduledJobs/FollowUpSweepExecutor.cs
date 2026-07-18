@@ -171,9 +171,9 @@ public class FollowUpSweepExecutor(
             .CountAsync(ct);
         var maxPerHour = Math.Max(1, tenant.CampaignMaxPerHour);
 
-        // Delay base — igual que el dispatcher inicial.
-        var messagesPerMinute = Math.Max(1, tenant.CampaignMessagesPerMinute);
-        var baseDelaySeconds = Math.Max(MinDelaySecondsFloor, 60.0 / messagesPerMinute);
+        // Delay base — igual que el dispatcher inicial (segundos fijos si están
+        // configurados; si no, 60/msg-por-minuto).
+        var baseDelaySeconds = tenant.GetCampaignBaseDelaySeconds(MinDelaySecondsFloor);
 
         var sent = 0;
         var skipped = 0;
